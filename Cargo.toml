@@ -1,0 +1,9 @@
+[package]
+name = "descent"
+version = "0.1.0"
+authors = ["Simon Brown <si@sjbrown.co.uk>"]
+edition = "2018"
+publish = false
+
+[dependencies]
+arrayvec = "0.7"
