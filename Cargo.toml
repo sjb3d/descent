@@ -7,3 +7,4 @@ publish = false
 
 [dependencies]
 arrayvec = "0.7"
+matrixmultiply = "0.3"

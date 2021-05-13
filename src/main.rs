@@ -47,11 +47,16 @@ fn main() {
     println!("{:?}, {:?}", train_images.size(), train_labels.size());
 
     // manually implement forward pass
+    let x = &train_images;
+    let w = Array::zeros([28 * 28, 10]);
+    let z = matrix_multiply(1.0, &x, &w);
+    println!("{:?}", z.size());
 
     // compute loss
 
     // propagate backwards
 
-    let m = Array::zeros([4, 2, 3]);
+    let s: Size = [4, 2, 3].into();
+    let m = Array::from_elements((0..s.elements()).map(|n| n as f32).collect(), s);
     println!("{:?}", m);
 }
