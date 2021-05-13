@@ -1,6 +1,6 @@
 use arrayvec::ArrayVec;
 use matrixmultiply::sgemm;
-use std::{cell::UnsafeCell, fmt, rc::Rc};
+use std::{cell::UnsafeCell, fmt, iter::FromIterator, rc::Rc};
 
 const MAX_DIMS: usize = 4;
 
@@ -19,7 +19,7 @@ impl Size {
     fn split_first(&self) -> Option<(usize, Self)> {
         self.0
             .split_first()
-            .map(|(first, remain)| (*first, Self(remain.iter().cloned().collect())))
+            .map(|(first, remain)| (*first, remain.iter().cloned().collect()))
     }
 
     fn as_1d(&self) -> usize {
@@ -46,7 +46,22 @@ impl Size {
         for size in self.0[1..].iter().rev() {
             tmp.push(size * tmp.last().unwrap());
         }
-        Stride(tmp.iter().rev().map(|n| *n as isize).collect())
+        Stride::from_iter(tmp.iter().rev().map(|n| *n as isize))
+    }
+}
+
+impl FromIterator<usize> for Size {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = usize>,
+    {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl<const N: usize> From<[usize; N]> for Size {
+    fn from(arr: [usize; N]) -> Self {
+        arr.iter().cloned().collect()
     }
 }
 
@@ -67,13 +82,16 @@ impl Stride {
     fn split_first(&self) -> Option<(isize, Self)> {
         self.0
             .split_first()
-            .map(|(first, remain)| (*first, Self(remain.iter().cloned().collect())))
+            .map(|(first, remain)| (*first, remain.iter().cloned().collect()))
     }
 }
 
-impl<const N: usize> Into<Size> for [usize; N] {
-    fn into(self) -> Size {
-        Size(self.iter().cloned().collect())
+impl FromIterator<isize> for Stride {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = isize>,
+    {
+        Self(iter.into_iter().collect())
     }
 }
 
@@ -150,32 +168,38 @@ impl fmt::Debug for Array {
     }
 }
 
-pub fn matrix_multiply(alpha: f32, a: &Array, b: &Array) -> Array {
-    let c = Array::zeros(Size::matrix_multiply(&a.size, &b.size));
-
-    // TODO: iterate 2D blocks of A/C
-    assert_eq!(a.size.dims(), 2);
-
-    let (m, _) = a.size.as_2d();
-    let (k, n) = b.size.as_2d();
-    let (csa, rsa) = a.stride.as_2d();
-    let (csb, rsb) = b.stride.as_2d();
-    let (csc, rsc) = c.stride.as_2d();
-    unsafe {
-        let a_ptr = a.store.0.get().as_ref().unwrap().as_ptr().offset(a.offset);
-        let b_ptr = b.store.0.get().as_ref().unwrap().as_ptr().offset(b.offset);
-        let c_ptr = c
-            .store
-            .0
-            .get()
-            .as_mut()
-            .unwrap()
-            .as_mut_ptr()
-            .offset(c.offset);
-        sgemm(
-            m, k, n, alpha, a_ptr, rsa, csa, b_ptr, rsb, csb, 0.0, c_ptr, rsc, csc,
-        );
+fn matrix_multiply_impl(alpha: f32, a: &Array, b: &Array, beta: f32, c: &Array) {
+    if a.size.dims() == 2 {
+        let (m, _) = a.size.as_2d();
+        let (k, n) = b.size.as_2d();
+        let (rsa, csa) = a.stride.as_2d();
+        let (rsb, csb) = b.stride.as_2d();
+        let (rsc, csc) = c.stride.as_2d();
+        unsafe {
+            let a_ptr = a.store.0.get().as_ref().unwrap().as_ptr().offset(a.offset);
+            let b_ptr = b.store.0.get().as_ref().unwrap().as_ptr().offset(b.offset);
+            let c_ptr = c
+                .store
+                .0
+                .get()
+                .as_mut()
+                .unwrap()
+                .as_mut_ptr()
+                .offset(c.offset);
+            sgemm(
+                m, k, n, alpha, a_ptr, rsa, csa, b_ptr, rsb, csb, beta, c_ptr, rsc, csc,
+            );
+        }
+    } else {
+        a.iter_inner().zip(c.iter_inner()).for_each(|(a, c)| {
+            matrix_multiply_impl(alpha, &a, b, beta, &c);
+        });
     }
+}
 
+pub fn matrix_multiply(alpha: f32, a: &Array, b: &Array) -> Array {
+    // TODO: uninitialized c
+    let c = Array::zeros(Size::matrix_multiply(&a.size, &b.size));
+    matrix_multiply_impl(alpha, a, b, 0.0, &c);
     c
 }
