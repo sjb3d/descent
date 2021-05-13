@@ -1,6 +1,10 @@
 use arrayvec::ArrayVec;
 use matrixmultiply::sgemm;
-use std::{cell::UnsafeCell, fmt, iter::FromIterator, rc::Rc};
+use rand::{
+    distributions::{Distribution, Uniform},
+    Rng,
+};
+use std::{cell::UnsafeCell, fmt, iter::FromIterator, ops, rc::Rc};
 
 const MAX_DIMS: usize = 4;
 
@@ -47,6 +51,13 @@ impl Size {
             tmp.push(size * tmp.last().unwrap());
         }
         Stride::from_iter(tmp.iter().rev().map(|n| *n as isize))
+    }
+}
+
+impl ops::Index<usize> for Size {
+    type Output = usize;
+    fn index(&self, index: usize) -> &Self::Output {
+        self.0.index(index)
     }
 }
 
@@ -127,6 +138,13 @@ impl Array {
         let size = size.into();
         let elements = vec![0.0; size.elements()];
         Self::from_elements(elements, size)
+    }
+
+    pub fn xavier_uniform(size: impl Into<Size>, rng: &mut impl Rng) -> Self {
+        let size = size.into();
+        let a = (6.0 / (size[0] as f32)).sqrt();
+        let dist = Uniform::new(-a, a);
+        Self::from_elements(dist.sample_iter(rng).take(size.elements()).collect(), size)
     }
 
     pub fn size(&self) -> &Size {

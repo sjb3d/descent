@@ -1,6 +1,7 @@
 mod array;
 
 use array::*;
+use rand::SeedableRng;
 use std::{
     fs::File,
     io::{BufReader, Read},
@@ -41,6 +42,8 @@ fn load_labels(path: impl AsRef<Path>) -> Array {
 }
 
 fn main() {
+    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
+
     // load all training data
     let train_images = load_images("data/train-images-idx3-ubyte");
     let train_labels = load_labels("data/train-labels-idx1-ubyte");
@@ -48,7 +51,9 @@ fn main() {
 
     // manually implement forward pass
     let x = &train_images;
-    let w = Array::zeros([28 * 28, 10]);
+    let w = Array::xavier_uniform([28 * 28, 10], &mut rng);
+    //let b = Array::zeros([1, 10]);
+
     let z = matrix_multiply(1.0, &x, &w);
     println!("{:?}", z.size());
 
@@ -56,6 +61,7 @@ fn main() {
 
     // propagate backwards
 
+    // tests
     let s: Size = [4, 2, 3].into();
     let m = Array::from_elements((0..s.elements()).map(|n| n as f32).collect(), s);
     println!("{:?}", m);
