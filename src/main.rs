@@ -54,7 +54,7 @@ fn main() {
     let w = Array::xavier_uniform([28 * 28, 10], &mut rng);
     //let b = Array::zeros([1, 10]);
 
-    let z = x.view().dot(w.view());
+    let z = x.view() * w.view();
     println!("{}", z.size());
 
     // compute loss
@@ -68,7 +68,7 @@ fn main() {
     println!("{:?}", m.view());
     println!("{}", m.view());
 
-    let t = Array::from_elements(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [3, 2]);
+    let t = Array::from_elements(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [3, 2]);
     println!("{}", t.view());
-    println!("{}", m.view().dot(t.view()).view());
+    println!("{}", (m.view() * t.view()).view());
 }

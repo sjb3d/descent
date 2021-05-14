@@ -255,8 +255,11 @@ impl<'a> ArrayView<'a> {
             }
         })
     }
+}
 
-    pub fn dot(self, rhs: ArrayView) -> Array {
+impl<'a> ops::Mul for ArrayView<'a> {
+    type Output = Array;
+    fn mul(self, rhs: ArrayView) -> Self::Output {
         // TODO: uninitialized c
         let mut c = Array::zeros(Size::matrix_multiply(&self.size, &rhs.size));
         matrix_multiply_impl(1.0, &self, &rhs, 0.0, c.view_mut());
