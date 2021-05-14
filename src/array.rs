@@ -4,12 +4,74 @@ use rand::{
     distributions::{Distribution, Uniform},
     Rng,
 };
-use std::{cell::UnsafeCell, fmt, iter::FromIterator, ops, rc::Rc};
+use std::{fmt, iter::FromIterator, mem::MaybeUninit, ops, slice, slice::SliceIndex};
 
 const MAX_DIMS: usize = 4;
 
-#[derive(Debug, Clone)]
-pub struct Size(ArrayVec<usize, MAX_DIMS>);
+#[derive(Debug, Clone, Copy)]
+struct CopyableArrayVec<T: Copy, const N: usize> {
+    elements: [T; N],
+    len: usize,
+}
+
+impl<T: Copy, const N: usize> CopyableArrayVec<T, N> {
+    pub fn new() -> Self {
+        Self {
+            elements: unsafe { MaybeUninit::zeroed().assume_init() },
+            len: 0,
+        }
+    }
+
+    pub fn push(&mut self, a: T) {
+        self.elements[self.len] = a;
+        self.len += 1;
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        &self.elements[..self.len]
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut self.elements[..self.len]
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.elements[..self.len].iter()
+    }
+}
+
+impl<T: Copy, const N: usize> ops::Deref for CopyableArrayVec<T, N> {
+    type Target = [T];
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl<T: Copy, const N: usize> ops::DerefMut for CopyableArrayVec<T, N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut_slice()
+    }
+}
+
+impl<T: Copy, const N: usize> FromIterator<T> for CopyableArrayVec<T, N> {
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+    {
+        let mut v = Self::new();
+        for a in iter.into_iter() {
+            v.push(a);
+        }
+        v
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Size(CopyableArrayVec<usize, MAX_DIMS>);
 
 impl Size {
     pub fn dims(&self) -> usize {
@@ -47,16 +109,22 @@ impl Size {
     fn packed_stride(&self) -> Stride {
         let mut tmp = ArrayVec::<usize, MAX_DIMS>::new();
         tmp.push(1);
-        for size in self.0[1..].iter().rev() {
+        for size in self[1..].iter().rev() {
             tmp.push(size * tmp.last().unwrap());
         }
         Stride::from_iter(tmp.iter().rev().map(|n| *n as isize))
     }
 }
 
-impl ops::Index<usize> for Size {
-    type Output = usize;
-    fn index(&self, index: usize) -> &Self::Output {
+impl fmt::Display for Size {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        display_list(self.0.iter(), fmt)
+    }
+}
+
+impl<I: SliceIndex<[usize]>> ops::Index<I> for Size {
+    type Output = I::Output;
+    fn index(&self, index: I) -> &Self::Output {
         self.0.index(index)
     }
 }
@@ -76,8 +144,8 @@ impl<const N: usize> From<[usize; N]> for Size {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Stride(ArrayVec<isize, MAX_DIMS>);
+#[derive(Debug, Clone, Copy)]
+struct Stride(CopyableArrayVec<isize, MAX_DIMS>);
 
 impl Stride {
     fn as_1d(&self) -> isize {
@@ -106,19 +174,9 @@ impl FromIterator<isize> for Stride {
     }
 }
 
-#[derive(Debug, Clone)]
-struct RcStore(Rc<UnsafeCell<Vec<f32>>>);
-
-impl RcStore {
-    fn from_elements(elements: Vec<f32>) -> Self {
-        Self(Rc::new(UnsafeCell::new(elements)))
-    }
-}
-
+#[derive(Debug)]
 pub struct Array {
-    store: RcStore,
-    offset: isize,
-    stride: Stride,
+    elements: Vec<f32>,
     size: Size,
 }
 
@@ -126,67 +184,138 @@ impl Array {
     pub fn from_elements(elements: Vec<f32>, size: impl Into<Size>) -> Self {
         let size = size.into();
         assert_eq!(elements.len(), size.elements());
-        Self {
-            store: RcStore::from_elements(elements),
-            offset: 0,
-            stride: size.packed_stride(),
-            size,
-        }
+        Self { elements, size }
     }
 
     pub fn zeros(size: impl Into<Size>) -> Self {
         let size = size.into();
         let elements = vec![0.0; size.elements()];
-        Self::from_elements(elements, size)
+        Self { elements, size }
     }
 
     pub fn xavier_uniform(size: impl Into<Size>, rng: &mut impl Rng) -> Self {
         let size = size.into();
         let a = (6.0 / (size[0] as f32)).sqrt();
         let dist = Uniform::new(-a, a);
-        Self::from_elements(dist.sample_iter(rng).take(size.elements()).collect(), size)
+        Self {
+            elements: dist.sample_iter(rng).take(size.elements()).collect(),
+            size,
+        }
     }
 
     pub fn size(&self) -> &Size {
         &self.size
     }
 
-    fn iter_inner(&self) -> impl Iterator<Item = Array> {
+    pub fn view(&self) -> ArrayView {
+        ArrayView {
+            elements: &self.elements,
+            offset: 0,
+            stride: self.size.packed_stride(),
+            size: self.size.clone(),
+        }
+    }
+
+    pub fn view_mut(&mut self) -> ArrayViewMut {
+        ArrayViewMut {
+            elements: &mut self.elements,
+            offset: 0,
+            stride: self.size.packed_stride(),
+            size: self.size.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ArrayView<'a> {
+    elements: &'a [f32],
+    offset: isize,
+    stride: Stride,
+    size: Size,
+}
+
+#[derive(Debug)]
+pub struct ArrayViewMut<'a> {
+    elements: &'a mut [f32],
+    offset: isize,
+    stride: Stride,
+    size: Size,
+}
+
+impl<'a> ArrayView<'a> {
+    fn inner_iter(&self) -> impl Iterator<Item = ArrayView> {
         let (outer_size, inner_size) = self.size.split_first().unwrap();
         let (outer_stride, inner_stride) = self.stride.split_first().unwrap();
         (0..outer_size).map({
-            let rc_store = self.store.clone();
-            let offset = self.offset;
-            move |outer_index| Array {
-                store: rc_store.clone(),
-                offset: offset + (outer_index as isize) * outer_stride,
-                stride: inner_stride.clone(),
-                size: inner_size.clone(),
+            move |outer_index| ArrayView {
+                elements: self.elements,
+                offset: self.offset + (outer_index as isize) * outer_stride,
+                stride: inner_stride,
+                size: inner_size,
+            }
+        })
+    }
+
+    pub fn dot(self, rhs: ArrayView) -> Array {
+        // TODO: uninitialized c
+        let mut c = Array::zeros(Size::matrix_multiply(&self.size, &rhs.size));
+        matrix_multiply_impl(1.0, &self, &rhs, 0.0, c.view_mut());
+        c
+    }
+}
+
+impl<'a> ArrayViewMut<'a> {
+    fn into_inner_iter(self) -> impl Iterator<Item = ArrayViewMut<'a>> {
+        let (outer_size, inner_size) = self.size.split_first().unwrap();
+        let (outer_stride, inner_stride) = self.stride.split_first().unwrap();
+        (0..outer_size).map({
+            let elements_ptr = self.elements.as_mut_ptr();
+            let elements_len = self.elements.len();
+            move |outer_index| ArrayViewMut {
+                // SAFETY: this view is consumed, inner views are iterated one at a time
+                elements: unsafe { slice::from_raw_parts_mut(elements_ptr, elements_len) },
+                offset: self.offset + (outer_index as isize) * outer_stride,
+                stride: inner_stride,
+                size: inner_size,
             }
         })
     }
 }
 
-impl fmt::Debug for Array {
+fn display_list<I>(iter: I, fmt: &mut fmt::Formatter<'_>) -> fmt::Result
+where
+    I: IntoIterator,
+    I::Item: fmt::Display,
+{
+    let mut iter = iter.into_iter().peekable();
+    fmt.write_str("[")?;
+    while let Some(x) = iter.next() {
+        fmt.write_fmt(format_args!("{}", x))?;
+        if iter.peek().is_some() {
+            fmt.write_str(", ")?;
+        }
+    }
+    fmt.write_str("]")
+}
+
+impl<'a> fmt::Display for ArrayView<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.size.dims() == 1 {
-            let elements = unsafe { self.store.0.get().as_ref().unwrap() };
-            fmt.debug_list()
-                .entries(
-                    elements
-                        .iter()
-                        .skip(self.offset as usize)
-                        .step_by(self.stride.as_1d() as usize)
-                        .take(self.size.as_1d()),
-                )
-                .finish()
+            display_list(
+                self.elements
+                    .iter()
+                    .skip(self.offset as usize)
+                    .step_by(self.stride.as_1d() as usize)
+                    .take(self.size.as_1d()),
+                fmt,
+            )
         } else {
-            fmt.debug_list().entries(self.iter_inner()).finish()
+            display_list(self.inner_iter(), fmt)
         }
     }
 }
 
-fn matrix_multiply_impl(alpha: f32, a: &Array, b: &Array, beta: f32, c: &Array) {
+fn matrix_multiply_impl(alpha: f32, a: &ArrayView, b: &ArrayView, beta: f32, c: ArrayViewMut) {
     if a.size.dims() == 2 {
         let (m, _) = a.size.as_2d();
         let (k, n) = b.size.as_2d();
@@ -194,30 +323,17 @@ fn matrix_multiply_impl(alpha: f32, a: &Array, b: &Array, beta: f32, c: &Array) 
         let (rsb, csb) = b.stride.as_2d();
         let (rsc, csc) = c.stride.as_2d();
         unsafe {
-            let a_ptr = a.store.0.get().as_ref().unwrap().as_ptr().offset(a.offset);
-            let b_ptr = b.store.0.get().as_ref().unwrap().as_ptr().offset(b.offset);
-            let c_ptr = c
-                .store
-                .0
-                .get()
-                .as_mut()
-                .unwrap()
-                .as_mut_ptr()
-                .offset(c.offset);
+            let a_ptr = a.elements.as_ptr().offset(a.offset);
+            let b_ptr = b.elements.as_ptr().offset(b.offset);
+            let c_ptr = c.elements.as_mut_ptr().offset(c.offset);
+
             sgemm(
                 m, k, n, alpha, a_ptr, rsa, csa, b_ptr, rsb, csb, beta, c_ptr, rsc, csc,
             );
         }
     } else {
-        a.iter_inner().zip(c.iter_inner()).for_each(|(a, c)| {
-            matrix_multiply_impl(alpha, &a, b, beta, &c);
-        });
+        for (a, c) in a.inner_iter().zip(c.into_inner_iter()) {
+            matrix_multiply_impl(alpha, &a, b, beta, c);
+        }
     }
-}
-
-pub fn matrix_multiply(alpha: f32, a: &Array, b: &Array) -> Array {
-    // TODO: uninitialized c
-    let c = Array::zeros(Size::matrix_multiply(&a.size, &b.size));
-    matrix_multiply_impl(alpha, a, b, 0.0, &c);
-    c
 }

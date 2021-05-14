@@ -47,15 +47,15 @@ fn main() {
     // load all training data
     let train_images = load_images("data/train-images-idx3-ubyte");
     let train_labels = load_labels("data/train-labels-idx1-ubyte");
-    println!("{:?}, {:?}", train_images.size(), train_labels.size());
+    println!("{}, {}", train_images.size(), train_labels.size());
 
     // manually implement forward pass
     let x = &train_images;
     let w = Array::xavier_uniform([28 * 28, 10], &mut rng);
     //let b = Array::zeros([1, 10]);
 
-    let z = matrix_multiply(1.0, &x, &w);
-    println!("{:?}", z.size());
+    let z = x.view().dot(w.view());
+    println!("{}", z.size());
 
     // compute loss
 
@@ -65,4 +65,10 @@ fn main() {
     let s: Size = [4, 2, 3].into();
     let m = Array::from_elements((0..s.elements()).map(|n| n as f32).collect(), s);
     println!("{:?}", m);
+    println!("{:?}", m.view());
+    println!("{}", m.view());
+
+    let t = Array::from_elements(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [3, 2]);
+    println!("{}", t.view());
+    println!("{}", m.view().dot(t.view()).view());
 }
