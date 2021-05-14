@@ -52,9 +52,9 @@ fn main() {
     // manually implement forward pass
     let x = &train_images;
     let w = Array::xavier_uniform([28 * 28, 10], &mut rng);
-    //let b = Array::zeros([1, 10]);
+    let b = Array::zeros([1, 10]);
 
-    let z = x.view() * w.view();
+    let z = x * &w + &b;
     println!("{}", z.size());
 
     // compute loss
@@ -64,11 +64,9 @@ fn main() {
     // tests
     let s: Size = [4, 2, 3].into();
     let m = Array::from_elements((0..s.elements()).map(|n| n as f32).collect(), s);
-    println!("{:?}", m);
-    println!("{:?}", m.view());
-    println!("{}", m.view());
+    println!("{}", m);
 
     let t = Array::from_elements(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [3, 2]);
-    println!("{}", t.view());
-    println!("{}", (m.view() * t.view()).view());
+    println!("{}", t);
+    println!("{}", &m * &t);
 }
