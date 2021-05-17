@@ -1,8 +1,11 @@
 mod array;
+mod graph;
 
 use array::*;
+use graph::*;
 use rand::SeedableRng;
 use std::{
+    env,
     fs::File,
     io::{BufReader, Read},
     path::Path,
@@ -42,31 +45,44 @@ fn load_labels(path: impl AsRef<Path>) -> Array {
 }
 
 fn main() {
-    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
+    let g = GraphBuilder::new();
 
-    // load all training data
-    let train_images = load_images("data/train-images-idx3-ubyte");
-    let train_labels = load_labels("data/train-labels-idx1-ubyte");
-    println!("{}, {}", train_images.size(), train_labels.size());
+    let x = g.variable([0, 28 * 28], "x");
+    let y = g.variable([0, 1], "y");
 
-    // manually implement forward pass
-    let x = &train_images;
-    let w = Array::xavier_uniform([28 * 28, 10], &mut rng);
-    let b = Array::zeros([1, 10]);
+    let w = g.variable([28 * 28, 10], "w");
 
-    let z = x * &w + &b;
-    println!("{}", z.size());
+    let z = x * w;
 
-    // compute loss
+    g.finish().print_state();
 
-    // propagate backwards
+    if env::args().len() > 1 {
+        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
 
-    // tests
-    let s: Size = [4, 2, 3].into();
-    let m = Array::from_elements((0..s.elements()).map(|n| n as f32).collect(), s);
-    println!("{}", m);
+        // load all training data
+        let train_images = load_images("data/train-images-idx3-ubyte");
+        let train_labels = load_labels("data/train-labels-idx1-ubyte");
+        println!("{}, {}", train_images.size(), train_labels.size());
 
-    let t = Array::from_elements(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [3, 2]);
-    println!("{}", t);
-    println!("{}", &m * &t);
+        // manually implement forward pass
+        let x = &train_images;
+        let w = Array::xavier_uniform([28 * 28, 10], &mut rng);
+        let b = Array::zeros([1, 10]);
+
+        let z = x * &w + &b;
+        println!("{}", z.size());
+
+        // compute loss
+
+        // propagate backwards
+
+        // tests
+        let s: Size = [4, 2, 3].into();
+        let m = Array::from_elements((0..s.elements()).map(|n| n as f32).collect(), s);
+        println!("{}", m);
+
+        let t = Array::from_elements(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [3, 2]);
+        println!("{}", t);
+        println!("{}", &m * &t);
+    }
 }
