@@ -7,7 +7,7 @@ pub const MAX_DIMS: usize = 4;
 pub struct Shape(ArrayVec<isize, MAX_DIMS>);
 
 impl Shape {
-    fn from_elementwise(lhs: &Shape, rhs: &Shape) -> Self {
+    fn from_per_element(lhs: &Shape, rhs: &Shape) -> Self {
         // broadcast axes from 1 => n where necessary
         assert_eq!(lhs.0.len(), rhs.0.len());
         Shape(
@@ -19,7 +19,9 @@ impl Shape {
                     (1, n) => n,
                     (m, 1) => m,
                     (m, n) => {
-                        assert_eq!(m, n);
+                        if m != -1 && n != -1 {
+                            assert_eq!(m, n);
+                        }
                         m
                     }
                 })
@@ -32,10 +34,23 @@ impl Shape {
         let (a_last, a_prefix) = lhs.0.split_last().unwrap();
         let (b_first, b_suffix) = rhs.0.split_first().unwrap();
         assert_eq!(a_last, b_first);
-        let mut c = ArrayVec::new();
-        c.try_extend_from_slice(a_prefix).unwrap();
-        c.try_extend_from_slice(b_suffix).unwrap();
-        Shape(c)
+        let mut v = ArrayVec::new();
+        v.try_extend_from_slice(a_prefix).unwrap();
+        v.try_extend_from_slice(b_suffix).unwrap();
+        Shape(v)
+    }
+
+    fn from_transpose(shape: &Shape) -> Self {
+        assert_eq!(shape.0.len(), 2);
+        Shape(shape.0.iter().cloned().rev().collect())
+    }
+
+    fn from_reduce(shape: &Shape) -> Self {
+        let (_, prefix) = shape.0.split_last().unwrap();
+        let mut v = ArrayVec::new();
+        v.try_extend_from_slice(prefix).unwrap();
+        v.push(1);
+        Shape(v)
     }
 }
 
@@ -68,10 +83,122 @@ pub struct BuilderArray<'builder> {
     builder: &'builder GraphBuilder,
 }
 
+impl<'builder> BuilderArray<'builder> {
+    fn per_element_unary_op(&self, op: PerElementOp) -> Self {
+        let builder = self.builder;
+        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
+        let output_index = graph.array(Shape::from_reduce(&graph[self.index].shape), None);
+        graph.ops.push(Op::new(
+            OpType::PerElement(op),
+            &[self.index],
+            &[output_index],
+        ));
+        BuilderArray {
+            index: output_index,
+            builder,
+        }
+    }
+
+    fn per_element_binary_op(&self, rhs: BuilderArray, op: PerElementOp) -> Self {
+        let builder = self.builder;
+        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
+        let output_index = graph.array(
+            Shape::from_per_element(&graph[self.index].shape, &graph[rhs.index].shape),
+            None,
+        );
+        graph.ops.push(Op::new(
+            OpType::PerElement(op),
+            &[self.index, rhs.index],
+            &[output_index],
+        ));
+        BuilderArray {
+            index: output_index,
+            builder,
+        }
+    }
+
+    fn reduce_op(&self, op: ReduceOp) -> Self {
+        let builder = self.builder;
+        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
+        let output_index = graph.array(graph[self.index].shape.clone(), None);
+        graph
+            .ops
+            .push(Op::new(OpType::Reduce(op), &[self.index], &[output_index]));
+        BuilderArray {
+            index: output_index,
+            builder,
+        }
+    }
+
+    pub fn reduce_max(&self) -> Self {
+        self.reduce_op(ReduceOp::Max)
+    }
+    pub fn reduce_sum(&self) -> Self {
+        self.reduce_op(ReduceOp::Sum)
+    }
+
+    pub fn exp(&self) -> Self {
+        self.per_element_unary_op(PerElementOp::Exp)
+    }
+    pub fn log(&self) -> Self {
+        self.per_element_unary_op(PerElementOp::Log)
+    }
+
+    pub fn matmul(&self, rhs: BuilderArray) -> Self {
+        let builder = self.builder;
+        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
+        let output_index = graph.array(
+            Shape::from_matrix_multiply(&graph[self.index].shape, &graph[rhs.index].shape),
+            None,
+        );
+        graph.ops.push(Op::new(
+            OpType::MatMul,
+            &[self.index, rhs.index],
+            &[output_index],
+        ));
+        BuilderArray {
+            index: output_index,
+            builder,
+        }
+    }
+
+    pub fn transpose(&self) -> Self {
+        let builder = self.builder;
+        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
+        let output_index = graph.array(Shape::from_transpose(&graph[self.index].shape), None);
+        graph
+            .ops
+            .push(Op::new(OpType::Transpose, &[self.index], &[output_index]));
+        BuilderArray {
+            index: output_index,
+            builder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ReduceOp {
+    Max,
+    Sum,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PerElementOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Neg,
+    Exp,
+    Log,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum OpType {
-    Add,
-    Mul,
+    PerElement(PerElementOp),
+    MatMul,
+    Transpose,
+    Reduce(ReduceOp),
 }
 
 #[derive(Debug)]
@@ -158,42 +285,31 @@ impl GraphBuilder {
 impl<'builder> ops::Add for BuilderArray<'builder> {
     type Output = BuilderArray<'builder>;
     fn add(self, rhs: BuilderArray) -> Self::Output {
-        let builder = self.builder;
-        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
-        let output_index = graph.array(
-            Shape::from_elementwise(&graph[self.index].shape, &graph[rhs.index].shape),
-            None,
-        );
-        graph.ops.push(Op::new(
-            OpType::Add,
-            &[self.index, rhs.index],
-            &[output_index],
-        ));
-        BuilderArray {
-            index: output_index,
-            builder,
-        }
+        self.per_element_binary_op(rhs, PerElementOp::Add)
     }
 }
-
+impl<'builder> ops::Sub for BuilderArray<'builder> {
+    type Output = BuilderArray<'builder>;
+    fn sub(self, rhs: BuilderArray) -> Self::Output {
+        self.per_element_binary_op(rhs, PerElementOp::Sub)
+    }
+}
 impl<'builder> ops::Mul for BuilderArray<'builder> {
     type Output = BuilderArray<'builder>;
     fn mul(self, rhs: BuilderArray) -> Self::Output {
-        let builder = self.builder;
-        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
-        let output_index = graph.array(
-            Shape::from_matrix_multiply(&graph[self.index].shape, &graph[rhs.index].shape),
-            None,
-        );
-        graph.ops.push(Op::new(
-            OpType::Mul,
-            &[self.index, rhs.index],
-            &[output_index],
-        ));
-        BuilderArray {
-            index: output_index,
-            builder,
-        }
+        self.per_element_binary_op(rhs, PerElementOp::Mul)
+    }
+}
+impl<'builder> ops::Div for BuilderArray<'builder> {
+    type Output = BuilderArray<'builder>;
+    fn div(self, rhs: BuilderArray) -> Self::Output {
+        self.per_element_binary_op(rhs, PerElementOp::Div)
+    }
+}
+impl<'builder> ops::Neg for BuilderArray<'builder> {
+    type Output = BuilderArray<'builder>;
+    fn neg(self) -> Self::Output {
+        self.per_element_unary_op(PerElementOp::Neg)
     }
 }
 

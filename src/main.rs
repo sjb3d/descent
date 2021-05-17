@@ -48,12 +48,28 @@ fn main() {
     let g = GraphBuilder::new();
 
     let x = g.variable([-1, 28 * 28], "x");
-    let y = g.variable([-1, 1], "y");
+    let y = g.variable([-1, 10], "y"); // TODO: store index instead of one-hot
 
     let w = g.variable([28 * 28, 10], "w");
     let b = g.variable([1, 10], "b");
 
-    let z = x * w + b;
+    // linear layer (no activation)
+    let z = x.matmul(w) + b;
+
+    // softmax
+    let t = (z - z.reduce_max()).exp();
+    let p = t / t.reduce_sum();
+
+    // cross entropy
+    let _l = -(y * p.log()).reduce_sum();
+
+    // backprop
+    let dz = p - y; // softmax with cross entropy
+    let _dw = x.transpose().matmul(dz);
+    let _dx = dz.matmul(w.transpose());
+    let _db = dz;
+
+    // TODO: gradient descent step
 
     g.finish().print_state();
 
