@@ -1,4 +1,3 @@
-use arrayvec::ArrayVec;
 use matrixmultiply::sgemm;
 use rand::{
     distributions::{Distribution, Uniform},
@@ -45,7 +44,7 @@ impl<T: Copy, const N: usize> CopyableArrayVec<T, N> {
         &mut self.elements[..self.len]
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
+    pub fn iter(&self) -> slice::Iter<T> {
         self.elements[..self.len].iter()
     }
 }
@@ -136,7 +135,7 @@ impl Size {
     }
 
     fn packed_stride(&self) -> Stride {
-        let mut tmp = ArrayVec::<usize, MAX_DIMS>::new();
+        let mut tmp = CopyableArrayVec::<usize, MAX_DIMS>::new();
         tmp.push(1);
         for size in self[1..].iter().rev() {
             tmp.push(size * tmp.last().unwrap());
