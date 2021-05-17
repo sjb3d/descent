@@ -47,12 +47,13 @@ fn load_labels(path: impl AsRef<Path>) -> Array {
 fn main() {
     let g = GraphBuilder::new();
 
-    let x = g.variable([0, 28 * 28], "x");
-    let y = g.variable([0, 1], "y");
+    let x = g.variable([-1, 28 * 28], "x");
+    let y = g.variable([-1, 1], "y");
 
     let w = g.variable([28 * 28, 10], "w");
+    let b = g.variable([1, 10], "b");
 
-    let z = x * w;
+    let z = x * w + b;
 
     g.finish().print_state();
 

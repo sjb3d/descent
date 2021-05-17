@@ -1,33 +1,43 @@
 use arrayvec::ArrayVec;
-use std::{cell::UnsafeCell, convert::TryInto, fmt, num::NonZeroUsize, ops};
-
-#[derive(Debug, Clone, Copy)]
-pub enum AxisSize {
-    Dynamic,
-    Static(NonZeroUsize),
-}
-
-impl From<usize> for AxisSize {
-    fn from(s: usize) -> Self {
-        NonZeroUsize::new(s)
-            .map(AxisSize::Static)
-            .unwrap_or(AxisSize::Dynamic)
-    }
-}
-
-impl fmt::Display for AxisSize {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Dynamic => f.write_fmt(format_args!("{}", -1)),
-            Self::Static(n) => f.write_fmt(format_args!("{}", n.get())),
-        }
-    }
-}
+use std::{cell::UnsafeCell, convert::TryInto, fmt, ops};
 
 pub const MAX_DIMS: usize = 4;
 
 #[derive(Debug, Clone)]
-pub struct Shape(ArrayVec<AxisSize, MAX_DIMS>);
+pub struct Shape(ArrayVec<isize, MAX_DIMS>);
+
+impl Shape {
+    fn from_elementwise(lhs: &Shape, rhs: &Shape) -> Self {
+        // broadcast axes from 1 => n where necessary
+        assert_eq!(lhs.0.len(), rhs.0.len());
+        Shape(
+            lhs.0
+                .iter()
+                .cloned()
+                .zip(rhs.0.iter().cloned())
+                .map(|(a, b)| match (a, b) {
+                    (1, n) => n,
+                    (m, 1) => m,
+                    (m, n) => {
+                        assert_eq!(m, n);
+                        m
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    fn from_matrix_multiply(lhs: &Shape, rhs: &Shape) -> Self {
+        assert_eq!(rhs.0.len(), 2);
+        let (a_last, a_prefix) = lhs.0.split_last().unwrap();
+        let (b_first, b_suffix) = rhs.0.split_first().unwrap();
+        assert_eq!(a_last, b_first);
+        let mut c = ArrayVec::new();
+        c.try_extend_from_slice(a_prefix).unwrap();
+        c.try_extend_from_slice(b_suffix).unwrap();
+        Shape(c)
+    }
+}
 
 impl fmt::Display for Shape {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -35,9 +45,9 @@ impl fmt::Display for Shape {
     }
 }
 
-impl<const N: usize> From<[usize; N]> for Shape {
-    fn from(s: [usize; N]) -> Self {
-        Self(s.iter().cloned().map(AxisSize::from).collect())
+impl<const N: usize> From<[isize; N]> for Shape {
+    fn from(s: [isize; N]) -> Self {
+        Self(s.iter().cloned().collect())
     }
 }
 
@@ -60,6 +70,7 @@ pub struct BuilderArray<'builder> {
 
 #[derive(Debug, Clone, Copy)]
 enum OpType {
+    Add,
     Mul,
 }
 
@@ -144,13 +155,36 @@ impl GraphBuilder {
     }
 }
 
+impl<'builder> ops::Add for BuilderArray<'builder> {
+    type Output = BuilderArray<'builder>;
+    fn add(self, rhs: BuilderArray) -> Self::Output {
+        let builder = self.builder;
+        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
+        let output_index = graph.array(
+            Shape::from_elementwise(&graph[self.index].shape, &graph[rhs.index].shape),
+            None,
+        );
+        graph.ops.push(Op::new(
+            OpType::Add,
+            &[self.index, rhs.index],
+            &[output_index],
+        ));
+        BuilderArray {
+            index: output_index,
+            builder,
+        }
+    }
+}
+
 impl<'builder> ops::Mul for BuilderArray<'builder> {
     type Output = BuilderArray<'builder>;
     fn mul(self, rhs: BuilderArray) -> Self::Output {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
-        let shape = graph[self.index].shape.clone();
-        let output_index = graph.array(shape, None);
+        let output_index = graph.array(
+            Shape::from_matrix_multiply(&graph[self.index].shape, &graph[rhs.index].shape),
+            None,
+        );
         graph.ops.push(Op::new(
             OpType::Mul,
             &[self.index, rhs.index],
