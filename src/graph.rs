@@ -77,10 +77,37 @@ impl<const N: usize> From<[isize; N]> for Shape {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ReduceOp {
+    Max,
+    Sum,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PerElementOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Neg,
+    Exp,
+    Log,
+    OneHot,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Op {
+    None,
+    PerElement(PerElementOp),
+    MatMul,
+    Transpose,
+    Reduce(ReduceOp),
+}
+
 struct Node {
     shape: Shape,
     name: Option<String>,
-    op: OpType,
+    op: Op,
     inputs: Vec<NodeIndex>,
 }
 
@@ -97,7 +124,7 @@ impl NodeBuilder {
             node: Node {
                 shape: shape.into(),
                 name: None,
-                op: OpType::None,
+                op: Op::None,
                 inputs: Vec::new(),
             },
         }
@@ -108,7 +135,7 @@ impl NodeBuilder {
         self
     }
 
-    fn with_op(mut self, op: OpType, inputs: &[NodeIndex]) -> Self {
+    fn with_op(mut self, op: Op, inputs: &[NodeIndex]) -> Self {
         self.node.op = op;
         self.node.inputs = inputs.to_vec();
         self
@@ -133,7 +160,7 @@ impl<'builder> ArrayId<'builder> {
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
-                    .with_op(OpType::PerElement(op), &[self.index])
+                    .with_op(Op::PerElement(op), &[self.index])
                     .build(),
             ),
             builder,
@@ -147,7 +174,7 @@ impl<'builder> ArrayId<'builder> {
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
-                    .with_op(OpType::PerElement(op), &[self.index, rhs.index])
+                    .with_op(Op::PerElement(op), &[self.index, rhs.index])
                     .build(),
             ),
             builder,
@@ -161,7 +188,7 @@ impl<'builder> ArrayId<'builder> {
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
-                    .with_op(OpType::Reduce(op), &[self.index])
+                    .with_op(Op::Reduce(op), &[self.index])
                     .build(),
             ),
             builder,
@@ -175,7 +202,7 @@ impl<'builder> ArrayId<'builder> {
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
-                    .with_op(OpType::PerElement(PerElementOp::OneHot), &[self.index])
+                    .with_op(Op::PerElement(PerElementOp::OneHot), &[self.index])
                     .build(),
             ),
             builder,
@@ -205,7 +232,7 @@ impl<'builder> ArrayId<'builder> {
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
-                    .with_op(OpType::MatMul, &[self.index, rhs.index])
+                    .with_op(Op::MatMul, &[self.index, rhs.index])
                     .build(),
             ),
             builder,
@@ -219,39 +246,12 @@ impl<'builder> ArrayId<'builder> {
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
-                    .with_op(OpType::Transpose, &[self.index])
+                    .with_op(Op::Transpose, &[self.index])
                     .build(),
             ),
             builder,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ReduceOp {
-    Max,
-    Sum,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PerElementOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Neg,
-    Exp,
-    Log,
-    OneHot,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum OpType {
-    None,
-    PerElement(PerElementOp),
-    MatMul,
-    Transpose,
-    Reduce(ReduceOp),
 }
 
 pub struct Graph {
