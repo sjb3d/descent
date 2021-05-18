@@ -51,7 +51,7 @@ fn main() {
     let y = g.variable([-1, 1], "y");
 
     let w = g.variable([28 * 28, 10], "w");
-    let b = g.variable([1, 10], "b");
+    let b = g.variable([10], "b");
 
     // linear layer (no activation)
     let z = x.matmul(w) + b;
@@ -66,11 +66,22 @@ fn main() {
 
     // backprop
     let dz = p - h; // softmax with cross entropy
-    let _dw = x.transpose().matmul(dz);
+    let dw = x.transpose().matmul(dz);
     let _dx = dz.matmul(w.transpose());
-    let _db = dz;
+    let db = dz;
 
-    // TODO: gradient descent step
+    // gradient descent step
+    let alpha = 0.1;
+    let _w = w - alpha * dw;
+    let _b = b - alpha * db;
+
+    // codegen steps:
+    // * assign shapes for placeholders
+    // * lower into compute graph:
+    //   * subgraphs for per-element ops (with multiple outputs)
+    //   * merge single-input per-element ops onto previous pass?
+    //   * transpose as argument modifier
+    //   * literal as argument modifier
 
     g.build().print_state();
 

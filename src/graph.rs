@@ -1,32 +1,34 @@
 use arrayvec::ArrayVec;
-use std::{cell::UnsafeCell, fmt, ops};
+use std::{cell::UnsafeCell, fmt, iter, ops};
 
-pub const MAX_DIMS: usize = 4;
+type ShapeVec = ArrayVec<isize, 4>;
 
 #[derive(Debug, Clone)]
-pub struct Shape(ArrayVec<isize, MAX_DIMS>);
+pub struct Shape(ShapeVec);
 
 impl Shape {
+    fn iter_rev_then_one(&self, len: usize) -> impl Iterator<Item = &isize> {
+        self.0.iter().rev().chain(iter::repeat(&1)).take(len)
+    }
+
     fn per_element(&self, rhs: &Shape) -> Self {
         // broadcast axes from 1 => n where necessary
-        assert_eq!(self.0.len(), rhs.0.len());
-        Shape(
-            self.0
-                .iter()
-                .cloned()
-                .zip(rhs.0.iter().cloned())
-                .map(|(a, b)| match (a, b) {
-                    (1, n) => n,
-                    (m, 1) => m,
-                    (m, n) => {
-                        if m != -1 && n != -1 {
-                            assert_eq!(m, n);
-                        }
-                        m
+        let len = self.0.len().max(rhs.0.len());
+        let rev: ShapeVec = self
+            .iter_rev_then_one(len)
+            .zip(rhs.iter_rev_then_one(len))
+            .map(|(&a, &b)| match (a, b) {
+                (1, n) => n,
+                (m, 1) => m,
+                (m, n) => {
+                    if m != -1 && n != -1 {
+                        assert_eq!(m, n);
                     }
-                })
-                .collect(),
-        )
+                    m
+                }
+            })
+            .collect();
+        Shape(rev.iter().cloned().rev().collect())
     }
 
     fn matrix_multiply(&self, rhs: &Shape) -> Self {
@@ -98,6 +100,7 @@ enum PerElementOp {
 #[derive(Debug, Clone, Copy)]
 enum Op {
     None,
+    Literal(f32),
     PerElement(PerElementOp),
     MatMul,
     Transpose,
@@ -299,6 +302,17 @@ impl GraphBuilder {
         }
     }
 
+    fn literal(&self, value: f32) -> ArrayId {
+        let graph = unsafe { self.graph.get().as_mut().unwrap() };
+        ArrayId {
+            index: graph.push_node(
+                NodeBuilder::new([])
+                    .with_op(Op::Literal(value), &[])
+                    .build(),
+            ),
+            builder: self,
+        }
+    }
     pub fn variable(&self, shape: impl Into<Shape>, name: &str) -> ArrayId {
         let graph = unsafe { self.graph.get().as_mut().unwrap() };
         ArrayId {
@@ -340,6 +354,14 @@ impl<'builder> ops::Neg for ArrayId<'builder> {
     type Output = ArrayId<'builder>;
     fn neg(self) -> Self::Output {
         self.per_element_unary_op(PerElementOp::Neg)
+    }
+}
+
+impl<'builder> ops::Mul<ArrayId<'builder>> for f32 {
+    type Output = ArrayId<'builder>;
+    fn mul(self, rhs: ArrayId<'builder>) -> Self::Output {
+        let lhs = rhs.builder.literal(self);
+        lhs.per_element_binary_op(rhs, PerElementOp::Mul)
     }
 }
 
