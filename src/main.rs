@@ -48,7 +48,7 @@ fn main() {
     let g = GraphBuilder::new();
 
     let x = g.variable([-1, 28 * 28], "x");
-    let y = g.variable([-1, 10], "y"); // TODO: store index instead of one-hot
+    let y = g.variable([-1, 1], "y");
 
     let w = g.variable([28 * 28, 10], "w");
     let b = g.variable([1, 10], "b");
@@ -61,10 +61,11 @@ fn main() {
     let p = t / t.reduce_sum();
 
     // cross entropy
-    let _l = -(y * p.log()).reduce_sum();
+    let h = y.one_hot(10);
+    let _l = -(h * p.log()).reduce_sum(); // TODO: pick element of p using value of y
 
     // backprop
-    let dz = p - y; // softmax with cross entropy
+    let dz = p - h; // softmax with cross entropy
     let _dw = x.transpose().matmul(dz);
     let _dx = dz.matmul(w.transpose());
     let _db = dz;

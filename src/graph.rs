@@ -7,11 +7,11 @@ pub const MAX_DIMS: usize = 4;
 pub struct Shape(ArrayVec<isize, MAX_DIMS>);
 
 impl Shape {
-    fn from_per_element(lhs: &Shape, rhs: &Shape) -> Self {
+    fn per_element(&self, rhs: &Shape) -> Self {
         // broadcast axes from 1 => n where necessary
-        assert_eq!(lhs.0.len(), rhs.0.len());
+        assert_eq!(self.0.len(), rhs.0.len());
         Shape(
-            lhs.0
+            self.0
                 .iter()
                 .cloned()
                 .zip(rhs.0.iter().cloned())
@@ -29,28 +29,38 @@ impl Shape {
         )
     }
 
-    fn from_matrix_multiply(lhs: &Shape, rhs: &Shape) -> Self {
+    fn matrix_multiply(&self, rhs: &Shape) -> Self {
         assert_eq!(rhs.0.len(), 2);
-        let (a_last, a_prefix) = lhs.0.split_last().unwrap();
+        let (a_last, a_prefix) = self.0.split_last().unwrap();
         let (b_first, b_suffix) = rhs.0.split_first().unwrap();
-        assert_eq!(a_last, b_first);
+        assert_eq!(*a_last, *b_first);
         let mut v = ArrayVec::new();
         v.try_extend_from_slice(a_prefix).unwrap();
         v.try_extend_from_slice(b_suffix).unwrap();
         Shape(v)
     }
 
-    fn from_transpose(shape: &Shape) -> Self {
-        assert_eq!(shape.0.len(), 2);
-        Shape(shape.0.iter().cloned().rev().collect())
+    fn transpose(&self) -> Self {
+        assert_eq!(self.0.len(), 2);
+        Shape(self.0.iter().cloned().rev().collect())
     }
 
-    fn from_reduce(shape: &Shape) -> Self {
+    fn reduce(&self) -> Self {
         // reduce last axis (innermost dimension), keep dimension with size 1
-        let (_, prefix) = shape.0.split_last().unwrap();
+        let (_, prefix) = self.0.split_last().unwrap();
         let mut v = ArrayVec::new();
         v.try_extend_from_slice(prefix).unwrap();
         v.push(1);
+        Shape(v)
+    }
+
+    fn one_hot(&self, size: isize) -> Self {
+        // expand last axis (innermost dimension) from 1 to n
+        let (last, prefix) = self.0.split_last().unwrap();
+        assert_eq!(*last, 1);
+        let mut v = ArrayVec::new();
+        v.try_extend_from_slice(prefix).unwrap();
+        v.push(size);
         Shape(v)
     }
 }
@@ -133,7 +143,7 @@ impl<'builder> ArrayId<'builder> {
     fn per_element_binary_op(&self, rhs: ArrayId, op: PerElementOp) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
-        let shape = Shape::from_per_element(&graph[self.index].shape, &graph[rhs.index].shape);
+        let shape = graph[self.index].shape.per_element(&graph[rhs.index].shape);
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
@@ -147,11 +157,25 @@ impl<'builder> ArrayId<'builder> {
     fn reduce_op(&self, op: ReduceOp) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
-        let shape = Shape::from_reduce(&graph[self.index].shape);
+        let shape = graph[self.index].shape.reduce();
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
                     .with_op(OpType::Reduce(op), &[self.index])
+                    .build(),
+            ),
+            builder,
+        }
+    }
+
+    pub fn one_hot(&self, size: isize) -> Self {
+        let builder = self.builder;
+        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
+        let shape = graph[self.index].shape.one_hot(size);
+        ArrayId {
+            index: graph.push_node(
+                NodeBuilder::new(shape)
+                    .with_op(OpType::PerElement(PerElementOp::OneHot), &[self.index])
                     .build(),
             ),
             builder,
@@ -175,7 +199,9 @@ impl<'builder> ArrayId<'builder> {
     pub fn matmul(&self, rhs: ArrayId) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
-        let shape = Shape::from_matrix_multiply(&graph[self.index].shape, &graph[rhs.index].shape);
+        let shape = graph[self.index]
+            .shape
+            .matrix_multiply(&graph[rhs.index].shape);
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
@@ -189,7 +215,7 @@ impl<'builder> ArrayId<'builder> {
     pub fn transpose(&self) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
-        let shape = Shape::from_transpose(&graph[self.index].shape);
+        let shape = graph[self.index].shape.transpose();
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
@@ -216,6 +242,7 @@ enum PerElementOp {
     Neg,
     Exp,
     Log,
+    OneHot,
 }
 
 #[derive(Debug, Clone, Copy)]
