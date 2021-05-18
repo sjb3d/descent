@@ -48,10 +48,14 @@ impl Shape {
     }
 
     fn reduce(&self, axis: usize) -> Self {
-        // keep dimension with size 1
-        let mut v = self.0.clone();
-        v[axis] = 1;
-        Shape(v)
+        // keep inner dimensions with size 1
+        if axis == 0 {
+            Shape(self.0.iter().cloned().skip(1).collect())
+        } else {
+            let mut v = self.0.clone();
+            v[axis] = 1;
+            Shape(v)
+        }
     }
 
     fn one_hot(&self, size: isize) -> Self {
