@@ -57,18 +57,19 @@ fn main() {
     let z = x.matmul(w) + b;
 
     // softmax
-    let t = (z - z.reduce_max()).exp();
-    let p = t / t.reduce_sum();
+    let t = (z - z.reduce_max(1)).exp();
+    let p = t / t.reduce_sum(1);
 
     // cross entropy
     let h = y.one_hot(10);
-    let _l = -(h * p.log()).reduce_sum(); // TODO: pick element of p using value of y
+    let _l = -(h * p.log()).reduce_sum(1); // TODO: pick element of p using value of y
 
     // backprop
     let dz = p - h; // softmax with cross entropy
-    let dw = x.transpose().matmul(dz);
+    let m = x.axis_size(0);
+    let dw = x.transpose().matmul(dz) / m;
     let _dx = dz.matmul(w.transpose());
-    let db = dz;
+    let db = dz.reduce_sum(0) / m;
 
     // gradient descent step
     let alpha = 0.1;
@@ -81,6 +82,7 @@ fn main() {
     //   * subgraphs for per-element ops (with multiple outputs)
     //   * merge single-input per-element ops onto previous pass?
     //   * transpose as argument modifier
+    //   * axis size into literal
     //   * literal as argument modifier
 
     g.build().print_state();

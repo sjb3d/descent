@@ -47,12 +47,10 @@ impl Shape {
         Shape(self.0.iter().cloned().rev().collect())
     }
 
-    fn reduce(&self) -> Self {
-        // reduce last axis (innermost dimension), keep dimension with size 1
-        let (_, prefix) = self.0.split_last().unwrap();
-        let mut v = ArrayVec::new();
-        v.try_extend_from_slice(prefix).unwrap();
-        v.push(1);
+    fn reduce(&self, axis: usize) -> Self {
+        // keep dimension with size 1
+        let mut v = self.0.clone();
+        v[axis] = 1;
         Shape(v)
     }
 
@@ -101,10 +99,11 @@ enum PerElementOp {
 enum Op {
     None,
     Literal(f32),
+    AxisSize(usize),
     PerElement(PerElementOp),
     MatMul,
     Transpose,
-    Reduce(ReduceOp),
+    Reduce { reduce_op: ReduceOp, axis: usize },
 }
 
 struct Node {
@@ -184,14 +183,27 @@ impl<'builder> ArrayId<'builder> {
         }
     }
 
-    fn reduce_op(&self, op: ReduceOp) -> Self {
+    fn reduce_op(&self, reduce_op: ReduceOp, axis: usize) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
-        let shape = graph[self.index].shape.reduce();
+        let shape = graph[self.index].shape.reduce(axis);
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
-                    .with_op(Op::Reduce(op), &[self.index])
+                    .with_op(Op::Reduce { reduce_op, axis }, &[self.index])
+                    .build(),
+            ),
+            builder,
+        }
+    }
+
+    pub fn axis_size(&self, axis: usize) -> Self {
+        let builder = self.builder;
+        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
+        ArrayId {
+            index: graph.push_node(
+                NodeBuilder::new([])
+                    .with_op(Op::AxisSize(axis), &[self.index])
                     .build(),
             ),
             builder,
@@ -212,11 +224,11 @@ impl<'builder> ArrayId<'builder> {
         }
     }
 
-    pub fn reduce_max(&self) -> Self {
-        self.reduce_op(ReduceOp::Max)
+    pub fn reduce_max(&self, axis: usize) -> Self {
+        self.reduce_op(ReduceOp::Max, axis)
     }
-    pub fn reduce_sum(&self) -> Self {
-        self.reduce_op(ReduceOp::Sum)
+    pub fn reduce_sum(&self, axis: usize) -> Self {
+        self.reduce_op(ReduceOp::Sum, axis)
     }
 
     pub fn exp(&self) -> Self {
