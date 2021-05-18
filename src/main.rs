@@ -71,7 +71,7 @@ fn main() {
 
     // TODO: gradient descent step
 
-    g.finish().print_state();
+    g.build().print_state();
 
     if env::args().len() > 1 {
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
