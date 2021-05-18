@@ -266,14 +266,17 @@ impl Graph {
     }
 
     pub fn print_state(&self) {
-        for node in self.nodes.iter() {
-            println!(
-                "{}: {}, {:?}, {:?}",
-                node.name.as_ref().map(String::as_str).unwrap_or("?"),
-                node.shape,
-                node.op,
-                node.inputs
-            );
+        for (index, node) in self.nodes.iter().enumerate() {
+            print!("n{} [label=\"{:?}\\n", index, node.op);
+            if let Some(s) = node.name.as_ref() {
+                print!("{}", s);
+            }
+            println!("{}\"];", node.shape);
+        }
+        for (index, node) in self.nodes.iter().enumerate() {
+            for input in node.inputs.iter() {
+                println!("n{} -> n{};", input.0, index);
+            }
         }
     }
 }
