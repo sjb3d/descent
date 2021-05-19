@@ -1,8 +1,11 @@
 mod array;
+mod array_old;
 mod graph;
+mod prelude;
+mod shape;
 
-use array::*;
-use graph::*;
+use crate::array_old::{Array as ArrayOld, Size as SizeOld};
+use crate::prelude::*;
 use rand::SeedableRng;
 use std::{
     env,
@@ -17,7 +20,7 @@ fn read_be_u32(reader: &mut impl Read) -> u32 {
     u32::from_be_bytes(bytes)
 }
 
-fn load_images(path: impl AsRef<Path>) -> Array {
+fn load_images(path: impl AsRef<Path>) -> ArrayOld {
     let mut reader = BufReader::new(File::open(path).unwrap());
     let magic = read_be_u32(&mut reader);
     assert_eq!(magic, 2051);
@@ -30,10 +33,10 @@ fn load_images(path: impl AsRef<Path>) -> Array {
         reader.read_exact(&mut image).unwrap();
         elements.extend(image.iter().map(|&c| (c as f32) / 255.0));
     }
-    Array::from_elements(elements, [image_count, rows * cols])
+    ArrayOld::from_elements(elements, [image_count, rows * cols])
 }
 
-fn load_labels(path: impl AsRef<Path>) -> Array {
+fn load_labels(path: impl AsRef<Path>) -> ArrayOld {
     let mut reader = BufReader::new(File::open(path).unwrap());
     let magic = read_be_u32(&mut reader);
     assert_eq!(magic, 2049);
@@ -41,7 +44,7 @@ fn load_labels(path: impl AsRef<Path>) -> Array {
     let mut labels = vec![0u8; label_count];
     reader.read_exact(&mut labels).unwrap();
     let elements = labels.into_iter().map(|n| n as f32).collect();
-    Array::from_elements(elements, [label_count, 1])
+    ArrayOld::from_elements(elements, [label_count, 1])
 }
 
 fn main() {
@@ -100,8 +103,8 @@ fn main() {
 
         // manually implement forward pass
         let x = &train_images;
-        let w = Array::xavier_uniform([28 * 28, 10], &mut rng);
-        let b = Array::zeros([1, 10]);
+        let w = ArrayOld::xavier_uniform([28 * 28, 10], &mut rng);
+        let b = ArrayOld::zeros([1, 10]);
 
         let z = x * &w + &b;
         println!("{}", z.size());
@@ -111,11 +114,11 @@ fn main() {
         // propagate backwards
 
         // tests
-        let s: Size = [4, 2, 3].into();
-        let m = Array::from_elements((0..s.elements()).map(|n| n as f32).collect(), s);
+        let s: SizeOld = [4, 2, 3].into();
+        let m = ArrayOld::from_elements((0..s.elements()).map(|n| n as f32).collect(), s);
         println!("{}", m);
 
-        let t = Array::from_elements(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [3, 2]);
+        let t = ArrayOld::from_elements(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [3, 2]);
         println!("{}", t);
         println!("{}", &m * &t);
     }
