@@ -1,13 +1,14 @@
 use arrayvec::ArrayVec;
-use std::{cell::UnsafeCell, fmt, iter, ops};
+use std::{cell::UnsafeCell, fmt, io, iter, ops};
 
-type ShapeVec = ArrayVec<isize, 4>;
+type AxisLen = usize;
+type ShapeVec = ArrayVec<AxisLen, 4>;
 
 #[derive(Debug, Clone)]
 pub struct Shape(ShapeVec);
 
 impl Shape {
-    fn iter_rev_then_one(&self, len: usize) -> impl Iterator<Item = &isize> {
+    fn iter_rev_then_one(&self, len: usize) -> impl Iterator<Item = &AxisLen> {
         self.0.iter().rev().chain(iter::repeat(&1)).take(len)
     }
 
@@ -21,9 +22,7 @@ impl Shape {
                 (1, n) => n,
                 (m, 1) => m,
                 (m, n) => {
-                    if m != -1 && n != -1 {
-                        assert_eq!(m, n);
-                    }
+                    assert_eq!(m, n);
                     m
                 }
             })
@@ -47,8 +46,11 @@ impl Shape {
         Shape(self.0.iter().cloned().rev().collect())
     }
 
-    fn reduce(&self, axis: usize) -> Self {
-        // keep inner dimensions with size 1
+    fn reduce(&self, axis: isize) -> Self {
+        // address from end if negative
+        let axis = (axis as usize).wrapping_add(if axis < 0 { self.0.len() } else { 0 });
+
+        // strip outermost dimension if reduced, otherwise keep with length 1
         if axis == 0 {
             Shape(self.0.iter().cloned().skip(1).collect())
         } else {
@@ -58,13 +60,13 @@ impl Shape {
         }
     }
 
-    fn one_hot(&self, size: isize) -> Self {
+    fn one_hot(&self, count: AxisLen) -> Self {
         // expand last axis (innermost dimension) from 1 to n
         let (last, prefix) = self.0.split_last().unwrap();
         assert_eq!(*last, 1);
         let mut v = ArrayVec::new();
         v.try_extend_from_slice(prefix).unwrap();
-        v.push(size);
+        v.push(count);
         Shape(v)
     }
 }
@@ -75,8 +77,8 @@ impl fmt::Display for Shape {
     }
 }
 
-impl<const N: usize> From<[isize; N]> for Shape {
-    fn from(s: [isize; N]) -> Self {
+impl<const N: usize> From<[AxisLen; N]> for Shape {
+    fn from(s: [AxisLen; N]) -> Self {
         Self(s.iter().cloned().collect())
     }
 }
@@ -103,11 +105,10 @@ enum PerElementOp {
 enum Op {
     None,
     Literal(f32),
-    AxisSize(usize),
     PerElement(PerElementOp),
     MatMul,
     Transpose,
-    Reduce { reduce_op: ReduceOp, axis: usize },
+    Reduce { reduce_op: ReduceOp, axis: isize },
 }
 
 struct Node {
@@ -187,7 +188,7 @@ impl<'builder> ArrayId<'builder> {
         }
     }
 
-    fn reduce_op(&self, reduce_op: ReduceOp, axis: usize) -> Self {
+    fn reduce_op(&self, reduce_op: ReduceOp, axis: isize) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.reduce(axis);
@@ -201,23 +202,10 @@ impl<'builder> ArrayId<'builder> {
         }
     }
 
-    pub fn axis_size(&self, axis: usize) -> Self {
+    pub fn one_hot(&self, count: AxisLen) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
-        ArrayId {
-            index: graph.push_node(
-                NodeBuilder::new([])
-                    .with_op(Op::AxisSize(axis), &[self.index])
-                    .build(),
-            ),
-            builder,
-        }
-    }
-
-    pub fn one_hot(&self, size: isize) -> Self {
-        let builder = self.builder;
-        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
-        let shape = graph[self.index].shape.one_hot(size);
+        let shape = graph[self.index].shape.one_hot(count);
         ArrayId {
             index: graph.push_node(
                 NodeBuilder::new(shape)
@@ -228,10 +216,10 @@ impl<'builder> ArrayId<'builder> {
         }
     }
 
-    pub fn reduce_max(&self, axis: usize) -> Self {
+    pub fn reduce_max(&self, axis: isize) -> Self {
         self.reduce_op(ReduceOp::Max, axis)
     }
-    pub fn reduce_sum(&self, axis: usize) -> Self {
+    pub fn reduce_sum(&self, axis: isize) -> Self {
         self.reduce_op(ReduceOp::Sum, axis)
     }
 
@@ -284,19 +272,21 @@ impl Graph {
         NodeIndex(index)
     }
 
-    pub fn print_state(&self) {
+    pub fn write_dot(&self, w: &mut impl io::Write) -> io::Result<()> {
+        writeln!(w, "digraph G {{")?;
         for (index, node) in self.nodes.iter().enumerate() {
-            print!("n{} [label=\"{:?}\\n", index, node.op);
+            write!(w, "n{} [label=\"{:?}\\n", index, node.op)?;
             if let Some(s) = node.name.as_ref() {
-                print!("{}", s);
+                write!(w, "{}", s)?;
             }
-            println!("{}\"];", node.shape);
+            writeln!(w, "{}\"];", node.shape)?;
         }
         for (index, node) in self.nodes.iter().enumerate() {
             for input in node.inputs.iter() {
-                println!("n{} -> n{};", input.0, index);
+                writeln!(w, "n{} -> n{};", input.0, index)?;
             }
         }
+        writeln!(w, "}}")
     }
 }
 
@@ -378,6 +368,13 @@ impl<'builder> ops::Mul<ArrayId<'builder>> for f32 {
     fn mul(self, rhs: ArrayId<'builder>) -> Self::Output {
         let lhs = rhs.builder.literal(self);
         lhs.per_element_binary_op(rhs, PerElementOp::Mul)
+    }
+}
+impl<'builder> ops::Div<f32> for ArrayId<'builder> {
+    type Output = ArrayId<'builder>;
+    fn div(self, rhs: f32) -> Self::Output {
+        let rhs = self.builder.literal(rhs);
+        self.per_element_binary_op(rhs, PerElementOp::Div)
     }
 }
 

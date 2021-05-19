@@ -7,7 +7,7 @@ use rand::SeedableRng;
 use std::{
     env,
     fs::File,
-    io::{BufReader, Read},
+    io::{BufReader, BufWriter, Read},
     path::Path,
 };
 
@@ -47,8 +47,9 @@ fn load_labels(path: impl AsRef<Path>) -> Array {
 fn main() {
     let g = GraphBuilder::new();
 
-    let x = g.variable([-1, 28 * 28], "x");
-    let y = g.variable([-1, 1], "y");
+    let m = 1000;
+    let x = g.variable([m, 28 * 28], "x");
+    let y = g.variable([m, 1], "y");
 
     let w = g.variable([28 * 28, 10], "w");
     let b = g.variable([10], "b");
@@ -57,19 +58,19 @@ fn main() {
     let z = x.matmul(w) + b;
 
     // softmax
-    let t = (z - z.reduce_max(1)).exp();
-    let p = t / t.reduce_sum(1);
+    let t = (z - z.reduce_max(-1)).exp();
+    let p = t / t.reduce_sum(-1);
 
-    // cross entropy
+    // cross entropy loss (mean over batch)
     let h = y.one_hot(10);
-    let _l = -(h * p.log()).reduce_sum(1); // TODO: pick element of p using value of y
+    let loss = -(h * p.log()).reduce_sum(-1); // TODO: pick element of p using value of y
+    let _mean_loss = loss.reduce_sum(0) / (m as f32);
 
     // backprop
-    let dz = p - h; // softmax with cross entropy
-    let m = x.axis_size(0);
-    let dw = x.transpose().matmul(dz) / m;
+    let dz = (p - h) / (m as f32); // softmax with cross entropy
+    let dw = x.transpose().matmul(dz);
     let _dx = dz.matmul(w.transpose());
-    let db = dz.reduce_sum(0) / m;
+    let db = dz.reduce_sum(0);
 
     // gradient descent step
     let alpha = 0.1;
@@ -77,15 +78,14 @@ fn main() {
     let _b = b - alpha * db;
 
     // codegen steps:
-    // * assign shapes for placeholders
     // * lower into compute graph:
     //   * subgraphs for per-element ops (with multiple outputs)
     //   * merge single-input per-element ops onto previous pass?
     //   * transpose as argument modifier
-    //   * axis size into literal
     //   * literal as argument modifier
 
-    g.build().print_state();
+    let mut f = BufWriter::new(File::create("debug.dot").unwrap());
+    g.build().write_dot(&mut f).unwrap();
 
     if env::args().len() > 1 {
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
