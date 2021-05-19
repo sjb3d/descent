@@ -51,10 +51,10 @@ fn main() {
     let x = g.variable([m, 28 * 28], "x");
     let y = g.variable([m, 1], "y");
 
+    // linear layer (no activation)
+    g.next_colour();
     let w = g.variable([28 * 28, 10], "w");
     let b = g.variable([10], "b");
-
-    // linear layer (no activation)
     let z = (x.matmul(w) + b).with_name("z");
     let mut dz = g.accumulator(z.shape()).with_name("dz");
     let dw = x.transpose().matmul(dz).with_name("dw");
@@ -62,6 +62,7 @@ fn main() {
     let db = dz.reduce_sum(0).with_name("db");
 
     // softmax
+    g.next_colour();
     let t = (z - z.reduce_max(-1)).exp();
     let p = t / t.reduce_sum(-1);
 
@@ -74,6 +75,7 @@ fn main() {
     dz.accumulate((p - h) / (m as f32));
 
     // gradient descent step
+    g.next_colour();
     let alpha = 0.1;
     let _w = w - alpha * dw;
     let _b = b - alpha * db;

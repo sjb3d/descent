@@ -1,5 +1,12 @@
 use arrayvec::ArrayVec;
-use std::{cell::UnsafeCell, fmt, io, iter, ops};
+use std::{
+    cell::Cell,
+    cell::UnsafeCell,
+    collections::hash_map::DefaultHasher,
+    fmt,
+    hash::{Hash, Hasher},
+    io, iter, ops,
+};
 
 type AxisLen = usize;
 type ShapeVec = ArrayVec<AxisLen, 4>;
@@ -113,15 +120,17 @@ enum Op {
 
 struct Node {
     name: Option<String>,
+    colour: usize,
     shape: Shape,
     op: Op,
     inputs: Vec<NodeIndex>,
 }
 
 impl Node {
-    fn new(shape: impl Into<Shape>, op: Op, inputs: &[NodeIndex]) -> Self {
+    fn new(colour: usize, shape: impl Into<Shape>, op: Op, inputs: &[NodeIndex]) -> Self {
         Self {
             name: None,
+            colour,
             shape: shape.into(),
             op,
             inputs: inputs.to_vec(),
@@ -151,7 +160,12 @@ impl<'builder> ArrayId<'builder> {
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.clone();
         ArrayId {
-            index: graph.push_node(Node::new(shape, Op::PerElement(op), &[self.index])),
+            index: graph.push_node(Node::new(
+                builder.colour.get(),
+                shape,
+                Op::PerElement(op),
+                &[self.index],
+            )),
             builder,
         }
     }
@@ -162,6 +176,7 @@ impl<'builder> ArrayId<'builder> {
         let shape = graph[self.index].shape.per_element(&graph[rhs.index].shape);
         ArrayId {
             index: graph.push_node(Node::new(
+                builder.colour.get(),
                 shape,
                 Op::PerElement(op),
                 &[self.index, rhs.index],
@@ -176,6 +191,7 @@ impl<'builder> ArrayId<'builder> {
         let shape = graph[self.index].shape.reduce(axis);
         ArrayId {
             index: graph.push_node(Node::new(
+                builder.colour.get(),
                 shape,
                 Op::Reduce { reduce_op, axis },
                 &[self.index],
@@ -190,6 +206,7 @@ impl<'builder> ArrayId<'builder> {
         let shape = graph[self.index].shape.one_hot(count);
         ArrayId {
             index: graph.push_node(Node::new(
+                builder.colour.get(),
                 shape,
                 Op::PerElement(PerElementOp::OneHot),
                 &[self.index],
@@ -219,7 +236,12 @@ impl<'builder> ArrayId<'builder> {
             .shape
             .matrix_multiply(&graph[rhs.index].shape);
         ArrayId {
-            index: graph.push_node(Node::new(shape, Op::MatMul, &[self.index, rhs.index])),
+            index: graph.push_node(Node::new(
+                builder.colour.get(),
+                shape,
+                Op::MatMul,
+                &[self.index, rhs.index],
+            )),
             builder,
         }
     }
@@ -229,7 +251,12 @@ impl<'builder> ArrayId<'builder> {
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.transpose();
         ArrayId {
-            index: graph.push_node(Node::new(shape, Op::Transpose, &[self.index])),
+            index: graph.push_node(Node::new(
+                builder.colour.get(),
+                shape,
+                Op::Transpose,
+                &[self.index],
+            )),
             builder,
         }
     }
@@ -264,7 +291,14 @@ impl Graph {
     pub fn write_dot(&self, w: &mut impl io::Write) -> io::Result<()> {
         writeln!(w, "digraph G {{")?;
         for (index, node) in self.nodes.iter().enumerate() {
-            write!(w, "n{} [label=\"{:?}\\n", index, node.op)?;
+            let mut hasher = DefaultHasher::new();
+            node.colour.hash(&mut hasher);
+            let col = ((hasher.finish() >> 40) as u32) | 0x404040;
+            write!(
+                w,
+                "n{} [shape=box,style=filled,color=\"#{:06X}\",label=\"{:?}\\n",
+                index, col, node.op
+            )?;
             if let Some(s) = node.name.as_ref() {
                 write!(w, "{}", s)?;
             }
@@ -293,19 +327,21 @@ impl ops::IndexMut<NodeIndex> for Graph {
 
 pub struct GraphBuilder {
     graph: UnsafeCell<Graph>,
+    colour: Cell<usize>,
 }
 
 impl GraphBuilder {
     pub fn new() -> Self {
         Self {
             graph: UnsafeCell::new(Graph { nodes: Vec::new() }),
+            colour: Cell::new(0),
         }
     }
 
     fn literal(&self, value: f32) -> ArrayId {
         let graph = unsafe { self.graph.get().as_mut().unwrap() };
         ArrayId {
-            index: graph.push_node(Node::new([1], Op::Literal(value), &[])),
+            index: graph.push_node(Node::new(self.colour.get(), [1], Op::Literal(value), &[])),
             builder: self,
         }
     }
@@ -313,7 +349,7 @@ impl GraphBuilder {
     pub fn variable(&self, shape: impl Into<Shape>, name: impl Into<String>) -> ArrayId {
         let graph = unsafe { self.graph.get().as_mut().unwrap() };
         ArrayId {
-            index: graph.push_node(Node::new(shape, Op::Variable, &[])),
+            index: graph.push_node(Node::new(self.colour.get(), shape, Op::Variable, &[])),
             builder: self,
         }
         .with_name(name)
@@ -322,9 +358,18 @@ impl GraphBuilder {
     pub fn accumulator(&self, shape: impl Into<Shape>) -> ArrayId {
         let graph = unsafe { self.graph.get().as_mut().unwrap() };
         ArrayId {
-            index: graph.push_node(Node::new(shape, Op::PerElement(PerElementOp::Add), &[])),
+            index: graph.push_node(Node::new(
+                self.colour.get(),
+                shape,
+                Op::PerElement(PerElementOp::Add),
+                &[],
+            )),
             builder: self,
         }
+    }
+
+    pub fn next_colour(&self) {
+        self.colour.set(self.colour.get() + 1);
     }
 
     pub fn build(self) -> Graph {
