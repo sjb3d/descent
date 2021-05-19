@@ -4,7 +4,7 @@ use std::{cell::UnsafeCell, fmt, io, iter, ops};
 type AxisLen = usize;
 type ShapeVec = ArrayVec<AxisLen, 4>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shape(ShapeVec);
 
 impl Shape {
@@ -83,13 +83,13 @@ impl<const N: usize> From<[AxisLen; N]> for Shape {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReduceOp {
     Max,
     Sum,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PerElementOp {
     Add,
     Sub,
@@ -101,7 +101,7 @@ enum PerElementOp {
     OneHot,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Op {
     Variable, // TODO: reference to storage
     Literal(f32),
@@ -139,10 +139,10 @@ pub struct ArrayId<'builder> {
 }
 
 impl<'builder> ArrayId<'builder> {
-    pub fn with_name(self, name: impl AsRef<str>) -> Self {
+    pub fn with_name(self, name: impl Into<String>) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
-        graph[self.index].name = Some(name.as_ref().to_owned());
+        graph[self.index].name = Some(name.into());
         self
     }
 
@@ -233,6 +233,21 @@ impl<'builder> ArrayId<'builder> {
             builder,
         }
     }
+
+    pub fn shape(&self) -> Shape {
+        let builder = self.builder;
+        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
+        graph[self.index].shape.clone()
+    }
+
+    pub fn accumulate(&mut self, rhs: ArrayId) {
+        let builder = self.builder;
+        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
+        assert_eq!(graph[self.index].op, Op::PerElement(PerElementOp::Add));
+        assert_eq!(graph[self.index].shape, graph[rhs.index].shape);
+        let node = &mut graph[self.index];
+        node.inputs.push(rhs.index);
+    }
 }
 
 pub struct Graph {
@@ -295,13 +310,21 @@ impl GraphBuilder {
         }
     }
 
-    pub fn variable(&self, shape: impl Into<Shape>, name: impl AsRef<str>) -> ArrayId {
+    pub fn variable(&self, shape: impl Into<Shape>, name: impl Into<String>) -> ArrayId {
         let graph = unsafe { self.graph.get().as_mut().unwrap() };
         ArrayId {
             index: graph.push_node(Node::new(shape, Op::Variable, &[])),
             builder: self,
         }
         .with_name(name)
+    }
+
+    pub fn accumulator(&self, shape: impl Into<Shape>) -> ArrayId {
+        let graph = unsafe { self.graph.get().as_mut().unwrap() };
+        ArrayId {
+            index: graph.push_node(Node::new(shape, Op::PerElement(PerElementOp::Add), &[])),
+            builder: self,
+        }
     }
 
     pub fn build(self) -> Graph {

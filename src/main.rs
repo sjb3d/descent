@@ -55,7 +55,11 @@ fn main() {
     let b = g.variable([10], "b");
 
     // linear layer (no activation)
-    let z = x.matmul(w) + b;
+    let z = (x.matmul(w) + b).with_name("z");
+    let mut dz = g.accumulator(z.shape()).with_name("dz");
+    let dw = x.transpose().matmul(dz).with_name("dw");
+    let _dx = dz.matmul(w.transpose()).with_name("dx");
+    let db = dz.reduce_sum(0).with_name("db");
 
     // softmax
     let t = (z - z.reduce_max(-1)).exp();
@@ -66,11 +70,8 @@ fn main() {
     let loss = -(h * p.log()).reduce_sum(-1); // TODO: pick element of p using value of y
     let _mean_loss = (loss.reduce_sum(0) / (m as f32)).with_name("loss");
 
-    // backprop
-    let dz = (p - h) / (m as f32); // softmax with cross entropy
-    let dw = x.transpose().matmul(dz).with_name("dw");
-    let _dx = dz.matmul(w.transpose()).with_name("dx");
-    let db = dz.reduce_sum(0).with_name("db");
+    // backprop (softmax with cross entropy directly)
+    dz.accumulate((p - h) / (m as f32));
 
     // gradient descent step
     let alpha = 0.1;
