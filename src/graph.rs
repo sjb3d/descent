@@ -103,7 +103,7 @@ enum PerElementOp {
 
 #[derive(Debug, Clone, Copy)]
 enum Op {
-    None,
+    Variable, // TODO: reference to storage
     Literal(f32),
     PerElement(PerElementOp),
     MatMul,
@@ -112,46 +112,25 @@ enum Op {
 }
 
 struct Node {
-    shape: Shape,
     name: Option<String>,
+    shape: Shape,
     op: Op,
     inputs: Vec<NodeIndex>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct NodeIndex(usize);
-
-struct NodeBuilder {
-    node: Node,
-}
-
-impl NodeBuilder {
-    fn new(shape: impl Into<Shape>) -> Self {
+impl Node {
+    fn new(shape: impl Into<Shape>, op: Op, inputs: &[NodeIndex]) -> Self {
         Self {
-            node: Node {
-                shape: shape.into(),
-                name: None,
-                op: Op::None,
-                inputs: Vec::new(),
-            },
+            name: None,
+            shape: shape.into(),
+            op,
+            inputs: inputs.to_vec(),
         }
     }
-
-    fn with_name(mut self, name: String) -> Self {
-        self.node.name = Some(name);
-        self
-    }
-
-    fn with_op(mut self, op: Op, inputs: &[NodeIndex]) -> Self {
-        self.node.op = op;
-        self.node.inputs = inputs.to_vec();
-        self
-    }
-
-    fn build(self) -> Node {
-        self.node
-    }
 }
+
+#[derive(Debug, Clone, Copy)]
+struct NodeIndex(usize);
 
 #[derive(Clone, Copy)]
 pub struct ArrayId<'builder> {
@@ -160,102 +139,97 @@ pub struct ArrayId<'builder> {
 }
 
 impl<'builder> ArrayId<'builder> {
-    fn per_element_unary_op(&self, op: PerElementOp) -> Self {
+    pub fn with_name(self, name: impl AsRef<str>) -> Self {
+        let builder = self.builder;
+        let graph = unsafe { builder.graph.get().as_mut().unwrap() };
+        graph[self.index].name = Some(name.as_ref().to_owned());
+        self
+    }
+
+    fn per_element_unary_op(self, op: PerElementOp) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.clone();
         ArrayId {
-            index: graph.push_node(
-                NodeBuilder::new(shape)
-                    .with_op(Op::PerElement(op), &[self.index])
-                    .build(),
-            ),
+            index: graph.push_node(Node::new(shape, Op::PerElement(op), &[self.index])),
             builder,
         }
     }
 
-    fn per_element_binary_op(&self, rhs: ArrayId, op: PerElementOp) -> Self {
+    fn per_element_binary_op(self, rhs: ArrayId, op: PerElementOp) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.per_element(&graph[rhs.index].shape);
         ArrayId {
-            index: graph.push_node(
-                NodeBuilder::new(shape)
-                    .with_op(Op::PerElement(op), &[self.index, rhs.index])
-                    .build(),
-            ),
+            index: graph.push_node(Node::new(
+                shape,
+                Op::PerElement(op),
+                &[self.index, rhs.index],
+            )),
             builder,
         }
     }
 
-    fn reduce_op(&self, reduce_op: ReduceOp, axis: isize) -> Self {
+    fn reduce_op(self, reduce_op: ReduceOp, axis: isize) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.reduce(axis);
         ArrayId {
-            index: graph.push_node(
-                NodeBuilder::new(shape)
-                    .with_op(Op::Reduce { reduce_op, axis }, &[self.index])
-                    .build(),
-            ),
+            index: graph.push_node(Node::new(
+                shape,
+                Op::Reduce { reduce_op, axis },
+                &[self.index],
+            )),
             builder,
         }
     }
 
-    pub fn one_hot(&self, count: AxisLen) -> Self {
+    pub fn one_hot(self, count: AxisLen) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.one_hot(count);
         ArrayId {
-            index: graph.push_node(
-                NodeBuilder::new(shape)
-                    .with_op(Op::PerElement(PerElementOp::OneHot), &[self.index])
-                    .build(),
-            ),
+            index: graph.push_node(Node::new(
+                shape,
+                Op::PerElement(PerElementOp::OneHot),
+                &[self.index],
+            )),
             builder,
         }
     }
 
-    pub fn reduce_max(&self, axis: isize) -> Self {
+    pub fn reduce_max(self, axis: isize) -> Self {
         self.reduce_op(ReduceOp::Max, axis)
     }
-    pub fn reduce_sum(&self, axis: isize) -> Self {
+    pub fn reduce_sum(self, axis: isize) -> Self {
         self.reduce_op(ReduceOp::Sum, axis)
     }
 
-    pub fn exp(&self) -> Self {
+    pub fn exp(self) -> Self {
         self.per_element_unary_op(PerElementOp::Exp)
     }
-    pub fn log(&self) -> Self {
+    pub fn log(self) -> Self {
         self.per_element_unary_op(PerElementOp::Log)
     }
 
-    pub fn matmul(&self, rhs: ArrayId) -> Self {
+    pub fn matmul(self, rhs: ArrayId) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index]
             .shape
             .matrix_multiply(&graph[rhs.index].shape);
         ArrayId {
-            index: graph.push_node(
-                NodeBuilder::new(shape)
-                    .with_op(Op::MatMul, &[self.index, rhs.index])
-                    .build(),
-            ),
+            index: graph.push_node(Node::new(shape, Op::MatMul, &[self.index, rhs.index])),
             builder,
         }
     }
 
-    pub fn transpose(&self) -> Self {
+    pub fn transpose(self) -> Self {
         let builder = self.builder;
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.transpose();
         ArrayId {
-            index: graph.push_node(
-                NodeBuilder::new(shape)
-                    .with_op(Op::Transpose, &[self.index])
-                    .build(),
-            ),
+            index: graph.push_node(Node::new(shape, Op::Transpose, &[self.index])),
             builder,
         }
     }
@@ -296,6 +270,11 @@ impl ops::Index<NodeIndex> for Graph {
         self.nodes.index(index.0)
     }
 }
+impl ops::IndexMut<NodeIndex> for Graph {
+    fn index_mut(&mut self, index: NodeIndex) -> &mut Self::Output {
+        self.nodes.index_mut(index.0)
+    }
+}
 
 pub struct GraphBuilder {
     graph: UnsafeCell<Graph>,
@@ -311,20 +290,18 @@ impl GraphBuilder {
     fn literal(&self, value: f32) -> ArrayId {
         let graph = unsafe { self.graph.get().as_mut().unwrap() };
         ArrayId {
-            index: graph.push_node(
-                NodeBuilder::new([])
-                    .with_op(Op::Literal(value), &[])
-                    .build(),
-            ),
+            index: graph.push_node(Node::new([1], Op::Literal(value), &[])),
             builder: self,
         }
     }
-    pub fn variable(&self, shape: impl Into<Shape>, name: &str) -> ArrayId {
+
+    pub fn variable(&self, shape: impl Into<Shape>, name: impl AsRef<str>) -> ArrayId {
         let graph = unsafe { self.graph.get().as_mut().unwrap() };
         ArrayId {
-            index: graph.push_node(NodeBuilder::new(shape).with_name(name.to_owned()).build()),
+            index: graph.push_node(Node::new(shape, Op::Variable, &[])),
             builder: self,
         }
+        .with_name(name)
     }
 
     pub fn build(self) -> Graph {

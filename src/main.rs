@@ -64,13 +64,13 @@ fn main() {
     // cross entropy loss (mean over batch)
     let h = y.one_hot(10);
     let loss = -(h * p.log()).reduce_sum(-1); // TODO: pick element of p using value of y
-    let _mean_loss = loss.reduce_sum(0) / (m as f32);
+    let _mean_loss = (loss.reduce_sum(0) / (m as f32)).with_name("loss");
 
     // backprop
     let dz = (p - h) / (m as f32); // softmax with cross entropy
-    let dw = x.transpose().matmul(dz);
-    let _dx = dz.matmul(w.transpose());
-    let db = dz.reduce_sum(0);
+    let dw = x.transpose().matmul(dz).with_name("dw");
+    let _dx = dz.matmul(w.transpose()).with_name("dx");
+    let db = dz.reduce_sum(0).with_name("db");
 
     // gradient descent step
     let alpha = 0.1;
