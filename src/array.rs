@@ -1,6 +1,8 @@
-use crate::graph::*;
-use crate::prelude::*;
-use std::{cell::Cell, cell::UnsafeCell, ops};
+use crate::{graph::*, prelude::*};
+use std::{
+    cell::{Cell, UnsafeCell},
+    ops,
+};
 
 #[derive(Clone, Copy)]
 pub struct Array<'builder> {
@@ -21,12 +23,12 @@ impl<'builder> Array<'builder> {
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.clone();
         Array {
-            index: graph.push_node(Node::new(
+            index: graph.new_node(
                 builder.colour.get(),
                 shape,
                 Op::PerElement(op),
                 &[self.index],
-            )),
+            ),
             builder,
         }
     }
@@ -36,12 +38,12 @@ impl<'builder> Array<'builder> {
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.per_element(&graph[rhs.index].shape);
         Array {
-            index: graph.push_node(Node::new(
+            index: graph.new_node(
                 builder.colour.get(),
                 shape,
                 Op::PerElement(op),
                 &[self.index, rhs.index],
-            )),
+            ),
             builder,
         }
     }
@@ -51,12 +53,12 @@ impl<'builder> Array<'builder> {
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.reduce(axis);
         Array {
-            index: graph.push_node(Node::new(
+            index: graph.new_node(
                 builder.colour.get(),
                 shape,
                 Op::Reduce { reduce_op, axis },
                 &[self.index],
-            )),
+            ),
             builder,
         }
     }
@@ -66,12 +68,12 @@ impl<'builder> Array<'builder> {
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.one_hot(count);
         Array {
-            index: graph.push_node(Node::new(
+            index: graph.new_node(
                 builder.colour.get(),
                 shape,
                 Op::PerElement(PerElementOp::OneHot),
                 &[self.index],
-            )),
+            ),
             builder,
         }
     }
@@ -97,12 +99,12 @@ impl<'builder> Array<'builder> {
             .shape
             .matrix_multiply(&graph[rhs.index].shape);
         Array {
-            index: graph.push_node(Node::new(
+            index: graph.new_node(
                 builder.colour.get(),
                 shape,
                 Op::MatMul,
                 &[self.index, rhs.index],
-            )),
+            ),
             builder,
         }
     }
@@ -112,12 +114,7 @@ impl<'builder> Array<'builder> {
         let graph = unsafe { builder.graph.get().as_mut().unwrap() };
         let shape = graph[self.index].shape.transpose();
         Array {
-            index: graph.push_node(Node::new(
-                builder.colour.get(),
-                shape,
-                Op::Transpose,
-                &[self.index],
-            )),
+            index: graph.new_node(builder.colour.get(), shape, Op::Transpose, &[self.index]),
             builder,
         }
     }
@@ -154,7 +151,7 @@ impl GraphBuilder {
     fn literal(&self, value: f32) -> Array {
         let graph = unsafe { self.graph.get().as_mut().unwrap() };
         Array {
-            index: graph.push_node(Node::new(self.colour.get(), [1], Op::Literal(value), &[])),
+            index: graph.new_node(self.colour.get(), [1], Op::Literal(value), &[]),
             builder: self,
         }
     }
@@ -162,7 +159,7 @@ impl GraphBuilder {
     pub fn variable(&self, shape: impl Into<Shape>, name: impl Into<String>) -> Array {
         let graph = unsafe { self.graph.get().as_mut().unwrap() };
         Array {
-            index: graph.push_node(Node::new(self.colour.get(), shape, Op::Variable, &[])),
+            index: graph.new_node(self.colour.get(), shape, Op::Variable, &[]),
             builder: self,
         }
         .with_name(name)
@@ -171,7 +168,7 @@ impl GraphBuilder {
     pub fn accumulator(&self, shape: impl Into<Shape>) -> Array {
         let graph = unsafe { self.graph.get().as_mut().unwrap() };
         Array {
-            index: graph.push_node(Node::new(self.colour.get(), shape, Op::Accumulate, &[])),
+            index: graph.new_node(self.colour.get(), shape, Op::Accumulate, &[]),
             builder: self,
         }
     }
