@@ -72,7 +72,7 @@ fn main() {
     // cross entropy loss (mean over batch)
     let h = y.one_hot(10);
     let loss = -(h * p.log()).reduce_sum(-1); // TODO: pick element of p using value of y
-    let _mean_loss = (loss.reduce_sum(0) / (m as f32)).with_name("loss");
+    let mean_loss = (loss.reduce_sum(0) / (m as f32)).with_name("loss");
 
     // backprop (softmax with cross entropy directly)
     dz.accumulate((p - h) / (m as f32));
@@ -80,8 +80,8 @@ fn main() {
     // gradient descent step
     g.next_colour();
     let alpha = 0.1;
-    let _w = w - alpha * dw;
-    let _b = b - alpha * db;
+    let w = w - alpha * dw;
+    let b = b - alpha * db;
 
     // codegen steps:
     // * lower into compute graph:
@@ -90,8 +90,10 @@ fn main() {
     //   * transpose as argument modifier
     //   * literal as argument modifier
 
+    let g = g.build(&[mean_loss, w, b]);
+
     let mut f = BufWriter::new(File::create("debug.dot").unwrap());
-    g.build().write_dot(&mut f).unwrap();
+    g.write_dot(&mut f).unwrap();
 
     if env::args().len() > 1 {
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
