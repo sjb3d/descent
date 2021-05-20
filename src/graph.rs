@@ -1,10 +1,10 @@
-use crate::prelude::*;
+use crate::{prelude::*, store::*};
+use bitvec::prelude::*;
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
-    io, ops,
+    io,
 };
-use bitvec::prelude::*;
 
 /*
     Steps:
@@ -70,50 +70,57 @@ pub(crate) struct Node {
     pub(crate) inputs: Vec<Input>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct NodeIndex(pub(crate) usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NodeIndex(usize);
 
-impl ops::Index<NodeIndex> for Vec<Option<Node>> {
-    type Output = Node;
-    fn index(&self, index: NodeIndex) -> &Self::Output {
-        self.index(index.0).as_ref().unwrap()
+impl Idx for NodeIndex {
+    fn new(index: usize) -> Self {
+        Self(index)
     }
-}
-impl ops::IndexMut<NodeIndex> for Vec<Option<Node>> {
-    fn index_mut(&mut self, index: NodeIndex) -> &mut Self::Output {
-        self.index_mut(index.0).as_mut().unwrap()
+
+    fn index(self) -> usize {
+        self.0
     }
 }
 
-fn enumerate_valid_nodes(nodes: &Vec<Option<Node>>) -> impl Iterator<Item = (NodeIndex, &Node)> {
-    nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(index, node)| node.as_ref().map(|node| (NodeIndex(index), node)))
+#[derive(Default)]
+struct NodeAccel {
+    uses: Vec<NodeIndex>,
 }
 
 pub struct Graph {
-    nodes: Vec<Option<Node>>,
+    nodes: Store<NodeIndex, Node>,
     roots: Vec<NodeIndex>,
     ordering: Vec<NodeIndex>,
+    accel: Vec<NodeAccel>,
 }
 
 impl Graph {
-    pub(crate) fn new(nodes: &[Node], roots: &[NodeIndex]) -> Self {
+    pub(crate) fn new(nodes: Store<NodeIndex, Node>, roots: Vec<NodeIndex>) -> Self {
         let mut graph = Self {
-            nodes: nodes.iter().cloned().map(Some).collect(),
-            roots: roots.to_vec(),
+            nodes,
+            roots,
             ordering: Vec::new(),
+            accel: Vec::new(),
         };
         graph.rebuild_ordering();
+        graph.rebuild_accel();
+
+        graph.lower_literals_and_transpose();
         graph.eliminate_dead_code();
         graph.rebuild_ordering();
-        graph.eliminate_literals();
-        graph.rebuild_ordering();
+        graph.rebuild_accel();
+
         graph
     }
 
-    fn rebuild_ordering_visit(index: NodeIndex, nodes: &Vec<Option<Node>>, ordering: &mut Vec<NodeIndex>, visited: &mut BitVec, visiting: &mut BitVec) {
+    fn rebuild_ordering_visit(
+        index: NodeIndex,
+        nodes: &Store<NodeIndex, Node>,
+        ordering: &mut Vec<NodeIndex>,
+        visited: &mut BitVec,
+        visiting: &mut BitVec,
+    ) {
         if visited[index.0] {
             return;
         }
@@ -135,8 +142,32 @@ impl Graph {
         let mut visited = bitvec![0; self.nodes.len()];
         let mut visiting = bitvec![0; self.nodes.len()];
         self.ordering.clear();
-        for (index, _node) in enumerate_valid_nodes(&self.nodes) {
-            Self::rebuild_ordering_visit(index, &self.nodes, &mut self.ordering, &mut visited, &mut visiting);
+        for (index, _node) in self.nodes.iter() {
+            Self::rebuild_ordering_visit(
+                index,
+                &self.nodes,
+                &mut self.ordering,
+                &mut visited,
+                &mut visiting,
+            );
+        }
+    }
+
+    fn rebuild_accel(&mut self) {
+        for accel in self.accel.iter_mut() {
+            accel.uses.clear();
+        }
+        self.accel.resize_with(self.nodes.len(), Default::default);
+
+        for (output_index, node) in self.nodes.iter() {
+            for input in node.inputs.iter() {
+                if let Input::Node {
+                    index: input_index, ..
+                } = input
+                {
+                    self.accel[input_index.0].uses.push(output_index);
+                }
+            }
         }
     }
 
@@ -148,25 +179,70 @@ impl Graph {
         for index in self.ordering.iter().rev().cloned() {
             if live[index.0] {
                 for input in self.nodes[index].inputs.iter() {
-                    if let Input::Node { index, ..} = input {
+                    if let Input::Node { index, .. } = input {
                         live.get_mut(index.0).unwrap().set(true);
                     }
                 }
             }
         }
-        for (seen, node) in live.iter().zip(self.nodes.iter_mut()) {
-            if !seen && node.is_some() {
-                node.take();
+        self.nodes.retain(|index| live[index.0])
+    }
+
+    fn lower_literals_and_transpose(&mut self) {
+        for index in self.ordering.iter().rev().cloned() {
+            match self.nodes[index].op {
+                Op::Literal(value) => {
+                    for use_index in self.accel[index.0].uses.iter().cloned() {
+                        for input in self.nodes[use_index].inputs.iter_mut() {
+                            match input {
+                                Input::Node {
+                                    index: match_index, ..
+                                } => {
+                                    if *match_index == index {
+                                        *input = Input::Literal(value);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                Op::Transpose => {
+                    for use_index in self.accel[index.0].uses.iter().cloned() {
+                        assert_eq!(self.nodes[index].inputs.len(), 1);
+                        let src_index = match self.nodes[index].inputs.first().cloned().unwrap() {
+                            Input::Node { index, transpose } => {
+                                assert_eq!(transpose, false);
+                                index
+                            }
+                            _ => panic!("expected tranpose op input to be a node"),
+                        };
+                        for input in self.nodes[use_index].inputs.iter_mut() {
+                            match input {
+                                Input::Node {
+                                    index: match_index,
+                                    transpose,
+                                } => {
+                                    if *match_index == index {
+                                        *input = Input::Node {
+                                            index: src_index,
+                                            transpose: !*transpose,
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
 
-    fn eliminate_literals(&mut self) {
-    }
-
     pub fn write_dot(&self, w: &mut impl io::Write) -> io::Result<()> {
         writeln!(w, "digraph G {{")?;
-        for (index, node) in enumerate_valid_nodes(&self.nodes) {
+        for (index, node) in self.nodes.iter() {
             let mut hasher = DefaultHasher::new();
             node.colour.hash(&mut hasher);
             let col = ((hasher.finish() >> 40) as u32) | 0x404040;
@@ -180,7 +256,7 @@ impl Graph {
             }
             writeln!(w, "{}\"];", node.shape)?;
         }
-        for (output_index, output_node) in enumerate_valid_nodes(&self.nodes) {
+        for (output_index, output_node) in self.nodes.iter() {
             for input in output_node.inputs.iter() {
                 if let Input::Node {
                     index: input_index, ..

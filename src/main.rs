@@ -3,6 +3,7 @@ mod array_old;
 mod graph;
 mod prelude;
 mod shape;
+mod store;
 
 use crate::array_old::{Array as ArrayOld, Size as SizeOld};
 use crate::prelude::*;

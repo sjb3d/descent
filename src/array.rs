@@ -1,4 +1,4 @@
-use crate::{graph::*, prelude::*};
+use crate::{graph::*, prelude::*, store::*};
 use std::{cell::UnsafeCell, ops};
 
 #[derive(Clone, Copy)]
@@ -28,7 +28,9 @@ impl<'builder> Array<'builder> {
     fn per_element_binary_op(self, rhs: Array, op: PerElementOp) -> Self {
         let builder = self.builder;
         let data = unsafe { builder.data.get().as_mut().unwrap() };
-        let shape = data.nodes[self.index].shape.per_element(&data.nodes[rhs.index].shape);
+        let shape = data.nodes[self.index]
+            .shape
+            .per_element(&data.nodes[rhs.index].shape);
         Array {
             index: data.new_node(shape, Op::PerElement(op), &[self.index, rhs.index]),
             builder,
@@ -111,14 +113,13 @@ impl<'builder> Array<'builder> {
 }
 
 struct GraphBuilderData {
-    nodes: Vec<Node>,
+    nodes: Store<NodeIndex, Node>,
     colour: usize,
 }
 
 impl GraphBuilderData {
     fn new_node(&mut self, shape: impl Into<Shape>, op: Op, inputs: &[NodeIndex]) -> NodeIndex {
-        let index = self.nodes.len();
-        self.nodes.push(Node {
+        self.nodes.add(Node {
             name: None,
             colour: self.colour,
             shape: shape.into(),
@@ -130,20 +131,7 @@ impl GraphBuilderData {
                     transpose: false,
                 })
                 .collect(),
-        });
-        NodeIndex(index)
-    }
-}
-
-impl ops::Index<NodeIndex> for Vec<Node> {
-    type Output = Node;
-    fn index(&self, index: NodeIndex) -> &Self::Output {
-        self.index(index.0)
-    }
-}
-impl ops::IndexMut<NodeIndex> for Vec<Node> {
-    fn index_mut(&mut self, index: NodeIndex) -> &mut Self::Output {
-        self.index_mut(index.0)
+        })
     }
 }
 
@@ -155,7 +143,7 @@ impl GraphBuilder {
     pub fn new() -> Self {
         Self {
             data: UnsafeCell::new(GraphBuilderData {
-                nodes: Vec::new(),
+                nodes: Store::new(),
                 colour: 0,
             }),
         }
@@ -194,7 +182,7 @@ impl GraphBuilder {
     pub fn build(&self, roots: &[Array]) -> Graph {
         let data = unsafe { self.data.get().as_mut().unwrap() };
         let roots: Vec<_> = roots.iter().map(|a| a.index).collect();
-        Graph::new(&data.nodes, &roots)
+        Graph::new(data.nodes.clone(), roots)
     }
 }
 
