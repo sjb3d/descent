@@ -9,5 +9,7 @@ publish = false
 arrayvec = "0.7"
 matrixmultiply = "0.3"
 rand = "0.8"
-rand_chacha = "0.3"
 bitvec = "0.22"
+
+[dev-dependencies]
+rand_chacha = "0.3"

@@ -1,12 +1,4 @@
-mod array;
-mod array_old;
-mod graph;
-mod prelude;
-mod shape;
-mod store;
-
-use crate::array_old::{Array as ArrayOld, Size as SizeOld};
-use crate::prelude::*;
+use descent::{prelude::*, array_old::{Array as ArrayOld, Size as SizeOld}};
 use rand::SeedableRng;
 use std::{
     env,
