@@ -103,6 +103,11 @@ impl Graph {
         graph.rebuild_ordering();
         graph.rebuild_accel();
 
+        graph.eliminate_accumulate();
+        graph.eliminate_dead_code();
+        graph.rebuild_ordering();
+        graph.rebuild_accel();
+
         graph.eliminate_transpose();
         graph.eliminate_dead_code();
         graph.rebuild_ordering();
@@ -122,7 +127,7 @@ impl Graph {
             return;
         }
         if visiting[index.0] {
-            panic!("graph is acyclic");
+            panic!("graph has a cycle");
         }
         visiting.get_mut(index.0).unwrap().set(true);
         for input in nodes[index].inputs.iter() {
@@ -176,25 +181,42 @@ impl Graph {
         self.nodes.retain(|index| live[index.0])
     }
 
-    fn eliminate_transpose(&mut self) {
+    fn eliminate_accumulate(&mut self) {
         for index in self.ordering.iter().cloned() {
-            match self.nodes[index].op {
-                Op::Transpose => {
-                    for use_index in self.accel[index.0].uses.iter().cloned() {
-                        assert_eq!(self.nodes[index].inputs.len(), 1);
-                        let transpose_input = self.nodes[index].inputs.first().cloned().unwrap();
-                        for input in self.nodes[use_index].inputs.iter_mut() {
-                            if input.node_index == index {
-                                assert_eq!(input.transpose, false);
-                                *input = Input {
-                                    node_index: transpose_input.node_index,
-                                    transpose: !transpose_input.transpose,
-                                }
+            if matches!(self.nodes[index].op, Op::Accumulate) {
+                assert_eq!(self.nodes[index].inputs.len(), 1); // TODO: generate adds
+                let input = self.nodes[index].inputs.first().cloned().unwrap();
+                for use_index in self.accel[index.0].uses.iter().cloned() {
+                    for use_input in self.nodes[use_index].inputs.iter_mut() {
+                        if use_input.node_index == index {
+                            assert_eq!(use_input.transpose, false);
+                            *use_input = Input {
+                                node_index: input.node_index,
+                                transpose: input.transpose,
                             }
                         }
                     }
                 }
-                _ => {}
+            }
+        }
+    }
+
+    fn eliminate_transpose(&mut self) {
+        for index in self.ordering.iter().cloned() {
+            if matches!(self.nodes[index].op, Op::Transpose) {
+                assert_eq!(self.nodes[index].inputs.len(), 1);
+                let input = self.nodes[index].inputs.first().cloned().unwrap();
+                for use_index in self.accel[index.0].uses.iter().cloned() {
+                    for use_input in self.nodes[use_index].inputs.iter_mut() {
+                        if use_input.node_index == index {
+                            assert_eq!(use_input.transpose, false);
+                            *use_input = Input {
+                                node_index: input.node_index,
+                                transpose: !input.transpose,
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -1,4 +1,7 @@
-use descent::{prelude::*, array_old::{Array as ArrayOld, Size as SizeOld}};
+use descent::{
+    array_old::{Array as ArrayOld, Size as SizeOld},
+    prelude::*,
+};
 use rand::SeedableRng;
 use std::{
     env,
