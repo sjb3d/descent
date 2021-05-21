@@ -53,12 +53,9 @@ pub(crate) enum Op {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Input {
-    Node {
-        index: NodeIndex,
-        transpose: bool, // TODO: more general view description?
-    },
-    Literal(f32),
+pub(crate) struct Input {
+    pub(crate) node_index: NodeIndex,
+    pub(crate) transpose: bool, // TODO: more general view description?
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +103,7 @@ impl Graph {
         graph.rebuild_ordering();
         graph.rebuild_accel();
 
-        graph.lower_literals_and_transpose();
+        graph.eliminate_transpose();
         graph.eliminate_dead_code();
         graph.rebuild_ordering();
         graph.rebuild_accel();
@@ -129,9 +126,7 @@ impl Graph {
         }
         visiting.get_mut(index.0).unwrap().set(true);
         for input in nodes[index].inputs.iter() {
-            if let Input::Node { index, .. } = input {
-                Self::rebuild_ordering_visit(*index, nodes, ordering, visited, visiting);
-            }
+            Self::rebuild_ordering_visit(input.node_index, nodes, ordering, visited, visiting);
         }
         visiting.get_mut(index.0).unwrap().set(false);
         visited.get_mut(index.0).unwrap().set(true);
@@ -161,12 +156,7 @@ impl Graph {
 
         for (output_index, node) in self.nodes.iter() {
             for input in node.inputs.iter() {
-                if let Input::Node {
-                    index: input_index, ..
-                } = input
-                {
-                    self.accel[input_index.0].uses.push(output_index);
-                }
+                self.accel[input.node_index.0].uses.push(output_index);
             }
         }
     }
@@ -179,58 +169,27 @@ impl Graph {
         for index in self.ordering.iter().rev().cloned() {
             if live[index.0] {
                 for input in self.nodes[index].inputs.iter() {
-                    if let Input::Node { index, .. } = input {
-                        live.get_mut(index.0).unwrap().set(true);
-                    }
+                    live.get_mut(input.node_index.0).unwrap().set(true);
                 }
             }
         }
         self.nodes.retain(|index| live[index.0])
     }
 
-    fn lower_literals_and_transpose(&mut self) {
-        for index in self.ordering.iter().rev().cloned() {
+    fn eliminate_transpose(&mut self) {
+        for index in self.ordering.iter().cloned() {
             match self.nodes[index].op {
-                Op::Literal(value) => {
-                    for use_index in self.accel[index.0].uses.iter().cloned() {
-                        for input in self.nodes[use_index].inputs.iter_mut() {
-                            match input {
-                                Input::Node {
-                                    index: match_index, ..
-                                } => {
-                                    if *match_index == index {
-                                        *input = Input::Literal(value);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
                 Op::Transpose => {
                     for use_index in self.accel[index.0].uses.iter().cloned() {
                         assert_eq!(self.nodes[index].inputs.len(), 1);
-                        let src_index = match self.nodes[index].inputs.first().cloned().unwrap() {
-                            Input::Node { index, transpose } => {
-                                assert_eq!(transpose, false);
-                                index
-                            }
-                            _ => panic!("expected tranpose op input to be a node"),
-                        };
+                        let transpose_input = self.nodes[index].inputs.first().cloned().unwrap();
                         for input in self.nodes[use_index].inputs.iter_mut() {
-                            match input {
-                                Input::Node {
-                                    index: match_index,
-                                    transpose,
-                                } => {
-                                    if *match_index == index {
-                                        *input = Input::Node {
-                                            index: src_index,
-                                            transpose: !*transpose,
-                                        }
-                                    }
+                            if input.node_index == index {
+                                assert_eq!(input.transpose, false);
+                                *input = Input {
+                                    node_index: transpose_input.node_index,
+                                    transpose: !transpose_input.transpose,
                                 }
-                                _ => {}
                             }
                         }
                     }
@@ -258,12 +217,11 @@ impl Graph {
         }
         for (output_index, output_node) in self.nodes.iter() {
             for input in output_node.inputs.iter() {
-                if let Input::Node {
-                    index: input_index, ..
-                } = input
-                {
-                    writeln!(w, "n{} -> n{};", input_index.0, output_index.0)?;
+                write!(w, "n{} -> n{}", input.node_index.0, output_index.0)?;
+                if input.transpose {
+                    write!(w, " [label=\"T\"]")?;
                 }
+                writeln!(w, ";")?;
             }
         }
         writeln!(w, "}}")

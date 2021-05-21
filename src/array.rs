@@ -103,8 +103,8 @@ impl<'builder> Array<'builder> {
             assert_eq!(data.nodes[self.index].op, Op::Accumulate);
             assert_eq!(data.nodes[self.index].shape, data.nodes[rhs.index].shape);
             let node = &mut data.nodes[self.index];
-            node.inputs.push(Input::Node {
-                index: rhs.index,
+            node.inputs.push(Input {
+                node_index: rhs.index,
                 transpose: false,
             })
         })
@@ -125,8 +125,8 @@ impl GraphBuilderData {
             op,
             inputs: inputs
                 .iter()
-                .map(|&index| Input::Node {
-                    index,
+                .map(|&index| Input {
+                    node_index: index,
                     transpose: false,
                 })
                 .collect(),
