@@ -130,6 +130,7 @@ impl GraphBuilderData {
                     transpose: false,
                 })
                 .collect(),
+            kernel: None,
         })
     }
 }

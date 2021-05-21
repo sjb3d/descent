@@ -3,25 +3,8 @@ use bitvec::prelude::*;
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
-    io,
+    io, iter,
 };
-
-/*
-    Steps:
-
-    1. Gather nodes from the roots (DCE)
-    2. Eliminate tranpose nodes, literal nodes
-    3. Build kernels of various types
-
-    Kernel building needs to:
-    * Reduce/MatMul can just follow outputs through PerElement nodes
-    * Remaining PerElement nodes need to check for sets:
-      * Traverse nodes in reverse order
-      * All dimensions match
-      * No successor of a node is a predecessor of another node in the set
-      * Split islands into separate sets
-
-*/
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReduceOp {
@@ -65,6 +48,7 @@ pub(crate) struct Node {
     pub(crate) shape: Shape,
     pub(crate) op: Op,
     pub(crate) inputs: Vec<Input>,
+    pub(crate) kernel: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +74,7 @@ pub struct Graph {
     roots: Vec<NodeIndex>,
     ordering: Vec<NodeIndex>,
     accel: Vec<NodeAccel>,
+    kernel_count: usize,
 }
 
 impl Graph {
@@ -99,6 +84,7 @@ impl Graph {
             roots,
             ordering: Vec::new(),
             accel: Vec::new(),
+            kernel_count: 0,
         };
         graph.rebuild_ordering();
         graph.rebuild_accel();
@@ -112,6 +98,8 @@ impl Graph {
         graph.eliminate_dead_code();
         graph.rebuild_ordering();
         graph.rebuild_accel();
+
+        graph.build_kernels();
 
         graph
     }
@@ -221,21 +209,138 @@ impl Graph {
         }
     }
 
+    fn any_predecessor(&self, roots: &[NodeIndex], mut f: impl FnMut(NodeIndex) -> bool) -> bool {
+        let mut markers = bitvec![0; self.nodes.len()];
+        for root in roots.iter() {
+            markers.get_mut(root.0).unwrap().set(true);
+        }
+        for index in self.ordering.iter().cloned().rev() {
+            if self.accel[index.0]
+                .uses
+                .iter()
+                .any(|use_index| markers[use_index.0])
+            {
+                markers.get_mut(index.0).unwrap().set(true);
+                if f(index) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn any_successor(&self, roots: &[NodeIndex], mut f: impl FnMut(NodeIndex) -> bool) -> bool {
+        let mut markers = bitvec![0; self.nodes.len()];
+        for root in roots.iter() {
+            markers.get_mut(root.0).unwrap().set(true);
+        }
+        for index in self.ordering.iter().cloned() {
+            if self.nodes[index]
+                .inputs
+                .iter()
+                .any(|input| markers[input.node_index.0])
+            {
+                markers.get_mut(index.0).unwrap().set(true);
+                if f(index) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn build_kernels(&mut self) {
+        for first_index in self.ordering.iter().cloned() {
+            let first_node = &self.nodes[first_index];
+            if matches!(first_node.op, Op::PerElement(_)) && first_node.kernel.is_none() {
+                let shape = first_node.shape.clone();
+
+                let kernel = Some(self.kernel_count);
+                self.kernel_count += 1;
+                self.nodes[first_index].kernel = kernel;
+
+                'outer: loop {
+                    'inner: for other_index in self.ordering.iter().cloned() {
+                        let other_node = &self.nodes[other_index];
+
+                        // check this node has no kernel and matches shape
+                        let can_include = matches!(other_node.op, Op::PerElement(_))
+                            && other_node.kernel.is_none()
+                            && other_node.shape == shape;
+                        if !can_include {
+                            continue 'inner;
+                        }
+
+                        // check we have an edge into the kernel from here
+                        let has_kernel_input = other_node
+                            .inputs
+                            .iter()
+                            .any(|input| self.nodes[input.node_index].kernel == kernel);
+                        let has_kernel_output = self.accel[other_index.0]
+                            .uses
+                            .iter()
+                            .cloned()
+                            .any(|use_index| self.nodes[use_index].kernel == kernel);
+                        if !(has_kernel_input || has_kernel_output) {
+                            continue 'inner;
+                        }
+
+                        // check uses of this node don't re-enter this kernel
+                        if self.any_successor(&[other_index], |index| {
+                            self.nodes[index].kernel.is_none()
+                                && self.accel[index.0]
+                                    .uses
+                                    .iter()
+                                    .cloned()
+                                    .any(|use_index| self.nodes[use_index].kernel == kernel)
+                        }) {
+                            continue 'inner;
+                        }
+
+                        // check inputs of this node don't re-enter this kernel
+                        if self.any_predecessor(&[other_index], |index| {
+                            self.nodes[index].kernel.is_none()
+                                && self.nodes[index]
+                                    .inputs
+                                    .iter()
+                                    .any(|input| self.nodes[input.node_index].kernel == kernel)
+                        }) {
+                            continue 'inner;
+                        }
+
+                        // ok to merge, restart search with new kernel
+                        self.nodes[other_index].kernel = kernel;
+                        continue 'outer;
+                    }
+                    break 'outer;
+                }
+            }
+        }
+    }
+
     pub fn write_dot(&self, w: &mut impl io::Write) -> io::Result<()> {
         writeln!(w, "digraph G {{")?;
-        for (index, node) in self.nodes.iter() {
-            let mut hasher = DefaultHasher::new();
-            node.colour.hash(&mut hasher);
-            let col = ((hasher.finish() >> 40) as u32) | 0x404040;
-            write!(
-                w,
-                "n{} [shape=box,style=filled,color=\"#{:06X}\",label=\"{:?}\\n",
-                index.0, col, node.op
-            )?;
-            if let Some(s) = node.name.as_ref() {
-                write!(w, "{}", s)?;
+        for kernel in iter::once(None).chain((0..self.kernel_count).map(Some)) {
+            if let Some(index) = kernel {
+                writeln!(w, "subgraph cluster{} {{", index)?;
             }
-            writeln!(w, "{}\"];", node.shape)?;
+            for (index, node) in self.nodes.iter().filter(|(_, node)| node.kernel == kernel) {
+                let mut hasher = DefaultHasher::new();
+                node.colour.hash(&mut hasher);
+                let col = ((hasher.finish() >> 40) as u32) | 0x404040;
+                write!(
+                    w,
+                    "n{} [shape=box,style=filled,color=\"#{:06X}\",label=\"{:?}\\n",
+                    index.0, col, node.op
+                )?;
+                if let Some(s) = node.name.as_ref() {
+                    write!(w, "{}", s)?;
+                }
+                writeln!(w, "{}\"];", node.shape)?;
+            }
+            if kernel.is_some() {
+                writeln!(w, "}}")?;
+            }
         }
         for (output_index, output_node) in self.nodes.iter() {
             for input in output_node.inputs.iter() {
