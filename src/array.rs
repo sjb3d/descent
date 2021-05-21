@@ -9,52 +9,52 @@ pub struct Array<'builder> {
 
 impl<'builder> Array<'builder> {
     pub fn with_name(self, name: impl Into<String>) -> Self {
-        let builder = self.builder;
-        let data = unsafe { builder.data.get().as_mut().unwrap() };
-        data.nodes[self.index].name = Some(name.into());
+        self.builder.with_data(|data| {
+            data.nodes[self.index].name = Some(name.into());
+        });
         self
     }
 
     fn per_element_unary_op(self, op: PerElementOp) -> Self {
-        let builder = self.builder;
-        let data = unsafe { builder.data.get().as_mut().unwrap() };
-        let shape = data.nodes[self.index].shape.clone();
-        Array {
-            index: data.new_node(shape, Op::PerElement(op), &[self.index]),
-            builder,
-        }
+        self.builder.with_data(|data| {
+            let shape = data.nodes[self.index].shape.clone();
+            Array {
+                index: data.new_node(shape, Op::PerElement(op), &[self.index]),
+                builder: self.builder,
+            }
+        })
     }
 
     fn per_element_binary_op(self, rhs: Array, op: PerElementOp) -> Self {
-        let builder = self.builder;
-        let data = unsafe { builder.data.get().as_mut().unwrap() };
-        let shape = data.nodes[self.index]
-            .shape
-            .per_element(&data.nodes[rhs.index].shape);
-        Array {
-            index: data.new_node(shape, Op::PerElement(op), &[self.index, rhs.index]),
-            builder,
-        }
+        self.builder.with_data(|data| {
+            let shape = data.nodes[self.index]
+                .shape
+                .per_element(&data.nodes[rhs.index].shape);
+            Array {
+                index: data.new_node(shape, Op::PerElement(op), &[self.index, rhs.index]),
+                builder: self.builder,
+            }
+        })
     }
 
     fn reduce_op(self, reduce_op: ReduceOp, axis: isize) -> Self {
-        let builder = self.builder;
-        let data = unsafe { builder.data.get().as_mut().unwrap() };
-        let shape = data.nodes[self.index].shape.reduce(axis);
-        Array {
-            index: data.new_node(shape, Op::Reduce { reduce_op, axis }, &[self.index]),
-            builder,
-        }
+        self.builder.with_data(|data| {
+            let shape = data.nodes[self.index].shape.reduce(axis);
+            Array {
+                index: data.new_node(shape, Op::Reduce { reduce_op, axis }, &[self.index]),
+                builder: self.builder,
+            }
+        })
     }
 
     pub fn one_hot(self, count: AxisLen) -> Self {
-        let builder = self.builder;
-        let data = unsafe { builder.data.get().as_mut().unwrap() };
-        let shape = data.nodes[self.index].shape.one_hot(count);
-        Array {
-            index: data.new_node(shape, Op::PerElement(PerElementOp::OneHot), &[self.index]),
-            builder,
-        }
+        self.builder.with_data(|data| {
+            let shape = data.nodes[self.index].shape.one_hot(count);
+            Array {
+                index: data.new_node(shape, Op::PerElement(PerElementOp::OneHot), &[self.index]),
+                builder: self.builder,
+            }
+        })
     }
 
     pub fn reduce_max(self, axis: isize) -> Self {
@@ -72,43 +72,42 @@ impl<'builder> Array<'builder> {
     }
 
     pub fn matmul(self, rhs: Array) -> Self {
-        let builder = self.builder;
-        let data = unsafe { builder.data.get().as_mut().unwrap() };
-        let shape = data.nodes[self.index]
-            .shape
-            .matrix_multiply(&data.nodes[rhs.index].shape);
-        Array {
-            index: data.new_node(shape, Op::MatMul, &[self.index, rhs.index]),
-            builder,
-        }
+        self.builder.with_data(|data| {
+            let shape = data.nodes[self.index]
+                .shape
+                .matrix_multiply(&data.nodes[rhs.index].shape);
+            Array {
+                index: data.new_node(shape, Op::MatMul, &[self.index, rhs.index]),
+                builder: self.builder,
+            }
+        })
     }
 
     pub fn transpose(self) -> Self {
-        let builder = self.builder;
-        let data = unsafe { builder.data.get().as_mut().unwrap() };
-        let shape = data.nodes[self.index].shape.transpose();
-        Array {
-            index: data.new_node(shape, Op::Transpose, &[self.index]),
-            builder,
-        }
+        self.builder.with_data(|data| {
+            let shape = data.nodes[self.index].shape.transpose();
+            Array {
+                index: data.new_node(shape, Op::Transpose, &[self.index]),
+                builder: self.builder,
+            }
+        })
     }
 
     pub fn shape(&self) -> Shape {
-        let builder = self.builder;
-        let data = unsafe { builder.data.get().as_mut().unwrap() };
-        data.nodes[self.index].shape.clone()
+        self.builder
+            .with_data(|data| data.nodes[self.index].shape.clone())
     }
 
     pub fn accumulate(&mut self, rhs: Array) {
-        let builder = self.builder;
-        let data = unsafe { builder.data.get().as_mut().unwrap() };
-        assert_eq!(data.nodes[self.index].op, Op::Accumulate);
-        assert_eq!(data.nodes[self.index].shape, data.nodes[rhs.index].shape);
-        let node = &mut data.nodes[self.index];
-        node.inputs.push(Input::Node {
-            index: rhs.index,
-            transpose: false,
-        });
+        self.builder.with_data(|data| {
+            assert_eq!(data.nodes[self.index].op, Op::Accumulate);
+            assert_eq!(data.nodes[self.index].shape, data.nodes[rhs.index].shape);
+            let node = &mut data.nodes[self.index];
+            node.inputs.push(Input::Node {
+                index: rhs.index,
+                transpose: false,
+            })
+        })
     }
 }
 
@@ -149,40 +148,49 @@ impl GraphBuilder {
         }
     }
 
-    fn literal(&self, value: f32) -> Array {
+    fn with_data<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce(&mut GraphBuilderData) -> T,
+    {
         let data = unsafe { self.data.get().as_mut().unwrap() };
-        Array {
+        f(data)
+    }
+
+    fn literal(&self, value: f32) -> Array {
+        self.with_data(|data| Array {
             index: data.new_node([1], Op::Literal(value), &[]),
             builder: self,
-        }
+        })
     }
 
     pub fn variable(&self, shape: impl Into<Shape>, name: impl Into<String>) -> Array {
-        let data = unsafe { self.data.get().as_mut().unwrap() };
-        Array {
-            index: data.new_node(shape, Op::Variable, &[]),
-            builder: self,
-        }
-        .with_name(name)
+        self.with_data(|data| {
+            Array {
+                index: data.new_node(shape, Op::Variable, &[]),
+                builder: self,
+            }
+            .with_name(name)
+        })
     }
 
     pub fn accumulator(&self, shape: impl Into<Shape>) -> Array {
-        let data = unsafe { self.data.get().as_mut().unwrap() };
-        Array {
+        self.with_data(|data| Array {
             index: data.new_node(shape, Op::Accumulate, &[]),
             builder: self,
-        }
+        })
     }
 
     pub fn next_colour(&self) {
-        let data = unsafe { self.data.get().as_mut().unwrap() };
-        data.colour += 1;
+        self.with_data(|data| {
+            data.colour += 1;
+        })
     }
 
     pub fn build(&self, roots: &[Array]) -> Graph {
-        let data = unsafe { self.data.get().as_mut().unwrap() };
-        let roots: Vec<_> = roots.iter().map(|a| a.index).collect();
-        Graph::new(data.nodes.clone(), roots)
+        self.with_data(|data| {
+            let roots: Vec<_> = roots.iter().map(|a| a.index).collect();
+            Graph::new(data.nodes.clone(), roots)
+        })
     }
 }
 
