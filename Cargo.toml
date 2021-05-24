@@ -9,7 +9,7 @@ publish = false
 arrayvec = "0.7"
 matrixmultiply = "0.3"
 rand = "0.8"
-bitvec = "0.22"
+petgraph = "0.5"
 
 [dev-dependencies]
 rand_chacha = "0.3"

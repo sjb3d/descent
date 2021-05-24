@@ -1,5 +1,8 @@
-use crate::{prelude::*, store::*};
-use bitvec::prelude::*;
+use crate::prelude::*;
+use petgraph::{
+    prelude::*,
+    visit::{IntoEdgeReferences, IntoNodeReferences, NodeRef, VisitMap, Visitable},
+};
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
@@ -36,192 +39,153 @@ pub(crate) enum Op {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Input {
-    pub(crate) node_index: NodeIndex,
-    pub(crate) transpose: bool, // TODO: more general view description?
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct Node {
     pub(crate) name: Option<String>,
     pub(crate) colour: usize,
     pub(crate) shape: Shape,
     pub(crate) op: Op,
-    pub(crate) inputs: Vec<Input>,
     pub(crate) kernel: Option<usize>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct NodeIndex(usize);
+#[derive(Debug, Clone)]
+pub(crate) struct ArrayEdge {
+    pub(crate) arg: usize,
+    pub(crate) transpose: bool,
+}
 
-impl Idx for NodeIndex {
-    fn new(index: usize) -> Self {
-        Self(index)
+impl ArrayEdge {
+    pub(crate) fn chain(&self, rhs: &ArrayEdge) -> Self {
+        Self {
+            arg: rhs.arg,
+            transpose: self.transpose ^ rhs.transpose,
+        }
     }
 
-    fn index(self) -> usize {
-        self.0
+    pub(crate) fn transposed(&self) -> Self {
+        Self {
+            transpose: !self.transpose,
+            ..*self
+        }
     }
 }
 
-#[derive(Default)]
-struct NodeAccel {
-    uses: Vec<NodeIndex>,
-}
-
-pub struct Graph {
-    nodes: Store<NodeIndex, Node>,
-    roots: Vec<NodeIndex>,
-    ordering: Vec<NodeIndex>,
-    accel: Vec<NodeAccel>,
+pub struct Schedule {
+    graph: StableDiGraph<Node, ArrayEdge, ArrayIndex>,
+    roots: Vec<ArrayNodeIndex>,
+    ordering: Vec<ArrayNodeIndex>,
     kernel_count: usize,
 }
 
-impl Graph {
-    pub(crate) fn new(nodes: Store<NodeIndex, Node>, roots: Vec<NodeIndex>) -> Self {
+impl Schedule {
+    pub(crate) fn new(
+        graph: StableDiGraph<Node, ArrayEdge, ArrayIndex>,
+        roots: Vec<ArrayNodeIndex>,
+    ) -> Self {
         let mut graph = Self {
-            nodes,
+            graph,
             roots,
             ordering: Vec::new(),
-            accel: Vec::new(),
             kernel_count: 0,
         };
-        graph.rebuild_ordering();
-        graph.rebuild_accel();
 
+        graph.rebuild_ordering();
+        graph.eliminate_dead_code();
+
+        graph.rebuild_ordering();
         graph.eliminate_accumulate();
-        graph.eliminate_dead_code();
-        graph.rebuild_ordering();
-        graph.rebuild_accel();
 
+        graph.rebuild_ordering();
         graph.eliminate_transpose();
-        graph.eliminate_dead_code();
-        graph.rebuild_ordering();
-        graph.rebuild_accel();
 
+        graph.rebuild_ordering();
         graph.build_kernels();
 
         graph
     }
 
-    fn rebuild_ordering_visit(
-        index: NodeIndex,
-        nodes: &Store<NodeIndex, Node>,
-        ordering: &mut Vec<NodeIndex>,
-        visited: &mut BitVec,
-        visiting: &mut BitVec,
-    ) {
-        if visited[index.0] {
-            return;
-        }
-        if visiting[index.0] {
-            panic!("graph has a cycle");
-        }
-        visiting.get_mut(index.0).unwrap().set(true);
-        for input in nodes[index].inputs.iter() {
-            Self::rebuild_ordering_visit(input.node_index, nodes, ordering, visited, visiting);
-        }
-        visiting.get_mut(index.0).unwrap().set(false);
-        visited.get_mut(index.0).unwrap().set(true);
-        ordering.push(index);
-    }
-
     fn rebuild_ordering(&mut self) {
-        let mut visited = bitvec![0; self.nodes.len()];
-        let mut visiting = bitvec![0; self.nodes.len()];
         self.ordering.clear();
-        for (index, _node) in self.nodes.iter() {
-            Self::rebuild_ordering_visit(
-                index,
-                &self.nodes,
-                &mut self.ordering,
-                &mut visited,
-                &mut visiting,
-            );
-        }
-    }
-
-    fn rebuild_accel(&mut self) {
-        for accel in self.accel.iter_mut() {
-            accel.uses.clear();
-        }
-        self.accel.resize_with(self.nodes.len(), Default::default);
-
-        for (output_index, node) in self.nodes.iter() {
-            for input in node.inputs.iter() {
-                self.accel[input.node_index.0].uses.push(output_index);
-            }
+        let mut topo = petgraph::visit::Topo::new(&self.graph);
+        while let Some(node_index) = topo.next(&self.graph) {
+            self.ordering.push(node_index);
         }
     }
 
     fn eliminate_dead_code(&mut self) {
-        let mut live = bitvec![0; self.nodes.len()];
+        let mut live = self.graph.visit_map();
         for index in self.roots.iter().cloned() {
-            live.get_mut(index.0).unwrap().set(true);
+            live.visit(index);
         }
         for index in self.ordering.iter().rev().cloned() {
-            if live[index.0] {
-                for input in self.nodes[index].inputs.iter() {
-                    live.get_mut(input.node_index.0).unwrap().set(true);
+            if live.is_visited(&index) {
+                for input_index in self.graph.neighbors_directed(index, Incoming) {
+                    live.visit(input_index);
                 }
             }
         }
-        self.nodes.retain(|index| live[index.0])
+        self.graph.retain_nodes(|_, index| live.is_visited(&index));
     }
 
     fn eliminate_accumulate(&mut self) {
-        for index in self.ordering.iter().cloned() {
-            if matches!(self.nodes[index].op, Op::Accumulate) {
-                assert_eq!(self.nodes[index].inputs.len(), 1); // TODO: generate adds
-                let input = self.nodes[index].inputs.first().cloned().unwrap();
-                for use_index in self.accel[index.0].uses.iter().cloned() {
-                    for use_input in self.nodes[use_index].inputs.iter_mut() {
-                        if use_input.node_index == index {
-                            assert_eq!(use_input.transpose, false);
-                            *use_input = Input {
-                                node_index: input.node_index,
-                                transpose: input.transpose,
-                            }
-                        }
-                    }
+        for node_index in self.ordering.iter().cloned() {
+            if matches!(self.graph[node_index].op, Op::Accumulate) {
+                assert_eq!(self.graph.edges_directed(node_index, Incoming).count(), 1); // TODO: generate adds
+                let mut in_edges = self.graph.neighbors_directed(node_index, Incoming).detach();
+                let (in_edge_index, in_node_index) = in_edges.next(&self.graph).unwrap();
+                let mut out_edges = self.graph.neighbors_directed(node_index, Outgoing).detach();
+                while let Some((out_edge_index, out_node_index)) = out_edges.next(&self.graph) {
+                    self.graph.add_edge(
+                        in_node_index,
+                        out_node_index,
+                        self.graph[in_edge_index].chain(&self.graph[out_edge_index]),
+                    );
                 }
+                self.graph.remove_node(node_index);
             }
         }
     }
 
     fn eliminate_transpose(&mut self) {
-        for index in self.ordering.iter().cloned() {
-            if matches!(self.nodes[index].op, Op::Transpose) {
-                assert_eq!(self.nodes[index].inputs.len(), 1);
-                let input = self.nodes[index].inputs.first().cloned().unwrap();
-                for use_index in self.accel[index.0].uses.iter().cloned() {
-                    for use_input in self.nodes[use_index].inputs.iter_mut() {
-                        if use_input.node_index == index {
-                            assert_eq!(use_input.transpose, false);
-                            *use_input = Input {
-                                node_index: input.node_index,
-                                transpose: !input.transpose,
-                            }
-                        }
-                    }
+        for node_index in self.ordering.iter().cloned() {
+            if matches!(self.graph[node_index].op, Op::Transpose) {
+                assert_eq!(
+                    self.graph.neighbors_directed(node_index, Incoming).count(),
+                    1
+                );
+                let mut in_edges = self.graph.neighbors_directed(node_index, Incoming).detach();
+                let (in_edge_index, in_node_index) = in_edges.next(&self.graph).unwrap();
+                let mut out_edges = self.graph.neighbors_directed(node_index, Outgoing).detach();
+                while let Some((out_edge_index, out_node_index)) = out_edges.next(&self.graph) {
+                    self.graph.add_edge(
+                        in_node_index,
+                        out_node_index,
+                        self.graph[in_edge_index]
+                            .chain(&self.graph[out_edge_index])
+                            .transposed(),
+                    );
                 }
+                self.graph.remove_node(node_index);
             }
         }
     }
 
-    fn any_predecessor(&self, roots: &[NodeIndex], mut f: impl FnMut(NodeIndex) -> bool) -> bool {
-        let mut markers = bitvec![0; self.nodes.len()];
-        for root in roots.iter() {
-            markers.get_mut(root.0).unwrap().set(true);
+    fn any_predecessor(
+        &self,
+        roots: &[ArrayNodeIndex],
+        mut f: impl FnMut(ArrayNodeIndex) -> bool,
+    ) -> bool {
+        let mut markers = self.graph.visit_map();
+        for &node_index in roots {
+            markers.visit(node_index);
         }
-        for index in self.ordering.iter().cloned().rev() {
-            if self.accel[index.0]
-                .uses
-                .iter()
-                .any(|use_index| markers[use_index.0])
+        for node_index in self.ordering.iter().cloned().rev() {
+            if self
+                .graph
+                .neighbors_directed(node_index, Outgoing)
+                .any(|output_node_index| markers.is_visited(&output_node_index))
             {
-                markers.get_mut(index.0).unwrap().set(true);
-                if f(index) {
+                markers.visit(node_index);
+                if f(node_index) {
                     return true;
                 }
             }
@@ -229,19 +193,23 @@ impl Graph {
         return false;
     }
 
-    fn any_successor(&self, roots: &[NodeIndex], mut f: impl FnMut(NodeIndex) -> bool) -> bool {
-        let mut markers = bitvec![0; self.nodes.len()];
-        for root in roots.iter() {
-            markers.get_mut(root.0).unwrap().set(true);
+    fn any_successor(
+        &self,
+        roots: &[ArrayNodeIndex],
+        mut f: impl FnMut(ArrayNodeIndex) -> bool,
+    ) -> bool {
+        let mut markers = self.graph.visit_map();
+        for &node_index in roots {
+            markers.visit(node_index);
         }
-        for index in self.ordering.iter().cloned() {
-            if self.nodes[index]
-                .inputs
-                .iter()
-                .any(|input| markers[input.node_index.0])
+        for node_index in self.ordering.iter().cloned().rev() {
+            if self
+                .graph
+                .neighbors_directed(node_index, Incoming)
+                .any(|input_node_index| markers.is_visited(&input_node_index))
             {
-                markers.get_mut(index.0).unwrap().set(true);
-                if f(index) {
+                markers.visit(node_index);
+                if f(node_index) {
                     return true;
                 }
             }
@@ -250,18 +218,18 @@ impl Graph {
     }
 
     fn build_kernels(&mut self) {
-        for first_index in self.ordering.iter().cloned() {
-            let first_node = &self.nodes[first_index];
+        for first_node_index in self.ordering.iter().cloned() {
+            let first_node = &self.graph[first_node_index];
             if matches!(first_node.op, Op::PerElement(_)) && first_node.kernel.is_none() {
                 let shape = first_node.shape.clone();
 
                 let kernel = Some(self.kernel_count);
                 self.kernel_count += 1;
-                self.nodes[first_index].kernel = kernel;
+                self.graph[first_node_index].kernel = kernel;
 
                 'outer: loop {
-                    'inner: for other_index in self.ordering.iter().cloned() {
-                        let other_node = &self.nodes[other_index];
+                    'inner: for other_node_index in self.ordering.iter().cloned() {
+                        let other_node = &self.graph[other_node_index];
 
                         // check this node has no kernel and matches shape
                         let can_include = matches!(other_node.op, Op::PerElement(_))
@@ -272,44 +240,40 @@ impl Graph {
                         }
 
                         // check we have an edge into the kernel from here
-                        let has_kernel_input = other_node
-                            .inputs
-                            .iter()
-                            .any(|input| self.nodes[input.node_index].kernel == kernel);
-                        let has_kernel_output = self.accel[other_index.0]
-                            .uses
-                            .iter()
-                            .cloned()
-                            .any(|use_index| self.nodes[use_index].kernel == kernel);
-                        if !(has_kernel_input || has_kernel_output) {
+                        let has_kernel_neighbor = self
+                            .graph
+                            .neighbors_undirected(other_node_index)
+                            .any(|neighbor_node_index| {
+                                self.graph[neighbor_node_index].kernel == kernel
+                            });
+                        if !has_kernel_neighbor {
                             continue 'inner;
                         }
 
                         // check uses of this node don't re-enter this kernel
-                        if self.any_successor(&[other_index], |index| {
-                            self.nodes[index].kernel.is_none()
-                                && self.accel[index.0]
-                                    .uses
-                                    .iter()
-                                    .cloned()
-                                    .any(|use_index| self.nodes[use_index].kernel == kernel)
+                        if self.any_successor(&[other_node_index], |node_index| {
+                            self.graph[node_index].kernel.is_none()
+                                && self
+                                    .graph
+                                    .neighbors_directed(node_index, Outgoing)
+                                    .any(|node_index| self.graph[node_index].kernel == kernel)
                         }) {
                             continue 'inner;
                         }
 
                         // check inputs of this node don't re-enter this kernel
-                        if self.any_predecessor(&[other_index], |index| {
-                            self.nodes[index].kernel.is_none()
-                                && self.nodes[index]
-                                    .inputs
-                                    .iter()
-                                    .any(|input| self.nodes[input.node_index].kernel == kernel)
+                        if self.any_predecessor(&[other_node_index], |node_index| {
+                            self.graph[node_index].kernel.is_none()
+                                && self
+                                    .graph
+                                    .neighbors_directed(node_index, Incoming)
+                                    .any(|node_index| self.graph[node_index].kernel == kernel)
                         }) {
                             continue 'inner;
                         }
 
                         // ok to merge, restart search with new kernel
-                        self.nodes[other_index].kernel = kernel;
+                        self.graph[other_node_index].kernel = kernel;
                         continue 'outer;
                     }
                     break 'outer;
@@ -322,16 +286,23 @@ impl Graph {
         writeln!(w, "digraph G {{")?;
         for kernel in iter::once(None).chain((0..self.kernel_count).map(Some)) {
             if let Some(index) = kernel {
-                writeln!(w, "subgraph cluster{} {{", index)?;
+                writeln!(w, "subgraph cluster{} {{ style=filled;", index)?;
             }
-            for (index, node) in self.nodes.iter().filter(|(_, node)| node.kernel == kernel) {
+            for node_ref in self
+                .graph
+                .node_references()
+                .filter(|node_ref| node_ref.weight().kernel == kernel)
+            {
+                let node = node_ref.weight();
                 let mut hasher = DefaultHasher::new();
                 node.colour.hash(&mut hasher);
                 let col = ((hasher.finish() >> 40) as u32) | 0x404040;
                 write!(
                     w,
                     "n{} [shape=box,style=filled,color=\"#{:06X}\",label=\"{:?}\\n",
-                    index.0, col, node.op
+                    node_ref.id().index(),
+                    col,
+                    node.op
                 )?;
                 if let Some(s) = node.name.as_ref() {
                     write!(w, "{}", s)?;
@@ -342,14 +313,17 @@ impl Graph {
                 writeln!(w, "}}")?;
             }
         }
-        for (output_index, output_node) in self.nodes.iter() {
-            for input in output_node.inputs.iter() {
-                write!(w, "n{} -> n{}", input.node_index.0, output_index.0)?;
-                if input.transpose {
-                    write!(w, " [label=\"T\"]")?;
-                }
-                writeln!(w, ";")?;
+        for edge_ref in self.graph.edge_references() {
+            write!(
+                w,
+                "n{} -> n{}",
+                edge_ref.source().index(),
+                edge_ref.target().index()
+            )?;
+            if edge_ref.weight().transpose {
+                write!(w, " [label=\"T\"]")?;
             }
+            writeln!(w, ";")?;
         }
         writeln!(w, "}}")
     }

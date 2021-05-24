@@ -1,23 +1,44 @@
-use crate::{graph::*, prelude::*, store::*};
+use crate::{graph::*, prelude::*};
+use petgraph::prelude::*;
 use std::{cell::UnsafeCell, ops};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ArrayIndex(usize);
+
+unsafe impl petgraph::graph::IndexType for ArrayIndex {
+    fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    fn index(&self) -> usize {
+        self.0
+    }
+
+    fn max() -> Self {
+        Self(usize::MAX)
+    }
+}
+
+pub(crate) type ArrayNodeIndex = NodeIndex<ArrayIndex>;
+//pub(crate) type ArrayEdgeIndex = EdgeIndex<ArrayIndex>;
 
 #[derive(Clone, Copy)]
 pub struct Array<'builder> {
-    index: NodeIndex,
+    index: ArrayNodeIndex,
     builder: &'builder GraphBuilder,
 }
 
 impl<'builder> Array<'builder> {
     pub fn with_name(self, name: impl Into<String>) -> Self {
         self.builder.with_data(|data| {
-            data.nodes[self.index].name = Some(name.into());
+            data.graph[self.index].name = Some(name.into());
         });
         self
     }
 
     fn per_element_unary_op(self, op: PerElementOp) -> Self {
         self.builder.with_data(|data| {
-            let shape = data.nodes[self.index].shape.clone();
+            let shape = data.graph[self.index].shape.clone();
             Array {
                 index: data.new_node(shape, Op::PerElement(op), &[self.index]),
                 builder: self.builder,
@@ -27,9 +48,9 @@ impl<'builder> Array<'builder> {
 
     fn per_element_binary_op(self, rhs: Array, op: PerElementOp) -> Self {
         self.builder.with_data(|data| {
-            let shape = data.nodes[self.index]
+            let shape = data.graph[self.index]
                 .shape
-                .per_element(&data.nodes[rhs.index].shape);
+                .per_element(&data.graph[rhs.index].shape);
             Array {
                 index: data.new_node(shape, Op::PerElement(op), &[self.index, rhs.index]),
                 builder: self.builder,
@@ -39,7 +60,7 @@ impl<'builder> Array<'builder> {
 
     fn reduce_op(self, reduce_op: ReduceOp, axis: isize) -> Self {
         self.builder.with_data(|data| {
-            let shape = data.nodes[self.index].shape.reduce(axis);
+            let shape = data.graph[self.index].shape.reduce(axis);
             Array {
                 index: data.new_node(shape, Op::Reduce { reduce_op, axis }, &[self.index]),
                 builder: self.builder,
@@ -49,7 +70,7 @@ impl<'builder> Array<'builder> {
 
     pub fn one_hot(self, count: AxisLen) -> Self {
         self.builder.with_data(|data| {
-            let shape = data.nodes[self.index].shape.one_hot(count);
+            let shape = data.graph[self.index].shape.one_hot(count);
             Array {
                 index: data.new_node(shape, Op::PerElement(PerElementOp::OneHot), &[self.index]),
                 builder: self.builder,
@@ -73,9 +94,9 @@ impl<'builder> Array<'builder> {
 
     pub fn matmul(self, rhs: Array) -> Self {
         self.builder.with_data(|data| {
-            let shape = data.nodes[self.index]
+            let shape = data.graph[self.index]
                 .shape
-                .matrix_multiply(&data.nodes[rhs.index].shape);
+                .matrix_multiply(&data.graph[rhs.index].shape);
             Array {
                 index: data.new_node(shape, Op::MatMul, &[self.index, rhs.index]),
                 builder: self.builder,
@@ -85,7 +106,7 @@ impl<'builder> Array<'builder> {
 
     pub fn transpose(self) -> Self {
         self.builder.with_data(|data| {
-            let shape = data.nodes[self.index].shape.transpose();
+            let shape = data.graph[self.index].shape.transpose();
             Array {
                 index: data.new_node(shape, Op::Transpose, &[self.index]),
                 builder: self.builder,
@@ -95,43 +116,55 @@ impl<'builder> Array<'builder> {
 
     pub fn shape(&self) -> Shape {
         self.builder
-            .with_data(|data| data.nodes[self.index].shape.clone())
+            .with_data(|data| data.graph[self.index].shape.clone())
     }
 
     pub fn accumulate(&mut self, rhs: Array) {
         self.builder.with_data(|data| {
-            assert_eq!(data.nodes[self.index].op, Op::Accumulate);
-            assert_eq!(data.nodes[self.index].shape, data.nodes[rhs.index].shape);
-            let node = &mut data.nodes[self.index];
-            node.inputs.push(Input {
-                node_index: rhs.index,
-                transpose: false,
-            })
+            assert_eq!(data.graph[self.index].op, Op::Accumulate);
+            assert_eq!(data.graph[self.index].shape, data.graph[rhs.index].shape);
+            data.graph.add_edge(
+                rhs.index,
+                self.index,
+                ArrayEdge {
+                    arg: 0,
+                    transpose: false,
+                },
+            );
         })
     }
 }
 
 struct GraphBuilderData {
-    nodes: Store<NodeIndex, Node>,
+    graph: StableDiGraph<Node, ArrayEdge, ArrayIndex>,
     colour: usize,
 }
 
 impl GraphBuilderData {
-    fn new_node(&mut self, shape: impl Into<Shape>, op: Op, inputs: &[NodeIndex]) -> NodeIndex {
-        self.nodes.add(Node {
+    fn new_node(
+        &mut self,
+        shape: impl Into<Shape>,
+        op: Op,
+        inputs: &[ArrayNodeIndex],
+    ) -> ArrayNodeIndex {
+        let node_index = self.graph.add_node(Node {
             name: None,
             colour: self.colour,
             shape: shape.into(),
             op,
-            inputs: inputs
-                .iter()
-                .map(|&index| Input {
-                    node_index: index,
-                    transpose: false,
-                })
-                .collect(),
             kernel: None,
-        })
+        });
+        for (index, input) in inputs.iter().cloned().enumerate() {
+            self.graph.add_edge(
+                input,
+                node_index,
+                ArrayEdge {
+                    arg: index,
+                    transpose: false,
+                },
+            );
+        }
+        node_index
     }
 }
 
@@ -143,7 +176,7 @@ impl GraphBuilder {
     pub fn new() -> Self {
         Self {
             data: UnsafeCell::new(GraphBuilderData {
-                nodes: Store::new(),
+                graph: Default::default(),
                 colour: 0,
             }),
         }
@@ -187,10 +220,10 @@ impl GraphBuilder {
         })
     }
 
-    pub fn build(&self, roots: &[Array]) -> Graph {
+    pub fn build(&self, roots: &[Array]) -> Schedule {
         self.with_data(|data| {
             let roots: Vec<_> = roots.iter().map(|a| a.index).collect();
-            Graph::new(data.nodes.clone(), roots)
+            Schedule::new(data.graph.clone(), roots)
         })
     }
 }
