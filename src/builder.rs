@@ -1,30 +1,9 @@
-use crate::{graph::*, prelude::*};
-use petgraph::prelude::*;
+use crate::{schedule::*, prelude::*};
 use std::{cell::UnsafeCell, ops};
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ArrayIndex(usize);
-
-unsafe impl petgraph::graph::IndexType for ArrayIndex {
-    fn new(index: usize) -> Self {
-        Self(index)
-    }
-
-    fn index(&self) -> usize {
-        self.0
-    }
-
-    fn max() -> Self {
-        Self(usize::MAX)
-    }
-}
-
-pub(crate) type ArrayNodeIndex = NodeIndex<ArrayIndex>;
-//pub(crate) type ArrayEdgeIndex = EdgeIndex<ArrayIndex>;
 
 #[derive(Clone, Copy)]
 pub struct Array<'builder> {
-    index: ArrayNodeIndex,
+    index: NodeIndex,
     builder: &'builder GraphBuilder,
 }
 
@@ -126,7 +105,7 @@ impl<'builder> Array<'builder> {
             data.graph.add_edge(
                 rhs.index,
                 self.index,
-                ArrayEdge {
+                Edge {
                     arg: 0,
                     transpose: false,
                 },
@@ -136,7 +115,7 @@ impl<'builder> Array<'builder> {
 }
 
 struct GraphBuilderData {
-    graph: StableDiGraph<Node, ArrayEdge, ArrayIndex>,
+    graph: Graph,
     colour: usize,
 }
 
@@ -145,8 +124,8 @@ impl GraphBuilderData {
         &mut self,
         shape: impl Into<Shape>,
         op: Op,
-        inputs: &[ArrayNodeIndex],
-    ) -> ArrayNodeIndex {
+        inputs: &[NodeIndex],
+    ) -> NodeIndex {
         let node_index = self.graph.add_node(Node {
             name: None,
             colour: self.colour,
@@ -158,7 +137,7 @@ impl GraphBuilderData {
             self.graph.add_edge(
                 input,
                 node_index,
-                ArrayEdge {
+                Edge {
                     arg: index,
                     transpose: false,
                 },

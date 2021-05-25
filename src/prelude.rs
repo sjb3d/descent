@@ -1,2 +1,2 @@
-pub use crate::array::*;
+pub use crate::builder::*;
 pub use crate::shape::*;

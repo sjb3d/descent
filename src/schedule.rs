@@ -1,6 +1,6 @@
 use crate::prelude::*;
 use petgraph::{
-    prelude::*,
+    prelude::{*, NodeIndex as NodeIndexBase},
     visit::{IntoEdgeReferences, IntoNodeReferences, NodeRef, VisitMap, Visitable},
 };
 use std::{
@@ -8,6 +8,9 @@ use std::{
     hash::{Hash, Hasher},
     io, iter,
 };
+
+pub(crate) type Graph = StableDiGraph<Node, Edge, usize>;
+pub(crate) type NodeIndex = NodeIndexBase<usize>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReduceOp {
@@ -48,13 +51,13 @@ pub(crate) struct Node {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ArrayEdge {
+pub(crate) struct Edge {
     pub(crate) arg: usize,
     pub(crate) transpose: bool,
 }
 
-impl ArrayEdge {
-    pub(crate) fn chain(&self, rhs: &ArrayEdge) -> Self {
+impl Edge {
+    pub(crate) fn chain(&self, rhs: &Edge) -> Self {
         Self {
             arg: rhs.arg,
             transpose: self.transpose ^ rhs.transpose,
@@ -70,16 +73,16 @@ impl ArrayEdge {
 }
 
 pub struct Schedule {
-    graph: StableDiGraph<Node, ArrayEdge, ArrayIndex>,
-    roots: Vec<ArrayNodeIndex>,
-    ordering: Vec<ArrayNodeIndex>,
+    graph: Graph,
+    roots: Vec<NodeIndex>,
+    ordering: Vec<NodeIndex>,
     kernel_count: usize,
 }
 
 impl Schedule {
     pub(crate) fn new(
-        graph: StableDiGraph<Node, ArrayEdge, ArrayIndex>,
-        roots: Vec<ArrayNodeIndex>,
+        graph: Graph,
+        roots: Vec<NodeIndex>,
     ) -> Self {
         let mut graph = Self {
             graph,
@@ -171,8 +174,8 @@ impl Schedule {
 
     fn any_predecessor(
         &self,
-        roots: &[ArrayNodeIndex],
-        mut f: impl FnMut(ArrayNodeIndex) -> bool,
+        roots: &[NodeIndex],
+        mut f: impl FnMut(NodeIndex) -> bool,
     ) -> bool {
         let mut markers = self.graph.visit_map();
         for &node_index in roots {
@@ -195,8 +198,8 @@ impl Schedule {
 
     fn any_successor(
         &self,
-        roots: &[ArrayNodeIndex],
-        mut f: impl FnMut(ArrayNodeIndex) -> bool,
+        roots: &[NodeIndex],
+        mut f: impl FnMut(NodeIndex) -> bool,
     ) -> bool {
         let mut markers = self.graph.visit_map();
         for &node_index in roots {
