@@ -1,5 +1,5 @@
 use descent::{
-    array_old::{Array as ArrayOld, Size as SizeOld},
+    array::{Array as ArrayOld, Size as SizeOld},
     prelude::*,
 };
 use rand::SeedableRng;
