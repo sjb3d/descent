@@ -1,4 +1,4 @@
-use crate::{schedule::*, prelude::*};
+use crate::{prelude::*, schedule::*};
 use std::{cell::UnsafeCell, ops};
 
 #[derive(Clone, Copy)]
@@ -120,12 +120,7 @@ struct GraphBuilderData {
 }
 
 impl GraphBuilderData {
-    fn new_node(
-        &mut self,
-        shape: impl Into<Shape>,
-        op: Op,
-        inputs: &[NodeIndex],
-    ) -> NodeIndex {
+    fn new_node(&mut self, shape: impl Into<Shape>, op: Op, inputs: &[NodeIndex]) -> NodeIndex {
         let node_index = self.graph.add_node(Node {
             name: None,
             colour: self.colour,

@@ -27,6 +27,7 @@ dependencies = [
  "petgraph",
  "rand",
  "rand_chacha",
+ "spark",
 ]
 
 [[package]]
@@ -61,6 +62,12 @@ dependencies = [
  "autocfg",
  "hashbrown",
 ]
+
+[[package]]
+name = "lazy_static"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
@@ -138,6 +145,25 @@ name = "rawpointer"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
+
+[[package]]
+name = "shared_library"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a9e7e0f2bfae24d8a5b5a66c5b257a83c7412304311512a0c054cd5e619da11"
+dependencies = [
+ "lazy_static",
+ "libc",
+]
+
+[[package]]
+name = "spark"
+version = "0.1.0"
+source = "git+https://github.com/sjb3d/spark/#b0ba1af853becd302571f6deefc3e5f2738efd7e"
+dependencies = [
+ "lazy_static",
+ "shared_library",
+]
 
 [[package]]
 name = "wasi"

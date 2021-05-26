@@ -1,6 +1,6 @@
 use crate::prelude::*;
 use petgraph::{
-    prelude::{*, NodeIndex as NodeIndexBase},
+    prelude::{NodeIndex as NodeIndexBase, *},
     visit::{IntoEdgeReferences, IntoNodeReferences, NodeRef, VisitMap, Visitable},
 };
 use std::{
@@ -80,10 +80,7 @@ pub struct Schedule {
 }
 
 impl Schedule {
-    pub(crate) fn new(
-        graph: Graph,
-        roots: Vec<NodeIndex>,
-    ) -> Self {
+    pub(crate) fn new(graph: Graph, roots: Vec<NodeIndex>) -> Self {
         let mut graph = Self {
             graph,
             roots,
@@ -172,11 +169,7 @@ impl Schedule {
         }
     }
 
-    fn any_predecessor(
-        &self,
-        roots: &[NodeIndex],
-        mut f: impl FnMut(NodeIndex) -> bool,
-    ) -> bool {
+    fn any_predecessor(&self, roots: &[NodeIndex], mut f: impl FnMut(NodeIndex) -> bool) -> bool {
         let mut markers = self.graph.visit_map();
         for &node_index in roots {
             markers.visit(node_index);
@@ -196,11 +189,7 @@ impl Schedule {
         return false;
     }
 
-    fn any_successor(
-        &self,
-        roots: &[NodeIndex],
-        mut f: impl FnMut(NodeIndex) -> bool,
-    ) -> bool {
+    fn any_successor(&self, roots: &[NodeIndex], mut f: impl FnMut(NodeIndex) -> bool) -> bool {
         let mut markers = self.graph.visit_map();
         for &node_index in roots {
             markers.visit(node_index);

@@ -8,6 +8,7 @@ use std::{
     fs::File,
     io::{BufReader, BufWriter, Read},
     path::Path,
+    sync::Arc,
 };
 
 fn read_be_u32(reader: &mut impl Read) -> u32 {
@@ -44,6 +45,8 @@ fn load_labels(path: impl AsRef<Path>) -> ArrayOld {
 }
 
 fn main() {
+    let _ctx = Arc::new(Context::new());
+
     let g = GraphBuilder::new();
 
     let m = 1000;
@@ -79,17 +82,11 @@ fn main() {
     let w = w - alpha * dw;
     let b = b - alpha * db;
 
-    // codegen steps:
-    // * lower into compute graph:
-    //   * subgraphs for per-element ops (with multiple outputs)
-    //   * merge single-input per-element ops onto previous pass?
-    //   * transpose as argument modifier
-    //   * literal as argument modifier
-
-    let g = g.build(&[mean_loss, w, b]);
+    // make a schedule to compute the outputs
+    let schedule = g.build(&[mean_loss, w, b]);
 
     let mut f = BufWriter::new(File::create("debug.dot").unwrap());
-    g.write_dot(&mut f).unwrap();
+    schedule.write_dot(&mut f).unwrap();
 
     if env::args().len() > 1 {
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);

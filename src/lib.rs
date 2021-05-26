@@ -1,5 +1,6 @@
-pub mod builder;
 pub mod array;
-pub mod schedule;
+pub mod builder;
+pub mod context;
 pub mod prelude;
+pub mod schedule;
 pub mod shape;
