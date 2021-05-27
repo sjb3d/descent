@@ -11,6 +11,7 @@ matrixmultiply = "0.3"
 rand = "0.8"
 petgraph = "0.5"
 spark = { git = "https://github.com/sjb3d/spark/" }
+shaderc = "0.7"
 
 [dev-dependencies]
 rand_chacha = "0.3"

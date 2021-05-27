@@ -88,6 +88,8 @@ fn main() {
     let mut f = BufWriter::new(File::create("debug.dot").unwrap());
     schedule.write_dot(&mut f).unwrap();
 
+    schedule.compile_kernel_source(0);
+
     if env::args().len() > 1 {
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
 

@@ -1,4 +1,5 @@
 use crate::{prelude::*, schedule::*};
+use petgraph::Incoming;
 use std::{cell::UnsafeCell, ops};
 
 #[derive(Clone, Copy)]
@@ -98,15 +99,16 @@ impl<'builder> Array<'builder> {
             .with_data(|data| data.graph[self.index].shape.clone())
     }
 
-    pub fn accumulate(&mut self, rhs: Array) {
+    pub fn accumulate(&mut self, src: Array) {
         self.builder.with_data(|data| {
             assert_eq!(data.graph[self.index].op, Op::Accumulate);
-            assert_eq!(data.graph[self.index].shape, data.graph[rhs.index].shape);
+            assert_eq!(data.graph[self.index].shape, data.graph[src.index].shape);
+            let arg = data.graph.edges_directed(self.index, Incoming).count();
             data.graph.add_edge(
-                rhs.index,
+                src.index,
                 self.index,
                 Edge {
-                    arg: 0,
+                    arg,
                     transpose: false,
                 },
             );
@@ -126,7 +128,7 @@ impl GraphBuilderData {
             colour: self.colour,
             shape: shape.into(),
             op,
-            kernel: None,
+            kernel_index: None,
         });
         for (index, input) in inputs.iter().cloned().enumerate() {
             self.graph.add_edge(
