@@ -43,6 +43,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "shaderc",
+ "slotmap",
  "spark",
 ]
 
@@ -193,6 +194,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slotmap"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "585cd5dffe4e9e06f6dfdf66708b70aca3f781bed561f4f667b2d9c0d4559e36"
+dependencies = [
+ "version_check",
+]
+
+[[package]]
 name = "spark"
 version = "0.1.0"
 source = "git+https://github.com/sjb3d/spark/#b0ba1af853becd302571f6deefc3e5f2738efd7e"
@@ -200,6 +210,12 @@ dependencies = [
  "lazy_static",
  "shared_library",
 ]
+
+[[package]]
+name = "version_check"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fecdca9a5291cc2b8dcf7dc02453fee791a280f3743cb0905f8822ae463b3fe"
 
 [[package]]
 name = "wasi"

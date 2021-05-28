@@ -45,6 +45,8 @@ fn load_labels(path: impl AsRef<Path>) -> ArrayOld {
 }
 
 fn main() {
+    descent::memory::memory_test();
+
     let _ctx = Arc::new(Context::new());
 
     let g = GraphBuilder::new();
