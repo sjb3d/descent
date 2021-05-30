@@ -1,6 +1,4 @@
-use crate::{context::*, prelude::*};
 use slotmap::SlotMap;
-use std::{ops::Range, rc::Rc};
 
 slotmap::new_key_type! {
     pub(crate) struct HeapBlockId;
@@ -306,35 +304,27 @@ impl HeapAllocator {
     }
 }
 
-pub fn memory_test() {
-    let mut heap = HeapAllocator::new(1000);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let (ai, ao) = heap.alloc(1000, 4).unwrap();
-    println!("alloc(1000) = {}", ao);
-    heap.print_state();
-    heap.free(ai);
-    println!("free(1000)");
-    heap.print_state();
+    #[test]
+    fn heap_test() {
+        let mut heap = HeapAllocator::new(1000);
 
-    let (ai, ao) = heap.alloc(500, 4).unwrap();
-    println!("alloc(500) = {}", ao);
-    heap.print_state();
-    let (bi, bo) = heap.alloc(500, 4).unwrap();
-    println!("alloc(500) = {}", bo);
-    heap.print_state();
-    heap.free(ai);
-    println!("free(500)");
-    heap.print_state();
-    let (ci, co) = heap.alloc(250, 2).unwrap();
-    println!("alloc(250) = {}", co);
-    heap.print_state();
-    let (di, dof) = heap.alloc(250, 2).unwrap();
-    println!("alloc(250) = {}", dof);
-    heap.print_state();
+        let (ai, _) = heap.alloc(1000, 4).unwrap();
+        heap.free(ai);
 
-    println!("free all");
-    heap.free(bi);
-    heap.free(ci);
-    heap.free(di);
-    heap.print_state();
+        let (ai, _) = heap.alloc(500, 4).unwrap();
+        let (bi, _) = heap.alloc(500, 4).unwrap();
+        heap.free(ai);
+        let (ci, _) = heap.alloc(250, 2).unwrap();
+        let (di, _) = heap.alloc(250, 2).unwrap();
+        heap.free(bi);
+        heap.free(ci);
+        heap.free(di);
+
+        let (ei, _) = heap.alloc(1000, 4).unwrap();
+        heap.free(ei);
+    }
 }

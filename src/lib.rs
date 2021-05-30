@@ -1,7 +1,7 @@
 pub mod array;
 pub mod builder;
 pub mod context;
-pub mod memory;
+mod heap;
 pub mod prelude;
 pub mod schedule;
 pub mod shape;
