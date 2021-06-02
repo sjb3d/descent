@@ -1,71 +1,76 @@
 use slotmap::SlotMap;
 
 slotmap::new_key_type! {
-    pub(crate) struct HeapBlockId;
+    pub(crate) struct BlockId;
 }
 
 #[derive(Debug, Clone, Copy)]
-struct HeapBlockIdLink {
-    prev: HeapBlockId,
-    next: HeapBlockId,
+struct BlockListNode {
+    prev: BlockId,
+    next: BlockId,
 }
 
-impl HeapBlockIdLink {
-    fn new(id: HeapBlockId) -> Self {
+impl BlockListNode {
+    fn new(id: BlockId) -> Self {
         Self { prev: id, next: id }
     }
 
-    fn is_self(&self, id: HeapBlockId) -> bool {
+    fn is_self(&self, id: BlockId) -> bool {
         self.prev == id && self.next == id
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-struct HeapRange {
+struct Range {
     begin: usize,
     end: usize,
 }
 
-impl HeapRange {
+impl Range {
     fn size(&self) -> usize {
         self.end - self.begin
     }
 
-    fn truncate(&mut self, new_size: usize) -> HeapRange {
+    fn truncate(&mut self, new_size: usize) -> Range {
         assert!(new_size > 0);
         let begin = self.begin + new_size;
         let end = self.end;
         assert!(begin < end);
         self.end = begin;
-        HeapRange { begin, end }
+        Range { begin, end }
+    }
+
+    fn append(&mut self, other: Range) {
+        assert_eq!(self.end, other.begin);
+        self.end = other.end;
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-struct HeapBlock {
-    range: HeapRange,
-    all_link: HeapBlockIdLink,
-    free_link: HeapBlockIdLink,
+struct Block {
+    range: Range,
+    all_link: BlockListNode,
+    free_link: BlockListNode,
 }
 
-impl HeapBlock {
-    fn new(id: HeapBlockId, begin: usize, end: usize) -> Self {
+impl Block {
+    fn new(id: BlockId, begin: usize, end: usize) -> Self {
         Self {
-            range: HeapRange { begin, end },
-            all_link: HeapBlockIdLink::new(id),
-            free_link: HeapBlockIdLink::new(id),
+            range: Range { begin, end },
+            all_link: BlockListNode::new(id),
+            free_link: BlockListNode::new(id),
         }
     }
 }
 
-type HeapBlockSlotMap = SlotMap<HeapBlockId, HeapBlock>;
+type BlockSlotMap = SlotMap<BlockId, Block>;
 
-pub(crate) struct HeapAllocator {
-    blocks: HeapBlockSlotMap,
-    free_list_sentinels: Vec<HeapBlockId>,
+pub(crate) struct Heap {
+    blocks: BlockSlotMap,
+    free_list_sentinels: Vec<BlockId>,
 }
 
-impl HeapAllocator {
+impl Heap {
     fn free_list_index(size: usize) -> usize {
         (0usize.leading_zeros() - size.leading_zeros()) as usize
     }
@@ -76,10 +81,10 @@ impl HeapAllocator {
         let mut blocks = SlotMap::with_key();
         let mut free_list_sentinels = Vec::new();
         for i in 0..=max_free_list_index {
-            free_list_sentinels.push(blocks.insert_with_key(|key| HeapBlock::new(key, 0, 0)));
+            free_list_sentinels.push(blocks.insert_with_key(|key| Block::new(key, 0, 0)));
         }
 
-        let id = blocks.insert_with_key(|key| HeapBlock::new(key, 0, size));
+        let id = blocks.insert_with_key(|key| Block::new(key, 0, size));
         Self::link_free_block(&mut blocks, &free_list_sentinels, id);
 
         Self {
@@ -89,11 +94,11 @@ impl HeapAllocator {
     }
 
     fn free_links(
-        blocks: &mut HeapBlockSlotMap,
-        left_id: HeapBlockId,
-        middle_id: HeapBlockId,
-        right_id: HeapBlockId,
-    ) -> (&mut HeapBlockId, &mut HeapBlockIdLink, &mut HeapBlockId) {
+        blocks: &mut BlockSlotMap,
+        left_id: BlockId,
+        middle_id: BlockId,
+        right_id: BlockId,
+    ) -> (&mut BlockId, &mut BlockListNode, &mut BlockId) {
         if left_id == right_id {
             let [other, middle] = blocks.get_disjoint_mut([left_id, middle_id]).unwrap();
             (
@@ -114,9 +119,9 @@ impl HeapAllocator {
     }
 
     fn link_free_block(
-        blocks: &mut HeapBlockSlotMap,
-        free_list_sentinels: &[HeapBlockId],
-        alloc_id: HeapBlockId,
+        blocks: &mut BlockSlotMap,
+        free_list_sentinels: &[BlockId],
+        alloc_id: BlockId,
     ) {
         let free_list_index = Self::free_list_index(blocks[alloc_id].range.size());
         let left_id = free_list_sentinels[free_list_index];
@@ -130,8 +135,8 @@ impl HeapAllocator {
         *right_prev = alloc_id;
     }
 
-    fn unlink_free_block(blocks: &mut HeapBlockSlotMap, free_id: HeapBlockId) {
-        let HeapBlockIdLink {
+    fn unlink_free_block(blocks: &mut BlockSlotMap, free_id: BlockId) {
+        let BlockListNode {
             prev: left_id,
             next: right_id,
         } = blocks[free_id].free_link;
@@ -146,15 +151,15 @@ impl HeapAllocator {
     }
 
     fn all_links(
-        blocks: &mut HeapBlockSlotMap,
-        left_id: HeapBlockId,
-        middle_id: HeapBlockId,
-        right_id: HeapBlockId,
+        blocks: &mut BlockSlotMap,
+        left_id: BlockId,
+        middle_id: BlockId,
+        right_id: BlockId,
     ) -> (
-        &mut HeapBlockId,
-        &mut HeapRange,
-        &mut HeapBlock,
-        &mut HeapBlockId,
+        &mut BlockId,
+        &mut Range,
+        &mut Block,
+        &mut BlockId,
     ) {
         if left_id == right_id {
             let [other, middle] = blocks.get_disjoint_mut([left_id, middle_id]).unwrap();
@@ -178,11 +183,11 @@ impl HeapAllocator {
     }
 
     fn truncate_block(
-        blocks: &mut HeapBlockSlotMap,
-        orig_id: HeapBlockId,
+        blocks: &mut BlockSlotMap,
+        orig_id: BlockId,
         new_size: usize,
-    ) -> HeapBlockId {
-        let new_id = blocks.insert_with_key(|key| HeapBlock::new(key, 0, 0));
+    ) -> BlockId {
+        let new_id = blocks.insert_with_key(|key| Block::new(key, 0, 0));
         let next_id = blocks[orig_id].all_link.next;
         let (left_next, left_range, new_block, right_prev) =
             Self::all_links(blocks, orig_id, new_id, next_id);
@@ -198,7 +203,7 @@ impl HeapAllocator {
         new_id
     }
 
-    fn append_block(blocks: &mut HeapBlockSlotMap, orig_id: HeapBlockId, append_id: HeapBlockId) {
+    fn append_block(blocks: &mut BlockSlotMap, orig_id: BlockId, append_id: BlockId) {
         let next_id = blocks[append_id].all_link.next;
         let (left_next, left_range, append_block, right_prev) =
             Self::all_links(blocks, orig_id, append_id, next_id);
@@ -207,8 +212,7 @@ impl HeapAllocator {
         *left_next = next_id;
         *right_prev = orig_id;
 
-        assert_eq!(left_range.end, append_block.range.begin);
-        left_range.end = append_block.range.end;
+        left_range.append(append_block.range);
 
         blocks.remove(append_id).unwrap();
     }
@@ -242,7 +246,7 @@ impl HeapAllocator {
         }
     }
 
-    pub(crate) fn alloc(&mut self, size: usize, align: usize) -> Option<(HeapBlockId, usize)> {
+    pub(crate) fn alloc(&mut self, size: usize, align: usize) -> Option<(BlockId, usize)> {
         let blocks = &mut self.blocks;
         let free_list_sentinels = &self.free_list_sentinels;
 
@@ -277,7 +281,7 @@ impl HeapAllocator {
         None
     }
 
-    pub(crate) fn free(&mut self, block_id: HeapBlockId) {
+    pub(crate) fn free(&mut self, block_id: BlockId) {
         let blocks = &mut self.blocks;
         let free_list_sentinels = &self.free_list_sentinels;
 
@@ -310,7 +314,7 @@ mod tests {
 
     #[test]
     fn heap_test() {
-        let mut heap = HeapAllocator::new(1000);
+        let mut heap = Heap::new(1000);
 
         let (ai, _) = heap.alloc(1000, 4).unwrap();
         heap.free(ai);
