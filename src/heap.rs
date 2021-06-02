@@ -1,4 +1,5 @@
 use slotmap::SlotMap;
+use std::fmt::Debug;
 
 slotmap::new_key_type! {
     pub(crate) struct BlockId;
@@ -6,18 +7,23 @@ slotmap::new_key_type! {
 
 #[derive(Debug, Clone, Copy)]
 struct BlockListNode {
-    prev: BlockId,
-    next: BlockId,
+    prev_id: BlockId,
+    next_id: BlockId,
 }
 
 impl BlockListNode {
     fn new(id: BlockId) -> Self {
-        Self { prev: id, next: id }
+        Self {
+            prev_id: id,
+            next_id: id,
+        }
     }
+}
 
-    fn is_self(&self, id: BlockId) -> bool {
-        self.prev == id && self.next == id
-    }
+struct BlockListLink<'b, T> {
+    prev_next_id: &'b mut BlockId,
+    current_node: &'b mut T,
+    next_prev_id: &'b mut BlockId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -46,236 +52,262 @@ impl Range {
     }
 }
 
+pub(crate) trait ArenaId: Debug + Clone + Copy + PartialEq + Eq {}
+
 #[derive(Debug, Clone, Copy)]
-struct Block {
+struct Block<A: ArenaId> {
+    arena: A,
     range: Range,
-    all_link: BlockListNode,
-    free_link: BlockListNode,
+    arena_node: BlockListNode,
+    free_node: Option<BlockListNode>,
 }
 
-impl Block {
-    fn new(id: BlockId, begin: usize, end: usize) -> Self {
+impl<A: ArenaId> Block<A> {
+    fn new(id: BlockId, arena: A, range: Range) -> Self {
         Self {
-            range: Range { begin, end },
-            all_link: BlockListNode::new(id),
-            free_link: BlockListNode::new(id),
+            arena,
+            range,
+            arena_node: BlockListNode::new(id),
+            free_node: None,
         }
+    }
+
+    fn can_append(&self, other: &Block<A>) -> bool {
+        self.arena == other.arena && self.range.end == other.range.begin
     }
 }
 
-type BlockSlotMap = SlotMap<BlockId, Block>;
+type BlockSlotMap<A> = SlotMap<BlockId, Block<A>>;
 
-pub(crate) struct Heap {
-    blocks: BlockSlotMap,
-    free_list_sentinels: Vec<BlockId>,
+#[derive(Debug, Default)]
+pub(crate) struct Heap<A: ArenaId> {
+    blocks: BlockSlotMap<A>,
+    free_lists: Vec<Option<BlockId>>,
 }
 
-impl Heap {
+impl<A: ArenaId> Heap<A> {
     fn free_list_index(size: usize) -> usize {
         (0usize.leading_zeros() - size.leading_zeros()) as usize
     }
 
-    pub(crate) fn new(size: usize) -> Self {
-        let max_free_list_index = Self::free_list_index(size);
+    pub(crate) fn extend_with(&mut self, arena: A, size: usize) {
+        let free_list_index = Self::free_list_index(size);
 
-        let mut blocks = SlotMap::with_key();
-        let mut free_list_sentinels = Vec::new();
-        for i in 0..=max_free_list_index {
-            free_list_sentinels.push(blocks.insert_with_key(|key| Block::new(key, 0, 0)));
+        while free_list_index >= self.free_lists.len() {
+            self.free_lists.push(None);
         }
 
-        let id = blocks.insert_with_key(|key| Block::new(key, 0, size));
-        Self::link_free_block(&mut blocks, &free_list_sentinels, id);
-
-        Self {
-            blocks,
-            free_list_sentinels,
-        }
+        let id = self.blocks.insert_with_key(|key| {
+            Block::new(
+                key,
+                arena,
+                Range {
+                    begin: 0,
+                    end: size,
+                },
+            )
+        });
+        Self::register_free_block(&mut self.blocks, self.free_lists.as_mut_slice(), id);
     }
 
-    fn free_links(
-        blocks: &mut BlockSlotMap,
-        left_id: BlockId,
-        middle_id: BlockId,
-        right_id: BlockId,
-    ) -> (&mut BlockId, &mut BlockListNode, &mut BlockId) {
-        if left_id == right_id {
-            let [other, middle] = blocks.get_disjoint_mut([left_id, middle_id]).unwrap();
-            (
-                &mut other.free_link.next,
-                &mut middle.free_link,
-                &mut other.free_link.prev,
-            )
+    fn free_link(
+        blocks: &mut BlockSlotMap<A>,
+        prev_id: BlockId,
+        current_id: BlockId,
+        next_id: BlockId,
+    ) -> Option<BlockListLink<Option<BlockListNode>>> {
+        if prev_id == current_id || current_id == next_id {
+            None
+        } else if prev_id == next_id {
+            let [other, current] = blocks.get_disjoint_mut([prev_id, current_id]).unwrap();
+            let BlockListNode { prev_id, next_id } = other.free_node.as_mut().unwrap();
+            Some(BlockListLink {
+                prev_next_id: next_id,
+                current_node: &mut current.free_node,
+                next_prev_id: prev_id,
+            })
         } else {
-            let [left, middle, right] = blocks
-                .get_disjoint_mut([left_id, middle_id, right_id])
+            let [prev, current, next] = blocks
+                .get_disjoint_mut([prev_id, current_id, next_id])
                 .unwrap();
-            (
-                &mut left.free_link.next,
-                &mut middle.free_link,
-                &mut right.free_link.prev,
-            )
+            Some(BlockListLink {
+                prev_next_id: prev
+                    .free_node
+                    .as_mut()
+                    .map(|node| &mut node.next_id)
+                    .unwrap(),
+                current_node: &mut current.free_node,
+                next_prev_id: next
+                    .free_node
+                    .as_mut()
+                    .map(|node| &mut node.next_id)
+                    .unwrap(),
+            })
         }
     }
 
-    fn link_free_block(
-        blocks: &mut BlockSlotMap,
-        free_list_sentinels: &[BlockId],
+    fn register_free_block(
+        blocks: &mut BlockSlotMap<A>,
+        free_lists: &mut [Option<BlockId>],
         alloc_id: BlockId,
     ) {
-        let free_list_index = Self::free_list_index(blocks[alloc_id].range.size());
-        let left_id = free_list_sentinels[free_list_index];
-        let right_id = blocks[left_id].free_link.next;
-        let (left_next, link, right_prev) = Self::free_links(blocks, left_id, alloc_id, right_id);
-        assert!(link.is_self(alloc_id));
-        assert_eq!(*right_prev, left_id);
-        *left_next = alloc_id;
-        link.prev = left_id;
-        link.next = right_id;
-        *right_prev = alloc_id;
-    }
-
-    fn unlink_free_block(blocks: &mut BlockSlotMap, free_id: BlockId) {
-        let BlockListNode {
-            prev: left_id,
-            next: right_id,
-        } = blocks[free_id].free_link;
-        let (left_next, link, right_prev) = Self::free_links(blocks, left_id, free_id, right_id);
-
-        assert_eq!(*left_next, free_id);
-        assert_eq!(*right_prev, free_id);
-        *left_next = right_id;
-        link.prev = free_id;
-        link.next = free_id;
-        *right_prev = left_id;
-    }
-
-    fn all_links(
-        blocks: &mut BlockSlotMap,
-        left_id: BlockId,
-        middle_id: BlockId,
-        right_id: BlockId,
-    ) -> (
-        &mut BlockId,
-        &mut Range,
-        &mut Block,
-        &mut BlockId,
-    ) {
-        if left_id == right_id {
-            let [other, middle] = blocks.get_disjoint_mut([left_id, middle_id]).unwrap();
-            (
-                &mut other.all_link.next,
-                &mut other.range,
-                middle,
-                &mut other.all_link.prev,
-            )
+        let size = {
+            let block = &blocks[alloc_id];
+            assert!(block.free_node.is_none());
+            block.range.size()
+        };
+        let free_list_index = Self::free_list_index(size);
+        if let Some(next_id) = free_lists[free_list_index] {
+            let prev_id = blocks[next_id].free_node.unwrap().prev_id;
+            let link = Self::free_link(blocks, prev_id, alloc_id, next_id).unwrap();
+            *link.prev_next_id = alloc_id;
+            *link.current_node = Some(BlockListNode { prev_id, next_id });
+            *link.next_prev_id = alloc_id;
         } else {
-            let [left, middle, right] = blocks
-                .get_disjoint_mut([left_id, middle_id, right_id])
+            blocks[alloc_id].free_node = Some(BlockListNode::new(alloc_id));
+        }
+        free_lists[free_list_index] = Some(alloc_id);
+    }
+
+    fn unregister_free_block(
+        blocks: &mut BlockSlotMap<A>,
+        free_lists: &mut [Option<BlockId>],
+        free_id: BlockId,
+    ) {
+        let (size, BlockListNode { prev_id, next_id }) = {
+            let block = &blocks[free_id];
+            (block.range.size(), block.free_node.unwrap())
+        };
+        let free_list_index = Self::free_list_index(size);
+        let head_id = if let Some(link) = Self::free_link(blocks, prev_id, free_id, next_id) {
+            *link.prev_next_id = next_id;
+            *link.next_prev_id = prev_id;
+            Some(next_id)
+        } else {
+            assert_eq!(free_id, prev_id);
+            assert_eq!(free_id, next_id);
+            None
+        };
+        blocks[free_id].free_node = None;
+        free_lists[free_list_index] = head_id;
+    }
+
+    fn arena_link(
+        blocks: &mut BlockSlotMap<A>,
+        prev_id: BlockId,
+        current_id: BlockId,
+        next_id: BlockId,
+    ) -> BlockListLink<BlockListNode> {
+        if prev_id == next_id {
+            let [other, current] = blocks.get_disjoint_mut([prev_id, current_id]).unwrap();
+            BlockListLink {
+                prev_next_id: &mut other.arena_node.next_id,
+                current_node: &mut current.arena_node,
+                next_prev_id: &mut other.arena_node.prev_id,
+            }
+        } else {
+            let [prev, current, next] = blocks
+                .get_disjoint_mut([prev_id, current_id, next_id])
                 .unwrap();
-            (
-                &mut left.all_link.next,
-                &mut left.range,
-                middle,
-                &mut right.all_link.prev,
-            )
+            BlockListLink {
+                prev_next_id: &mut prev.arena_node.next_id,
+                current_node: &mut current.arena_node,
+                next_prev_id: &mut next.arena_node.prev_id,
+            }
         }
     }
 
-    fn truncate_block(
-        blocks: &mut BlockSlotMap,
-        orig_id: BlockId,
-        new_size: usize,
-    ) -> BlockId {
-        let new_id = blocks.insert_with_key(|key| Block::new(key, 0, 0));
-        let next_id = blocks[orig_id].all_link.next;
-        let (left_next, left_range, new_block, right_prev) =
-            Self::all_links(blocks, orig_id, new_id, next_id);
+    fn truncate_block(blocks: &mut BlockSlotMap<A>, orig_id: BlockId, new_size: usize) -> BlockId {
+        let (next_id, new_id) = {
+            let orig_block = &mut blocks[orig_id];
+            let next_id = orig_block.arena_node.next_id;
+            let arena = orig_block.arena;
+            let range = orig_block.range.truncate(new_size);
+            let new_id = blocks.insert_with_key(|key| Block::new(key, arena, range));
+            (next_id, new_id)
+        };
 
-        assert_eq!(*right_prev, orig_id);
-        *left_next = new_id;
-        new_block.all_link.prev = orig_id;
-        new_block.all_link.next = next_id;
-        *right_prev = new_id;
-
-        new_block.range = left_range.truncate(new_size);
+        let prev_id = orig_id;
+        let link = Self::arena_link(blocks, prev_id, new_id, next_id);
+        *link.prev_next_id = new_id;
+        *link.current_node = BlockListNode { prev_id, next_id };
+        *link.next_prev_id = new_id;
 
         new_id
     }
 
-    fn append_block(blocks: &mut BlockSlotMap, orig_id: BlockId, append_id: BlockId) {
-        let next_id = blocks[append_id].all_link.next;
-        let (left_next, left_range, append_block, right_prev) =
-            Self::all_links(blocks, orig_id, append_id, next_id);
+    fn append_block(blocks: &mut BlockSlotMap<A>, orig_id: BlockId, append_id: BlockId) {
+        let [orig_block, append_block] = blocks.get_disjoint_mut([orig_id, append_id]).unwrap();
+        orig_block.range.append(append_block.range);
 
-        assert!(append_block.free_link.is_self(append_id));
-        *left_next = next_id;
-        *right_prev = orig_id;
+        let next_id = append_block.arena_node.next_id;
+        let link = Self::arena_link(blocks, orig_id, append_id, next_id);
 
-        left_range.append(append_block.range);
-
+        *link.prev_next_id = next_id;
+        *link.next_prev_id = orig_id;
         blocks.remove(append_id).unwrap();
     }
 
     fn print_state(&self) {
-        for (index, sentinel_id) in self.free_list_sentinels.iter().cloned().enumerate() {
+        for (index, first_block_id) in self.free_lists.iter().cloned().enumerate() {
             println!("free list {}:", index);
-            let mut block_id = self.blocks[sentinel_id].free_link.next;
-            while block_id != sentinel_id {
-                let block = &self.blocks[block_id];
-                println!("{:?} = {:?}", block_id, block);
-                block_id = block.free_link.next;
+            if let Some(first_block_id) = first_block_id {
+                let mut block_id = first_block_id;
+                loop {
+                    let block = &self.blocks[block_id];
+                    println!("{:?} = {:?}", block_id, block);
+                    block_id = block.free_node.unwrap().next_id;
+                    if block_id == first_block_id {
+                        break;
+                    }
+                }
             }
         }
-        println!("full list:");
-        if let Some((first_block_id, _)) = self
-            .blocks
-            .iter()
-            .filter(|(_, block)| block.range.end != 0)
-            .next()
-        {
-            let mut block_id = first_block_id;
-            loop {
-                let block = &self.blocks[block_id];
+        println!("allocated list:");
+        for (block_id, block) in self.blocks.iter() {
+            if block.free_node.is_none() {
                 println!("{:?} = {:?}", block_id, block);
-                block_id = block.all_link.next;
-                if block_id == first_block_id {
-                    break;
-                }
             }
         }
     }
 
     pub(crate) fn alloc(&mut self, size: usize, align: usize) -> Option<(BlockId, usize)> {
         let blocks = &mut self.blocks;
-        let free_list_sentinels = &self.free_list_sentinels;
+        let free_lists = self.free_lists.as_mut_slice();
 
         let align_mask = align - 1;
         let start_free_list_index = Self::free_list_index(size);
-        for sentinel_id in free_list_sentinels[start_free_list_index..].iter().cloned() {
-            let mut block_id = blocks[sentinel_id].free_link.next;
-            while block_id != sentinel_id {
+        for first_block_id in free_lists[start_free_list_index..]
+            .iter()
+            .cloned()
+            .filter_map(|id| id)
+        {
+            let mut block_id = first_block_id;
+            loop {
                 let block_range = blocks[block_id].range;
                 let aligned_begin = (block_range.begin + align_mask) & !align_mask;
                 let aligned_end = aligned_begin + size;
                 if aligned_end <= block_range.end {
-                    Self::unlink_free_block(blocks, block_id);
+                    Self::unregister_free_block(blocks, free_lists, block_id);
                     if aligned_begin != block_range.begin {
                         let aligned_id = Self::truncate_block(
                             blocks,
                             block_id,
                             aligned_begin - block_range.begin,
                         );
-                        Self::link_free_block(blocks, free_list_sentinels, block_id);
+                        Self::register_free_block(blocks, free_lists, block_id);
                         block_id = aligned_id;
                     }
                     if aligned_end != block_range.end {
                         let unused_id = Self::truncate_block(blocks, block_id, size);
-                        Self::link_free_block(blocks, free_list_sentinels, unused_id);
+                        Self::register_free_block(blocks, free_lists, unused_id);
                     }
                     return Some((block_id, aligned_begin));
                 }
-                block_id = blocks[block_id].free_link.next;
+                block_id = blocks[block_id].free_node.unwrap().next_id;
+                if block_id == first_block_id {
+                    break;
+                }
             }
         }
         None
@@ -283,27 +315,26 @@ impl Heap {
 
     pub(crate) fn free(&mut self, block_id: BlockId) {
         let blocks = &mut self.blocks;
-        let free_list_sentinels = &self.free_list_sentinels;
+        let free_lists = self.free_lists.as_mut_slice();
 
         let block = &blocks[block_id];
-        assert_eq!(block.free_link.prev, block_id);
-        assert_eq!(block.free_link.next, block_id);
-        let next_id = block.all_link.next;
+        assert!(block.free_node.is_none());
+        let next_id = block.arena_node.next_id;
         let next = &blocks[next_id];
-        if !next.free_link.is_self(next_id) && block.range.end == next.range.begin {
-            Self::unlink_free_block(blocks, next_id);
+        if next.free_node.is_some() && block.can_append(next) {
+            Self::unregister_free_block(blocks, free_lists, next_id);
             Self::append_block(blocks, block_id, next_id);
         }
 
         let block = &blocks[block_id];
-        let prev_id = block.all_link.prev;
+        let prev_id = block.arena_node.prev_id;
         let prev = &blocks[prev_id];
-        if !prev.free_link.is_self(prev_id) && prev.range.end == block.range.begin {
-            Self::unlink_free_block(blocks, prev_id);
+        if prev.free_node.is_some() && prev.can_append(block) {
+            Self::unregister_free_block(blocks, free_lists, prev_id);
             Self::append_block(blocks, prev_id, block_id);
-            Self::link_free_block(blocks, free_list_sentinels, prev_id);
+            Self::register_free_block(blocks, free_lists, prev_id);
         } else {
-            Self::link_free_block(blocks, free_list_sentinels, block_id);
+            Self::register_free_block(blocks, free_lists, block_id);
         }
     }
 }
@@ -312,21 +343,31 @@ impl Heap {
 mod tests {
     use super::*;
 
+    impl ArenaId for usize {}
+
     #[test]
     fn heap_test() {
-        let mut heap = Heap::new(1000);
+        let mut heap = Heap::default();
+        heap.extend_with(0usize, 1000);
 
         let (ai, _) = heap.alloc(1000, 4).unwrap();
         heap.free(ai);
 
         let (ai, _) = heap.alloc(500, 4).unwrap();
+        heap.print_state();
         let (bi, _) = heap.alloc(500, 4).unwrap();
+        heap.print_state();
         heap.free(ai);
+        heap.print_state();
         let (ci, _) = heap.alloc(250, 2).unwrap();
         let (di, _) = heap.alloc(250, 2).unwrap();
+        heap.print_state();
         heap.free(bi);
+        heap.print_state();
         heap.free(ci);
+        heap.print_state();
         heap.free(di);
+        heap.print_state();
 
         let (ei, _) = heap.alloc(1000, 4).unwrap();
         heap.free(ei);
