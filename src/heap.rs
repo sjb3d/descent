@@ -20,12 +20,6 @@ impl BlockListNode {
     }
 }
 
-struct BlockListLink<'b, T> {
-    prev_next_id: &'b mut BlockId,
-    current_node: &'b mut T,
-    next_prev_id: &'b mut BlockId,
-}
-
 #[derive(Debug, Clone, Copy)]
 struct Range {
     begin: usize,
@@ -33,6 +27,13 @@ struct Range {
 }
 
 impl Range {
+    fn new(size: usize) -> Self {
+        Self {
+            begin: 0,
+            end: size,
+        }
+    }
+
     fn size(&self) -> usize {
         self.end - self.begin
     }
@@ -97,53 +98,10 @@ impl<A: ArenaId> Heap<A> {
             self.free_lists.push(None);
         }
 
-        let id = self.blocks.insert_with_key(|key| {
-            Block::new(
-                key,
-                arena,
-                Range {
-                    begin: 0,
-                    end: size,
-                },
-            )
-        });
+        let id = self
+            .blocks
+            .insert_with_key(|key| Block::new(key, arena, Range::new(size)));
         Self::register_free_block(&mut self.blocks, self.free_lists.as_mut_slice(), id);
-    }
-
-    fn free_link(
-        blocks: &mut BlockSlotMap<A>,
-        prev_id: BlockId,
-        current_id: BlockId,
-        next_id: BlockId,
-    ) -> Option<BlockListLink<Option<BlockListNode>>> {
-        if prev_id == current_id || current_id == next_id {
-            None
-        } else if prev_id == next_id {
-            let [other, current] = blocks.get_disjoint_mut([prev_id, current_id]).unwrap();
-            let BlockListNode { prev_id, next_id } = other.free_node.as_mut().unwrap();
-            Some(BlockListLink {
-                prev_next_id: next_id,
-                current_node: &mut current.free_node,
-                next_prev_id: prev_id,
-            })
-        } else {
-            let [prev, current, next] = blocks
-                .get_disjoint_mut([prev_id, current_id, next_id])
-                .unwrap();
-            Some(BlockListLink {
-                prev_next_id: prev
-                    .free_node
-                    .as_mut()
-                    .map(|node| &mut node.next_id)
-                    .unwrap(),
-                current_node: &mut current.free_node,
-                next_prev_id: next
-                    .free_node
-                    .as_mut()
-                    .map(|node| &mut node.next_id)
-                    .unwrap(),
-            })
-        }
     }
 
     fn register_free_block(
@@ -159,10 +117,18 @@ impl<A: ArenaId> Heap<A> {
         let free_list_index = Self::free_list_index(size);
         if let Some(next_id) = free_lists[free_list_index] {
             let prev_id = blocks[next_id].free_node.unwrap().prev_id;
-            let link = Self::free_link(blocks, prev_id, alloc_id, next_id).unwrap();
-            *link.prev_next_id = alloc_id;
-            *link.current_node = Some(BlockListNode { prev_id, next_id });
-            *link.next_prev_id = alloc_id;
+            if prev_id == next_id {
+                let [other, alloc] = blocks.get_disjoint_mut([prev_id, alloc_id]).unwrap();
+                other.free_node = Some(BlockListNode::new(alloc_id));
+                alloc.free_node = Some(BlockListNode::new(prev_id));
+            } else {
+                let [prev, alloc, next] = blocks
+                    .get_disjoint_mut([prev_id, alloc_id, next_id])
+                    .unwrap();
+                prev.free_node.as_mut().unwrap().next_id = alloc_id;
+                alloc.free_node = Some(BlockListNode { prev_id, next_id });
+                next.free_node.as_mut().unwrap().prev_id = prev_id;
+            }
         } else {
             blocks[alloc_id].free_node = Some(BlockListNode::new(alloc_id));
         }
@@ -179,42 +145,19 @@ impl<A: ArenaId> Heap<A> {
             (block.range.size(), block.free_node.unwrap())
         };
         let free_list_index = Self::free_list_index(size);
-        let head_id = if let Some(link) = Self::free_link(blocks, prev_id, free_id, next_id) {
-            *link.prev_next_id = next_id;
-            *link.next_prev_id = prev_id;
-            Some(next_id)
-        } else {
-            assert_eq!(free_id, prev_id);
-            assert_eq!(free_id, next_id);
+        let head_id = if prev_id == free_id {
             None
-        };
-        blocks[free_id].free_node = None;
-        free_lists[free_list_index] = head_id;
-    }
-
-    fn arena_link(
-        blocks: &mut BlockSlotMap<A>,
-        prev_id: BlockId,
-        current_id: BlockId,
-        next_id: BlockId,
-    ) -> BlockListLink<BlockListNode> {
-        if prev_id == next_id {
-            let [other, current] = blocks.get_disjoint_mut([prev_id, current_id]).unwrap();
-            BlockListLink {
-                prev_next_id: &mut other.arena_node.next_id,
-                current_node: &mut current.arena_node,
-                next_prev_id: &mut other.arena_node.prev_id,
-            }
+        } else if prev_id == next_id {
+            blocks[prev_id].free_node = Some(BlockListNode::new(prev_id));
+            Some(prev_id)
         } else {
-            let [prev, current, next] = blocks
-                .get_disjoint_mut([prev_id, current_id, next_id])
-                .unwrap();
-            BlockListLink {
-                prev_next_id: &mut prev.arena_node.next_id,
-                current_node: &mut current.arena_node,
-                next_prev_id: &mut next.arena_node.prev_id,
-            }
-        }
+            let [prev, next] = blocks.get_disjoint_mut([prev_id, next_id]).unwrap();
+            prev.free_node.as_mut().unwrap().next_id = next_id;
+            next.free_node.as_mut().unwrap().prev_id = prev_id;
+            Some(next_id)
+        };
+        free_lists[free_list_index] = head_id;
+        blocks[free_id].free_node = None;
     }
 
     fn truncate_block(blocks: &mut BlockSlotMap<A>, orig_id: BlockId, new_size: usize) -> BlockId {
@@ -227,11 +170,17 @@ impl<A: ArenaId> Heap<A> {
             (next_id, new_id)
         };
 
-        let prev_id = orig_id;
-        let link = Self::arena_link(blocks, prev_id, new_id, next_id);
-        *link.prev_next_id = new_id;
-        *link.current_node = BlockListNode { prev_id, next_id };
-        *link.next_prev_id = new_id;
+        if orig_id == next_id {
+            let [orig, new] = blocks.get_disjoint_mut([orig_id, new_id]).unwrap();
+            orig.arena_node = BlockListNode::new(new_id);
+            new.arena_node = BlockListNode::new(orig_id);
+        } else {
+            let prev_id = orig_id;
+            let [prev, new, next] = blocks.get_disjoint_mut([prev_id, new_id, next_id]).unwrap();
+            prev.arena_node.next_id = new_id;
+            new.arena_node = BlockListNode { prev_id, next_id };
+            next.arena_node.prev_id = new_id;
+        }
 
         new_id
     }
@@ -241,10 +190,14 @@ impl<A: ArenaId> Heap<A> {
         orig_block.range.append(append_block.range);
 
         let next_id = append_block.arena_node.next_id;
-        let link = Self::arena_link(blocks, orig_id, append_id, next_id);
+        if orig_id == next_id {
+            orig_block.arena_node = BlockListNode::new(orig_id);
+        } else {
+            let [orig_block, next_block] = blocks.get_disjoint_mut([orig_id, next_id]).unwrap();
+            orig_block.arena_node.next_id = next_id;
+            next_block.arena_node.prev_id = orig_id;
+        }
 
-        *link.prev_next_id = next_id;
-        *link.next_prev_id = orig_id;
         blocks.remove(append_id).unwrap();
     }
 
