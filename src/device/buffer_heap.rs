@@ -1,13 +1,8 @@
-use std::ops::Deref;
-
+use super::{heap::*, prelude::*};
 use crate::device::buffer_heap;
 use spark::vk;
 
-use super::{heap::*, prelude::*};
-use slotmap::SlotMap;
-
 slotmap::new_key_type! {
-    struct HeapId;
     pub struct BufferId;
 }
 
@@ -21,15 +16,10 @@ struct Chunk {
     buffer: vk::Buffer,
 }
 
-struct Buffer {
-    alloc: HeapAlloc<HeapId, ChunkIndex>,
-}
-
 pub struct BufferHeap {
     context: SharedContext,
     chunks: Vec<Chunk>,
-    heap: Heap<HeapId, ChunkIndex>,
-    buffers: SlotMap<BufferId, Buffer>,
+    heap: Heap<BufferId, ChunkIndex>,
 }
 
 impl BufferHeap {
@@ -38,7 +28,6 @@ impl BufferHeap {
             context: SharedContext::clone(context),
             chunks: Vec::new(),
             heap: Heap::default(),
-            buffers: SlotMap::with_key(),
         }
     }
 
@@ -86,11 +75,12 @@ impl BufferHeap {
         self.heap.extend_with(chunk_index, chunk_size);
     }
 
-    fn alloc_from_heap(
-        &mut self,
-        size: usize,
-        align: usize,
-    ) -> Option<HeapAlloc<HeapId, ChunkIndex>> {
+    pub fn alloc(&mut self, size: usize) -> Option<BufferId> {
+        let align = self
+            .context
+            .physical_device_properties
+            .limits
+            .non_coherent_atom_size as usize;
         match self.heap.alloc(size, align) {
             Some(alloc) => Some(alloc),
             None => {
@@ -100,22 +90,8 @@ impl BufferHeap {
         }
     }
 
-    pub fn alloc(&mut self, size: usize) -> Option<BufferId> {
-        let align = self
-            .context
-            .physical_device_properties
-            .limits
-            .non_coherent_atom_size as usize;
-        let alloc = self.alloc_from_heap(size, align)?;
-        Some(self.buffers.insert(Buffer { alloc }))
-    }
-
     pub fn free(&mut self, id: BufferId) {
-        if let Some(buffer) = self.buffers.remove(id) {
-            self.heap.free(buffer.alloc.id);
-        } else {
-            panic!("tried to free invalid buffer id");
-        }
+        self.heap.free(id);
     }
 }
 

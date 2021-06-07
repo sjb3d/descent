@@ -72,15 +72,13 @@ impl<K: Key, T: Tag> Block<K, T> {
     fn can_append(&self, other: &Block<K, T>) -> bool {
         self.tag == other.tag && self.range.end == other.range.begin
     }
+
+    fn tag(&self) -> (T, usize) {
+        (self.tag, self.range.begin)
+    }
 }
 
 type BlockSlotMap<K, T> = SlotMap<K, Block<K, T>>;
-
-pub struct HeapAlloc<K: Key, T: Tag> {
-    pub id: K,
-    pub tag: T,
-    pub offset: usize,
-}
 
 #[derive(Debug)]
 pub struct Heap<K: Key, T: Tag> {
@@ -235,7 +233,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
         }
     }
 
-    pub fn alloc(&mut self, size: usize, align: usize) -> Option<HeapAlloc<K, T>> {
+    pub fn alloc(&mut self, size: usize, align: usize) -> Option<K> {
         let blocks = &mut self.blocks;
         let free_lists = self.free_lists.as_mut_slice();
 
@@ -249,11 +247,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
         {
             let mut block_id = first_block_id;
             loop {
-                let Block {
-                    range: block_range,
-                    tag: block_tag,
-                    ..
-                } = blocks[block_id];
+                let block_range = blocks[block_id].range;
                 let aligned_begin = (block_range.begin + align_mask) & !align_mask;
                 let aligned_end = aligned_begin + size;
                 if aligned_end <= block_range.end {
@@ -271,11 +265,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
                         let unused_id = Self::truncate_block(blocks, block_id, size);
                         Self::register_free_block(blocks, free_lists, unused_id);
                     }
-                    return Some(HeapAlloc {
-                        id: block_id,
-                        tag: block_tag,
-                        offset: aligned_begin,
-                    });
+                    return Some(block_id);
                 }
                 block_id = blocks[block_id].free_node.unwrap().next_id;
                 if block_id == first_block_id {
@@ -284,6 +274,10 @@ impl<K: Key, T: Tag> Heap<K, T> {
             }
         }
         None
+    }
+
+    pub fn tag(&self, id: K) -> (T, usize) {
+        self.blocks[id].tag()
     }
 
     pub fn free(&mut self, id: K) {
@@ -326,17 +320,17 @@ mod tests {
         let mut heap = Heap::default();
         heap.extend_with(0usize, 1000);
 
-        let ai: Id = heap.alloc(1000, 4).unwrap().id;
+        let ai: Id = heap.alloc(1000, 4).unwrap();
         heap.free(ai);
 
-        let ai = heap.alloc(500, 4).unwrap().id;
+        let ai = heap.alloc(500, 4).unwrap();
         heap.print_state();
-        let bi = heap.alloc(500, 4).unwrap().id;
+        let bi = heap.alloc(500, 4).unwrap();
         heap.print_state();
         heap.free(ai);
         heap.print_state();
-        let ci = heap.alloc(250, 2).unwrap().id;
-        let di = heap.alloc(250, 2).unwrap().id;
+        let ci = heap.alloc(250, 2).unwrap();
+        let di = heap.alloc(250, 2).unwrap();
         heap.print_state();
         heap.free(bi);
         heap.print_state();
@@ -345,7 +339,7 @@ mod tests {
         heap.free(di);
         heap.print_state();
 
-        let ei = heap.alloc(1000, 4).unwrap().id;
+        let ei = heap.alloc(1000, 4).unwrap();
         heap.free(ei);
     }
 }
