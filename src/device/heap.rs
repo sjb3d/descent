@@ -2,7 +2,7 @@ use slotmap::SlotMap;
 use std::fmt::Debug;
 
 slotmap::new_key_type! {
-    pub(crate) struct BlockId;
+    pub struct BlockId;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -53,7 +53,7 @@ impl Range {
     }
 }
 
-pub(crate) trait ArenaId: Debug + Clone + Copy + PartialEq + Eq {}
+pub trait ArenaId: Debug + Clone + Copy + PartialEq + Eq {}
 
 #[derive(Debug, Clone, Copy)]
 struct Block<A: ArenaId> {
@@ -81,7 +81,7 @@ impl<A: ArenaId> Block<A> {
 type BlockSlotMap<A> = SlotMap<BlockId, Block<A>>;
 
 #[derive(Debug, Default)]
-pub(crate) struct Heap<A: ArenaId> {
+pub struct Heap<A: ArenaId> {
     blocks: BlockSlotMap<A>,
     free_lists: Vec<Option<BlockId>>,
 }
@@ -91,7 +91,7 @@ impl<A: ArenaId> Heap<A> {
         (0usize.leading_zeros() - size.leading_zeros()) as usize
     }
 
-    pub(crate) fn extend_with(&mut self, arena: A, size: usize) {
+    pub fn extend_with(&mut self, arena: A, size: usize) {
         let free_list_index = Self::free_list_index(size);
 
         while free_list_index >= self.free_lists.len() {
@@ -224,7 +224,7 @@ impl<A: ArenaId> Heap<A> {
         }
     }
 
-    pub(crate) fn alloc(&mut self, size: usize, align: usize) -> Option<(BlockId, usize)> {
+    pub fn alloc(&mut self, size: usize, align: usize) -> Option<(BlockId, usize)> {
         let blocks = &mut self.blocks;
         let free_lists = self.free_lists.as_mut_slice();
 
@@ -266,7 +266,7 @@ impl<A: ArenaId> Heap<A> {
         None
     }
 
-    pub(crate) fn free(&mut self, block_id: BlockId) {
+    pub fn free(&mut self, block_id: BlockId) {
         let blocks = &mut self.blocks;
         let free_lists = self.free_lists.as_mut_slice();
 

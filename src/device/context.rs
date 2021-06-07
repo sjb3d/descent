@@ -1,4 +1,5 @@
 use spark::{vk, Builder, Device, Instance, Loader};
+use std::rc::Rc;
 use std::{ffi::CStr, slice};
 
 trait PhysicalDeviceMemoryPropertiesExt {
@@ -16,18 +17,20 @@ impl PhysicalDeviceMemoryPropertiesExt for vk::PhysicalDeviceMemoryProperties {
 }
 
 pub struct Context {
-    pub(crate) instance: Instance,
-    pub(crate) physical_device: vk::PhysicalDevice,
-    pub(crate) physical_device_properties: vk::PhysicalDeviceProperties,
-    pub(crate) physical_device_memory_properties: vk::PhysicalDeviceMemoryProperties,
-    pub(crate) queue_family_index: u32,
-    pub(crate) queue_family_properties: vk::QueueFamilyProperties,
-    pub(crate) queue: vk::Queue,
-    pub(crate) device: Device,
+    pub instance: Instance,
+    pub physical_device: vk::PhysicalDevice,
+    pub physical_device_properties: vk::PhysicalDeviceProperties,
+    pub physical_device_memory_properties: vk::PhysicalDeviceMemoryProperties,
+    pub queue_family_index: u32,
+    pub queue_family_properties: vk::QueueFamilyProperties,
+    pub queue: vk::Queue,
+    pub device: Device,
 }
 
+pub type SharedContext = Rc<Context>;
+
 impl Context {
-    pub fn new() -> Self {
+    pub fn new() -> SharedContext {
         let version = vk::Version::default();
         let instance = {
             let loader = Loader::new().unwrap();
@@ -98,7 +101,7 @@ impl Context {
 
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
-        Self {
+        SharedContext::new(Self {
             instance,
             physical_device,
             physical_device_properties,
@@ -107,7 +110,7 @@ impl Context {
             queue_family_properties,
             queue,
             device,
-        }
+        })
     }
 }
 

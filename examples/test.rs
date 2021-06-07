@@ -8,7 +8,6 @@ use std::{
     fs::File,
     io::{BufReader, BufWriter, Read},
     path::Path,
-    sync::Arc,
 };
 
 fn read_be_u32(reader: &mut impl Read) -> u32 {
@@ -45,7 +44,7 @@ fn load_labels(path: impl AsRef<Path>) -> ArrayOld {
 }
 
 fn main() {
-    let _ctx = Arc::new(Context::new());
+    let _env = Environment::new();
 
     let g = GraphBuilder::new();
 

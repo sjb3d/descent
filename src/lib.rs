@@ -1,7 +1,9 @@
 pub mod array;
 pub mod builder;
-pub mod context;
-mod heap;
-pub mod prelude;
+mod device;
+pub mod environment;
+pub mod prelude {
+    pub use crate::{builder::*, environment::*, shape::*};
+}
 pub mod schedule;
 pub mod shape;

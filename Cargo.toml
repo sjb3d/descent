@@ -10,7 +10,8 @@ arrayvec = "0.7"
 matrixmultiply = "0.3"
 rand = "0.8"
 petgraph = "0.5"
-spark = { git = "https://github.com/sjb3d/spark/" }
+#spark = { git = "https://github.com/sjb3d/spark/" }
+spark = { path = "../spark/spark" }
 shaderc = "0.7"
 slotmap = "1.0"
 

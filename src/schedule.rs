@@ -383,7 +383,6 @@ impl Schedule {
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
 
-        let mut next_input_index = 0;
         for node_index in kernel.members.iter().cloned() {
             let mut args = [String::new(), String::new()];
             for edge_ref in self.graph.edges_directed(node_index, Incoming) {
