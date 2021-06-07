@@ -44,7 +44,8 @@ fn load_labels(path: impl AsRef<Path>) -> ArrayOld {
 }
 
 fn main() {
-    let _env = Environment::new();
+    let mut env = Environment::new();
+    env.test();
 
     let g = GraphBuilder::new();
 

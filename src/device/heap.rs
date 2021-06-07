@@ -1,18 +1,14 @@
-use slotmap::SlotMap;
+use slotmap::{Key, SlotMap};
 use std::fmt::Debug;
 
-slotmap::new_key_type! {
-    pub struct BlockId;
-}
-
 #[derive(Debug, Clone, Copy)]
-struct BlockListNode {
-    prev_id: BlockId,
-    next_id: BlockId,
+struct BlockListNode<K: Key> {
+    prev_id: K,
+    next_id: K,
 }
 
-impl BlockListNode {
-    fn new(id: BlockId) -> Self {
+impl<K: Key> BlockListNode<K> {
+    fn new(id: K) -> Self {
         Self {
             prev_id: id,
             next_id: id,
@@ -53,45 +49,60 @@ impl Range {
     }
 }
 
-pub trait ArenaId: Debug + Clone + Copy + PartialEq + Eq {}
+pub trait Tag: Debug + Clone + Copy + PartialEq + Eq {}
 
 #[derive(Debug, Clone, Copy)]
-struct Block<A: ArenaId> {
-    arena: A,
+struct Block<K: Key, T: Tag> {
+    tag: T,
     range: Range,
-    arena_node: BlockListNode,
-    free_node: Option<BlockListNode>,
+    tag_node: BlockListNode<K>,
+    free_node: Option<BlockListNode<K>>,
 }
 
-impl<A: ArenaId> Block<A> {
-    fn new(id: BlockId, arena: A, range: Range) -> Self {
+impl<K: Key, T: Tag> Block<K, T> {
+    fn new(id: K, tag: T, range: Range) -> Self {
         Self {
-            arena,
+            tag,
             range,
-            arena_node: BlockListNode::new(id),
+            tag_node: BlockListNode::new(id),
             free_node: None,
         }
     }
 
-    fn can_append(&self, other: &Block<A>) -> bool {
-        self.arena == other.arena && self.range.end == other.range.begin
+    fn can_append(&self, other: &Block<K, T>) -> bool {
+        self.tag == other.tag && self.range.end == other.range.begin
     }
 }
 
-type BlockSlotMap<A> = SlotMap<BlockId, Block<A>>;
+type BlockSlotMap<K, T> = SlotMap<K, Block<K, T>>;
 
-#[derive(Debug, Default)]
-pub struct Heap<A: ArenaId> {
-    blocks: BlockSlotMap<A>,
-    free_lists: Vec<Option<BlockId>>,
+pub struct HeapAlloc<K: Key, T: Tag> {
+    pub id: K,
+    pub tag: T,
+    pub offset: usize,
 }
 
-impl<A: ArenaId> Heap<A> {
+#[derive(Debug)]
+pub struct Heap<K: Key, T: Tag> {
+    blocks: BlockSlotMap<K, T>,
+    free_lists: Vec<Option<K>>,
+}
+
+impl<K: Key, T: Tag> Default for Heap<K, T> {
+    fn default() -> Self {
+        Self {
+            blocks: BlockSlotMap::with_key(),
+            free_lists: Vec::new(),
+        }
+    }
+}
+
+impl<K: Key, T: Tag> Heap<K, T> {
     fn free_list_index(size: usize) -> usize {
         (0usize.leading_zeros() - size.leading_zeros()) as usize
     }
 
-    pub fn extend_with(&mut self, arena: A, size: usize) {
+    pub fn extend_with(&mut self, tag: T, size: usize) {
         let free_list_index = Self::free_list_index(size);
 
         while free_list_index >= self.free_lists.len() {
@@ -100,14 +111,14 @@ impl<A: ArenaId> Heap<A> {
 
         let id = self
             .blocks
-            .insert_with_key(|key| Block::new(key, arena, Range::new(size)));
+            .insert_with_key(|key| Block::new(key, tag, Range::new(size)));
         Self::register_free_block(&mut self.blocks, self.free_lists.as_mut_slice(), id);
     }
 
     fn register_free_block(
-        blocks: &mut BlockSlotMap<A>,
-        free_lists: &mut [Option<BlockId>],
-        alloc_id: BlockId,
+        blocks: &mut BlockSlotMap<K, T>,
+        free_lists: &mut [Option<K>],
+        alloc_id: K,
     ) {
         let size = {
             let block = &blocks[alloc_id];
@@ -136,9 +147,9 @@ impl<A: ArenaId> Heap<A> {
     }
 
     fn unregister_free_block(
-        blocks: &mut BlockSlotMap<A>,
-        free_lists: &mut [Option<BlockId>],
-        free_id: BlockId,
+        blocks: &mut BlockSlotMap<K, T>,
+        free_lists: &mut [Option<K>],
+        free_id: K,
     ) {
         let (size, BlockListNode { prev_id, next_id }) = {
             let block = &blocks[free_id];
@@ -160,42 +171,42 @@ impl<A: ArenaId> Heap<A> {
         blocks[free_id].free_node = None;
     }
 
-    fn truncate_block(blocks: &mut BlockSlotMap<A>, orig_id: BlockId, new_size: usize) -> BlockId {
+    fn truncate_block(blocks: &mut BlockSlotMap<K, T>, orig_id: K, new_size: usize) -> K {
         let (next_id, new_id) = {
             let orig_block = &mut blocks[orig_id];
-            let next_id = orig_block.arena_node.next_id;
-            let arena = orig_block.arena;
+            let next_id = orig_block.tag_node.next_id;
+            let tag = orig_block.tag;
             let range = orig_block.range.truncate(new_size);
-            let new_id = blocks.insert_with_key(|key| Block::new(key, arena, range));
+            let new_id = blocks.insert_with_key(|key| Block::new(key, tag, range));
             (next_id, new_id)
         };
 
         if orig_id == next_id {
             let [orig, new] = blocks.get_disjoint_mut([orig_id, new_id]).unwrap();
-            orig.arena_node = BlockListNode::new(new_id);
-            new.arena_node = BlockListNode::new(orig_id);
+            orig.tag_node = BlockListNode::new(new_id);
+            new.tag_node = BlockListNode::new(orig_id);
         } else {
             let prev_id = orig_id;
             let [prev, new, next] = blocks.get_disjoint_mut([prev_id, new_id, next_id]).unwrap();
-            prev.arena_node.next_id = new_id;
-            new.arena_node = BlockListNode { prev_id, next_id };
-            next.arena_node.prev_id = new_id;
+            prev.tag_node.next_id = new_id;
+            new.tag_node = BlockListNode { prev_id, next_id };
+            next.tag_node.prev_id = new_id;
         }
 
         new_id
     }
 
-    fn append_block(blocks: &mut BlockSlotMap<A>, orig_id: BlockId, append_id: BlockId) {
+    fn append_block(blocks: &mut BlockSlotMap<K, T>, orig_id: K, append_id: K) {
         let [orig_block, append_block] = blocks.get_disjoint_mut([orig_id, append_id]).unwrap();
         orig_block.range.append(append_block.range);
 
-        let next_id = append_block.arena_node.next_id;
+        let next_id = append_block.tag_node.next_id;
         if orig_id == next_id {
-            orig_block.arena_node = BlockListNode::new(orig_id);
+            orig_block.tag_node = BlockListNode::new(orig_id);
         } else {
             let [orig_block, next_block] = blocks.get_disjoint_mut([orig_id, next_id]).unwrap();
-            orig_block.arena_node.next_id = next_id;
-            next_block.arena_node.prev_id = orig_id;
+            orig_block.tag_node.next_id = next_id;
+            next_block.tag_node.prev_id = orig_id;
         }
 
         blocks.remove(append_id).unwrap();
@@ -224,20 +235,25 @@ impl<A: ArenaId> Heap<A> {
         }
     }
 
-    pub fn alloc(&mut self, size: usize, align: usize) -> Option<(BlockId, usize)> {
+    pub fn alloc(&mut self, size: usize, align: usize) -> Option<HeapAlloc<K, T>> {
         let blocks = &mut self.blocks;
         let free_lists = self.free_lists.as_mut_slice();
 
         let align_mask = align - 1;
         let start_free_list_index = Self::free_list_index(size);
-        for first_block_id in free_lists[start_free_list_index..]
+        for first_block_id in free_lists
+            .get(start_free_list_index..)?
             .iter()
             .cloned()
             .filter_map(|id| id)
         {
             let mut block_id = first_block_id;
             loop {
-                let block_range = blocks[block_id].range;
+                let Block {
+                    range: block_range,
+                    tag: block_tag,
+                    ..
+                } = blocks[block_id];
                 let aligned_begin = (block_range.begin + align_mask) & !align_mask;
                 let aligned_end = aligned_begin + size;
                 if aligned_end <= block_range.end {
@@ -255,7 +271,11 @@ impl<A: ArenaId> Heap<A> {
                         let unused_id = Self::truncate_block(blocks, block_id, size);
                         Self::register_free_block(blocks, free_lists, unused_id);
                     }
-                    return Some((block_id, aligned_begin));
+                    return Some(HeapAlloc {
+                        id: block_id,
+                        tag: block_tag,
+                        offset: aligned_begin,
+                    });
                 }
                 block_id = blocks[block_id].free_node.unwrap().next_id;
                 if block_id == first_block_id {
@@ -266,28 +286,28 @@ impl<A: ArenaId> Heap<A> {
         None
     }
 
-    pub fn free(&mut self, block_id: BlockId) {
+    pub fn free(&mut self, id: K) {
         let blocks = &mut self.blocks;
         let free_lists = self.free_lists.as_mut_slice();
 
-        let block = &blocks[block_id];
+        let block = &blocks[id];
         assert!(block.free_node.is_none());
-        let next_id = block.arena_node.next_id;
+        let next_id = block.tag_node.next_id;
         let next = &blocks[next_id];
         if next.free_node.is_some() && block.can_append(next) {
             Self::unregister_free_block(blocks, free_lists, next_id);
-            Self::append_block(blocks, block_id, next_id);
+            Self::append_block(blocks, id, next_id);
         }
 
-        let block = &blocks[block_id];
-        let prev_id = block.arena_node.prev_id;
+        let block = &blocks[id];
+        let prev_id = block.tag_node.prev_id;
         let prev = &blocks[prev_id];
         if prev.free_node.is_some() && prev.can_append(block) {
             Self::unregister_free_block(blocks, free_lists, prev_id);
-            Self::append_block(blocks, prev_id, block_id);
+            Self::append_block(blocks, prev_id, id);
             Self::register_free_block(blocks, free_lists, prev_id);
         } else {
-            Self::register_free_block(blocks, free_lists, block_id);
+            Self::register_free_block(blocks, free_lists, id);
         }
     }
 }
@@ -296,24 +316,27 @@ impl<A: ArenaId> Heap<A> {
 mod tests {
     use super::*;
 
-    impl ArenaId for usize {}
+    slotmap::new_key_type! {
+        struct Id;
+    }
+    impl Tag for usize {}
 
     #[test]
     fn heap_test() {
         let mut heap = Heap::default();
         heap.extend_with(0usize, 1000);
 
-        let (ai, _) = heap.alloc(1000, 4).unwrap();
+        let ai: Id = heap.alloc(1000, 4).unwrap().id;
         heap.free(ai);
 
-        let (ai, _) = heap.alloc(500, 4).unwrap();
+        let ai = heap.alloc(500, 4).unwrap().id;
         heap.print_state();
-        let (bi, _) = heap.alloc(500, 4).unwrap();
+        let bi = heap.alloc(500, 4).unwrap().id;
         heap.print_state();
         heap.free(ai);
         heap.print_state();
-        let (ci, _) = heap.alloc(250, 2).unwrap();
-        let (di, _) = heap.alloc(250, 2).unwrap();
+        let ci = heap.alloc(250, 2).unwrap().id;
+        let di = heap.alloc(250, 2).unwrap().id;
         heap.print_state();
         heap.free(bi);
         heap.print_state();
@@ -322,7 +345,7 @@ mod tests {
         heap.free(di);
         heap.print_state();
 
-        let (ei, _) = heap.alloc(1000, 4).unwrap();
+        let ei = heap.alloc(1000, 4).unwrap().id;
         heap.free(ei);
     }
 }

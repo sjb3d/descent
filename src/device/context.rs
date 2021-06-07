@@ -112,6 +112,25 @@ impl Context {
             device,
         })
     }
+
+    pub fn get_memory_type_index(
+        &self,
+        type_filter: u32,
+        property_flags: vk::MemoryPropertyFlags,
+    ) -> Option<u32> {
+        for (i, mt) in self
+            .physical_device_memory_properties
+            .types()
+            .iter()
+            .enumerate()
+        {
+            let i = i as u32;
+            if (type_filter & (1 << i)) != 0 && mt.property_flags.contains(property_flags) {
+                return Some(i);
+            }
+        }
+        None
+    }
 }
 
 impl Drop for Context {
