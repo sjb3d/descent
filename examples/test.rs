@@ -50,13 +50,13 @@ fn main() {
     let g = GraphBuilder::new();
 
     let m = 1000;
-    let x = g.variable([m, 28 * 28], "x");
-    let y = g.variable([m, 1], "y");
+    let x = g.input([m, 28 * 28], "x");
+    let y = g.input([m, 1], "y");
 
     // linear layer (no activation)
     g.next_colour();
-    let w = g.variable([28 * 28, 10], "w");
-    let b = g.variable([10], "b");
+    let w = g.input([28 * 28, 10], "w");
+    let b = g.input([10], "b");
     let z = (x.matmul(w) + b).with_name("z");
     let mut dz = g.accumulator(z.shape()).with_name("dz");
     let dw = x.transpose().matmul(dz).with_name("dw");
@@ -79,11 +79,11 @@ fn main() {
     // gradient descent step
     g.next_colour();
     let alpha = 0.1;
-    let w = w - alpha * dw;
-    let b = b - alpha * db;
+    let new_w = w - alpha * dw;
+    let new_b = b - alpha * db;
 
     // make a schedule to compute the outputs
-    let schedule = g.build(&[mean_loss, w, b]);
+    let schedule = g.build(&[mean_loss, new_w, new_b]);
 
     let mut f = BufWriter::new(File::create("debug.dot").unwrap());
     schedule.write_dot(&mut f).unwrap();

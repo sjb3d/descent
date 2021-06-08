@@ -1,5 +1,6 @@
 use slotmap::{Key, SlotMap};
 use std::fmt::Debug;
+use trait_set::trait_set;
 
 #[derive(Debug, Clone, Copy)]
 struct BlockListNode<K: Key> {
@@ -49,14 +50,16 @@ impl Range {
     }
 }
 
-pub trait Tag: Debug + Clone + Copy + PartialEq + Eq {}
+trait_set! {
+    pub trait Tag = Debug + Clone + Copy + PartialEq + Eq;
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Block<K: Key, T: Tag> {
     tag: T,
     range: Range,
-    tag_node: BlockListNode<K>,
-    free_node: Option<BlockListNode<K>>,
+    tag_node: BlockListNode<K>, // linked list of blocks with this tag
+    free_node: Option<BlockListNode<K>>, // linked list of similarly sized free blocks
 }
 
 impl<K: Key, T: Tag> Block<K, T> {
@@ -70,7 +73,8 @@ impl<K: Key, T: Tag> Block<K, T> {
     }
 
     fn can_append(&self, other: &Block<K, T>) -> bool {
-        self.tag == other.tag && self.range.end == other.range.begin
+        assert_eq!(self.tag, other.tag);
+        self.range.end == other.range.begin
     }
 
     fn tag(&self) -> (T, usize) {

@@ -14,6 +14,7 @@ petgraph = "0.5"
 spark = { path = "../spark/spark" }
 shaderc = "0.7"
 slotmap = "1.0"
+trait-set = "0.2"
 
 [dev-dependencies]
 rand_chacha = "0.3"

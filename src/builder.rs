@@ -173,10 +173,10 @@ impl GraphBuilder {
         })
     }
 
-    pub fn variable(&self, shape: impl Into<Shape>, name: impl Into<String>) -> Array {
+    pub fn input(&self, shape: impl Into<Shape>, name: impl Into<String>) -> Array {
         self.with_data(|data| {
             Array {
-                index: data.new_node(shape, Op::Variable, &[]),
+                index: data.new_node(shape, Op::Input, &[]),
                 builder: self,
             }
             .with_name(name)

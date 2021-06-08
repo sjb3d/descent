@@ -9,8 +9,6 @@ slotmap::new_key_type! {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ChunkIndex(usize);
 
-impl Tag for ChunkIndex {}
-
 struct Chunk {
     device_memory: vk::DeviceMemory,
     buffer: vk::Buffer,
@@ -23,6 +21,8 @@ pub struct BufferHeap {
 }
 
 impl BufferHeap {
+    const CHUNK_SIZE: usize = 256 * 1024 * 1024;
+
     pub fn new(context: &SharedContext) -> Self {
         Self {
             context: SharedContext::clone(context),
@@ -31,14 +31,8 @@ impl BufferHeap {
         }
     }
 
-    fn extend_heap_by(&mut self, min_size: usize) {
-        let chunk_size = (self
-            .context
-            .physical_device_properties
-            .limits
-            .max_storage_buffer_range as usize)
-            .min(256 * 1024 * 1024)
-            .max(min_size);
+    fn extend_heap_by_at_least(&mut self, capacity: usize) {
+        let chunk_size = Self::CHUNK_SIZE.max(capacity);
         let device = &self.context.device;
         let buffer = {
             let buffer_create_info = vk::BufferCreateInfo {
@@ -84,7 +78,7 @@ impl BufferHeap {
         match self.heap.alloc(size, align) {
             Some(alloc) => Some(alloc),
             None => {
-                self.extend_heap_by(size);
+                self.extend_heap_by_at_least(size);
                 self.heap.alloc(size, align)
             }
         }
