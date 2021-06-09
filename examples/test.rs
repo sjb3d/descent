@@ -45,8 +45,7 @@ fn load_labels(path: impl AsRef<Path>) -> ArrayOld {
 
 fn softmax_cross_entropy_loss<'builder>(
     z: Tensor<'builder>,
-    y: Tensor<'builder>,
-    m: usize,
+    y: Tensor<'builder>
 ) -> Array<'builder> {
     let (z, dz) = (z.value(), z.grad());
     let y = y.value();
@@ -55,15 +54,14 @@ fn softmax_cross_entropy_loss<'builder>(
     let t = (z - z.reduce_max(-1)).exp();
     let p = t / t.reduce_sum(-1);
 
-    // cross entropy loss (mean over batch)
+    // cross entropy loss
     let h = y.one_hot(10);
     let loss = -(h * p.log()).reduce_sum(-1); // TODO: pick element of p using value of y
 
     // backprop (softmax with cross entropy directly)
-    dz.accumulate((p - h) / (m as f32));
+    dz.accumulate(p - h);
 
-    // return mean loss
-    (loss.reduce_sum(0) / (m as f32)).with_name("loss")
+    loss
 }
 
 fn main() {
@@ -89,11 +87,12 @@ fn main() {
 
     // loss function
     g.next_colour();
-    let mean_loss = softmax_cross_entropy_loss(z, y, m);
+    let loss = softmax_cross_entropy_loss(z, y);
+    let mean_loss = (loss.reduce_sum(0) / (m as f32)).with_name("loss");
 
     // gradient descent step
     g.next_colour();
-    let alpha = 0.1;
+    let alpha = 0.1/(m as f32);
     let new_w = w.value() - alpha * w.grad();
     let new_b = b.value() - alpha * b.grad();
 
