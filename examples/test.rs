@@ -45,7 +45,7 @@ fn load_labels(path: impl AsRef<Path>) -> ArrayOld {
 
 fn softmax_cross_entropy_loss<'builder>(
     z: Tensor<'builder>,
-    y: Tensor<'builder>
+    y: Tensor<'builder>,
 ) -> Array<'builder> {
     let (z, dz) = (z.value(), z.grad());
     let y = y.value();
@@ -88,16 +88,19 @@ fn main() {
     // loss function
     g.next_colour();
     let loss = softmax_cross_entropy_loss(z, y);
-    let mean_loss = (loss.reduce_sum(0) / (m as f32)).with_name("loss");
+
+    // keep track of mean loss
+    let mean_loss_var = env.variable([1], "loss");
+    g.output(&mean_loss_var, loss.reduce_sum(0) / (m as f32));
 
     // gradient descent step
     g.next_colour();
-    let alpha = 0.1/(m as f32);
-    let new_w = w.value() - alpha * w.grad();
-    let new_b = b.value() - alpha * b.grad();
+    let alpha = 0.1 / (m as f32);
+    g.output(&w_var, w.value() - alpha * w.grad());
+    g.output(&b_var, b.value() - alpha * b.grad());
 
     // make a schedule to compute the outputs
-    let schedule = g.build(&[mean_loss, new_w, new_b]);
+    let schedule = g.build();
 
     let mut f = BufWriter::new(File::create("debug.dot").unwrap());
     schedule.write_dot(&mut f).unwrap();

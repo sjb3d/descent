@@ -38,6 +38,7 @@ pub(crate) enum PerElementOp {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Op {
     Input { variable_id: VariableId },
+    Output { variable_id: VariableId },
     Literal(f32),
     PerElement(PerElementOp),
     MatMul,
@@ -99,7 +100,12 @@ pub struct Schedule {
 }
 
 impl Schedule {
-    pub(crate) fn new(graph: Graph, roots: Vec<NodeIndex>) -> Self {
+    pub(crate) fn new(graph: Graph) -> Self {
+        let roots = graph
+            .node_indices()
+            .filter(|&node_index| matches!(graph[node_index].op, Op::Output { .. }))
+            .collect();
+
         let mut graph = Self {
             graph,
             roots,

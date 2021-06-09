@@ -313,6 +313,20 @@ impl GraphBuilder {
         }
     }
 
+    pub fn output(&self, variable: &Variable, rhs: Array) {
+        let shape = rhs.shape();
+        assert_eq!(variable.shape(), shape);
+        self.with_data(|data| {
+            data.new_node(
+                shape,
+                Op::Output {
+                    variable_id: variable.id,
+                },
+                &[rhs.index],
+            )
+        });
+    }
+
     pub fn accumulator(&self, shape: impl Into<Shape>) -> Array {
         self.with_data(|data| Array {
             index: data.new_node(shape, Op::Accumulate, &[]),
@@ -326,10 +340,7 @@ impl GraphBuilder {
         })
     }
 
-    pub fn build(&self, roots: &[Array]) -> Schedule {
-        self.with_data(|data| {
-            let roots: Vec<_> = roots.iter().map(|a| a.index).collect();
-            Schedule::new(data.graph.clone(), roots)
-        })
+    pub fn build(&self) -> Schedule {
+        self.with_data(|data| Schedule::new(data.graph.clone()))
     }
 }
