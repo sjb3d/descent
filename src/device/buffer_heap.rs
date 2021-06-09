@@ -1,5 +1,4 @@
 use super::{heap::*, prelude::*};
-use crate::device::buffer_heap;
 use spark::vk;
 
 slotmap::new_key_type! {

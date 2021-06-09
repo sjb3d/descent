@@ -37,7 +37,7 @@ pub(crate) enum PerElementOp {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Op {
-    Input, // TODO: reference to storage
+    Input { variable_id: VariableId },
     Literal(f32),
     PerElement(PerElementOp),
     MatMul,

@@ -30,6 +30,26 @@ impl Shape {
         Shape(rev.iter().cloned().rev().collect())
     }
 
+    pub(crate) fn reduce_axis_onto_per_element(&self, rhs: &Shape) -> Option<isize> {
+        if self.0.len() > rhs.0.len() {
+            return Some(0);
+        }
+        assert_eq!(self.0.len(), rhs.0.len());
+        for (i, (a, b)) in self
+            .0
+            .iter()
+            .cloned()
+            .zip(rhs.0.iter().cloned())
+            .enumerate()
+        {
+            if a != b {
+                assert_eq!(b, 1);
+                return Some(i as isize);
+            }
+        }
+        None
+    }
+
     pub(crate) fn matrix_multiply(&self, rhs: &Shape) -> Self {
         assert_eq!(rhs.0.len(), 2);
         let (a_last, a_prefix) = self.0.split_last().unwrap();

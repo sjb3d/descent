@@ -1,10 +1,17 @@
 use crate::{prelude::*, schedule::*};
 use petgraph::Incoming;
-use std::{cell::UnsafeCell, ops};
+use std::{cell::RefCell, ops};
 
 #[derive(Clone, Copy)]
 pub struct Array<'builder> {
     index: NodeIndex,
+    builder: &'builder GraphBuilder,
+}
+
+#[derive(Clone, Copy)]
+pub struct Tensor<'builder> {
+    value: NodeIndex,
+    grad: NodeIndex,
     builder: &'builder GraphBuilder,
 }
 
@@ -65,6 +72,14 @@ impl<'builder> Array<'builder> {
         self.reduce_op(ReduceOp::Sum, axis)
     }
 
+    fn reduce_onto_per_element(self, shape: &Shape) -> Self {
+        let mut output = self;
+        while let Some(axis) = output.shape().reduce_axis_onto_per_element(shape) {
+            output = output.reduce_sum(axis);
+        }
+        output
+    }
+
     pub fn exp(self) -> Self {
         self.per_element_unary_op(PerElementOp::Exp)
     }
@@ -99,7 +114,7 @@ impl<'builder> Array<'builder> {
             .with_data(|data| data.graph[self.index].shape.clone())
     }
 
-    pub fn accumulate(&mut self, src: Array) {
+    pub fn accumulate(&self, src: Array) {
         self.builder.with_data(|data| {
             assert_eq!(data.graph[self.index].op, Op::Accumulate);
             assert_eq!(data.graph[self.index].shape, data.graph[src.index].shape);
@@ -112,94 +127,6 @@ impl<'builder> Array<'builder> {
                     transpose: false,
                 },
             );
-        })
-    }
-}
-
-struct GraphBuilderData {
-    graph: Graph,
-    colour: usize,
-}
-
-impl GraphBuilderData {
-    fn new_node(&mut self, shape: impl Into<Shape>, op: Op, inputs: &[NodeIndex]) -> NodeIndex {
-        let node_index = self.graph.add_node(Node {
-            name: None,
-            colour: self.colour,
-            shape: shape.into(),
-            op,
-            kernel_index: None,
-        });
-        for (index, input) in inputs.iter().cloned().enumerate() {
-            self.graph.add_edge(
-                input,
-                node_index,
-                Edge {
-                    arg: index,
-                    transpose: false,
-                },
-            );
-        }
-        node_index
-    }
-}
-
-pub struct GraphBuilder {
-    data: UnsafeCell<GraphBuilderData>,
-}
-
-impl GraphBuilder {
-    pub fn new() -> Self {
-        Self {
-            data: UnsafeCell::new(GraphBuilderData {
-                graph: Default::default(),
-                colour: 0,
-            }),
-        }
-    }
-
-    fn with_data<F, T>(&self, f: F) -> T
-    where
-        F: FnOnce(&mut GraphBuilderData) -> T,
-    {
-        let data = unsafe { self.data.get().as_mut().unwrap() };
-        f(data)
-    }
-
-    fn literal(&self, value: f32) -> Array {
-        self.with_data(|data| Array {
-            index: data.new_node([1], Op::Literal(value), &[]),
-            builder: self,
-        })
-    }
-
-    pub fn input(&self, shape: impl Into<Shape>, name: impl Into<String>) -> Array {
-        self.with_data(|data| {
-            Array {
-                index: data.new_node(shape, Op::Input, &[]),
-                builder: self,
-            }
-            .with_name(name)
-        })
-    }
-
-    pub fn accumulator(&self, shape: impl Into<Shape>) -> Array {
-        self.with_data(|data| Array {
-            index: data.new_node(shape, Op::Accumulate, &[]),
-            builder: self,
-        })
-    }
-
-    pub fn next_colour(&self) {
-        self.with_data(|data| {
-            data.colour += 1;
-        })
-    }
-
-    pub fn build(&self, roots: &[Array]) -> Schedule {
-        self.with_data(|data| {
-            let roots: Vec<_> = roots.iter().map(|a| a.index).collect();
-            Schedule::new(data.graph.clone(), roots)
         })
     }
 }
@@ -247,5 +174,162 @@ impl<'builder> ops::Div<f32> for Array<'builder> {
     fn div(self, rhs: f32) -> Self::Output {
         let rhs = self.builder.literal(rhs);
         self.per_element_binary_op(rhs, PerElementOp::Div)
+    }
+}
+
+impl<'builder> Tensor<'builder> {
+    pub fn new(value: Array<'builder>, grad: Array<'builder>) -> Self {
+        Self {
+            value: value.index,
+            grad: grad.index,
+            builder: value.builder,
+        }
+    }
+
+    pub fn value(self) -> Array<'builder> {
+        Array {
+            index: self.value,
+            builder: self.builder,
+        }
+    }
+
+    pub fn grad(self) -> Array<'builder> {
+        Array {
+            index: self.grad,
+            builder: self.builder,
+        }
+    }
+
+    pub fn matmul(self, rhs: Tensor) -> Self {
+        let a = self.value();
+        let da = self.grad();
+        let b = rhs.value();
+        let db = rhs.grad();
+
+        let c = a.matmul(b);
+        let dc = self.builder.accumulator(c.shape());
+
+        da.accumulate(dc.matmul(b.transpose()));
+        db.accumulate(a.transpose().matmul(dc));
+
+        Self::new(c, dc)
+    }
+}
+
+impl<'builder> ops::Add for Tensor<'builder> {
+    type Output = Tensor<'builder>;
+    fn add(self, rhs: Tensor<'builder>) -> Self::Output {
+        let a = self.value();
+        let da = self.grad();
+        let b = rhs.value();
+        let db = rhs.grad();
+
+        let c = a + b;
+        let dc = self.builder.accumulator(c.shape());
+
+        da.accumulate(dc.reduce_onto_per_element(&a.shape()));
+        db.accumulate(dc.reduce_onto_per_element(&b.shape()));
+
+        Self::new(c, dc)
+    }
+}
+
+struct GraphBuilderData {
+    graph: Graph,
+    colour: usize,
+}
+
+impl GraphBuilderData {
+    fn new_node(&mut self, shape: impl Into<Shape>, op: Op, inputs: &[NodeIndex]) -> NodeIndex {
+        let node_index = self.graph.add_node(Node {
+            name: None,
+            colour: self.colour,
+            shape: shape.into(),
+            op,
+            kernel_index: None,
+        });
+        for (index, input) in inputs.iter().cloned().enumerate() {
+            self.graph.add_edge(
+                input,
+                node_index,
+                Edge {
+                    arg: index,
+                    transpose: false,
+                },
+            );
+        }
+        node_index
+    }
+}
+
+pub struct GraphBuilder {
+    data: RefCell<GraphBuilderData>,
+}
+
+impl GraphBuilder {
+    pub fn new() -> Self {
+        Self {
+            data: RefCell::new(GraphBuilderData {
+                graph: Default::default(),
+                colour: 0,
+            }),
+        }
+    }
+
+    fn with_data<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce(&mut GraphBuilderData) -> T,
+    {
+        let mut data = self.data.borrow_mut();
+        f(&mut data)
+    }
+
+    fn literal(&self, value: f32) -> Array {
+        self.with_data(|data| Array {
+            index: data.new_node([1], Op::Literal(value), &[]),
+            builder: self,
+        })
+    }
+
+    pub fn input(&self, variable: &Variable) -> Tensor {
+        let shape = variable.shape();
+        let value = self
+            .with_data(|data| Array {
+                index: data.new_node(
+                    shape.clone(),
+                    Op::Input {
+                        variable_id: variable.id,
+                    },
+                    &[],
+                ),
+                builder: self,
+            })
+            .with_name(variable.name());
+        let grad = self.accumulator(shape);
+        Tensor {
+            value: value.index,
+            grad: grad.index,
+            builder: self,
+        }
+    }
+
+    pub fn accumulator(&self, shape: impl Into<Shape>) -> Array {
+        self.with_data(|data| Array {
+            index: data.new_node(shape, Op::Accumulate, &[]),
+            builder: self,
+        })
+    }
+
+    pub fn next_colour(&self) {
+        self.with_data(|data| {
+            data.colour += 1;
+        })
+    }
+
+    pub fn build(&self, roots: &[Array]) -> Schedule {
+        self.with_data(|data| {
+            let roots: Vec<_> = roots.iter().map(|a| a.index).collect();
+            Schedule::new(data.graph.clone(), roots)
+        })
     }
 }

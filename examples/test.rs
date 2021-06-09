@@ -43,44 +43,59 @@ fn load_labels(path: impl AsRef<Path>) -> ArrayOld {
     ArrayOld::from_elements(elements, [label_count, 1])
 }
 
-fn main() {
-    let mut env = Environment::new();
-    env.test();
-
-    let g = GraphBuilder::new();
-
-    let m = 1000;
-    let x = g.input([m, 28 * 28], "x");
-    let y = g.input([m, 1], "y");
-
-    // linear layer (no activation)
-    g.next_colour();
-    let w = g.input([28 * 28, 10], "w");
-    let b = g.input([10], "b");
-    let z = (x.matmul(w) + b).with_name("z");
-    let mut dz = g.accumulator(z.shape()).with_name("dz");
-    let dw = x.transpose().matmul(dz).with_name("dw");
-    let _dx = dz.matmul(w.transpose()).with_name("dx");
-    let db = dz.reduce_sum(0).with_name("db");
+fn softmax_cross_entropy_loss<'builder>(
+    z: Tensor<'builder>,
+    y: Tensor<'builder>,
+    m: usize,
+) -> Array<'builder> {
+    let (z, dz) = (z.value(), z.grad());
+    let y = y.value();
 
     // softmax
-    g.next_colour();
     let t = (z - z.reduce_max(-1)).exp();
     let p = t / t.reduce_sum(-1);
 
     // cross entropy loss (mean over batch)
     let h = y.one_hot(10);
     let loss = -(h * p.log()).reduce_sum(-1); // TODO: pick element of p using value of y
-    let mean_loss = (loss.reduce_sum(0) / (m as f32)).with_name("loss");
 
     // backprop (softmax with cross entropy directly)
     dz.accumulate((p - h) / (m as f32));
 
+    // return mean loss
+    (loss.reduce_sum(0) / (m as f32)).with_name("loss")
+}
+
+fn main() {
+    let mut env = Environment::new();
+    env.test();
+
+    let m = 1000;
+    let x_var = env.variable([m, 28 * 28], "x");
+    let y_var = env.variable([m, 1], "y");
+
+    let g = GraphBuilder::new();
+    let x = g.input(&x_var);
+    let y = g.input(&y_var);
+
+    // linear layer (no activation)
+    g.next_colour();
+    let w_var = env.variable([28 * 28, 10], "w");
+    let b_var = env.variable([10], "b");
+
+    let w = g.input(&w_var);
+    let b = g.input(&b_var);
+    let z = x.matmul(w) + b;
+
+    // loss function
+    g.next_colour();
+    let mean_loss = softmax_cross_entropy_loss(z, y, m);
+
     // gradient descent step
     g.next_colour();
     let alpha = 0.1;
-    let new_w = w - alpha * dw;
-    let new_b = b - alpha * db;
+    let new_w = w.value() - alpha * w.grad();
+    let new_b = b.value() - alpha * b.grad();
 
     // make a schedule to compute the outputs
     let schedule = g.build(&[mean_loss, new_w, new_b]);

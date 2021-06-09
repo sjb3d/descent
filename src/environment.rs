@@ -1,9 +1,39 @@
-use crate::device::prelude::*;
+use crate::{device::prelude::*, prelude::*};
+use slotmap::SlotMap;
+use std::{cell::RefCell, rc::Rc};
+
+slotmap::new_key_type! {
+    pub struct VariableId;
+}
+
+type SharedVariables = Rc<RefCell<SlotMap<VariableId, VariableData>>>;
+
+pub struct Variable {
+    pub(crate) id: VariableId,
+    variables: SharedVariables,
+}
+
+impl Variable {
+    pub(crate) fn name(&self) -> String {
+        self.variables.borrow().get(self.id).unwrap().name.clone()
+    }
+
+    pub(crate) fn shape(&self) -> Shape {
+        self.variables.borrow().get(self.id).unwrap().shape.clone()
+    }
+}
+
+struct VariableData {
+    shape: Shape,
+    name: String,
+    buffer_id: Option<BufferId>,
+}
 
 pub struct Environment {
     context: SharedContext,
     command_buffer_pool: CommandBufferPool,
     buffer_heap: BufferHeap,
+    variables: SharedVariables,
 }
 
 impl Environment {
@@ -15,6 +45,21 @@ impl Environment {
             context,
             command_buffer_pool,
             buffer_heap,
+            variables: Rc::new(RefCell::new(SlotMap::with_key())),
+        }
+    }
+
+    pub fn variable(&mut self, shape: impl Into<Shape>, name: impl Into<String>) -> Variable {
+        let shape = shape.into();
+        let name = name.into();
+        let id = self.variables.borrow_mut().insert(VariableData {
+            shape: shape.clone(),
+            name,
+            buffer_id: None,
+        });
+        Variable {
+            id,
+            variables: SharedVariables::clone(&self.variables),
         }
     }
 
