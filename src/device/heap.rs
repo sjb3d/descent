@@ -317,7 +317,6 @@ mod tests {
     slotmap::new_key_type! {
         struct Id;
     }
-    impl Tag for usize {}
 
     #[test]
     fn heap_test() {

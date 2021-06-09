@@ -314,9 +314,9 @@ impl GraphBuilder {
     }
 
     pub fn output(&self, variable: &Variable, rhs: Array) {
-        let shape = rhs.shape();
-        assert_eq!(variable.shape(), shape);
         self.with_data(|data| {
+            let shape = data.graph[rhs.index].shape.clone();
+            assert_eq!(variable.shape(), shape);
             data.new_node(
                 shape,
                 Op::Output {
