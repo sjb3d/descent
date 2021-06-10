@@ -241,13 +241,8 @@ struct GraphBuilderData {
 
 impl GraphBuilderData {
     fn new_node(&mut self, shape: impl Into<Shape>, op: Op, inputs: &[NodeIndex]) -> NodeIndex {
-        let node_index = self.graph.add_node(Node {
-            name: None,
-            colour: self.colour,
-            shape: shape.into(),
-            op,
-            kernel_index: None,
-        });
+        let shape = shape.into();
+        let node_index = self.graph.add_node(Node::new(self.colour, shape, op));
         for (index, input) in inputs.iter().cloned().enumerate() {
             self.graph.add_edge(
                 input,

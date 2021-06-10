@@ -1,11 +1,13 @@
 use crate::prelude::*;
+use arrayvec::ArrayVec;
 use petgraph::{
-    prelude::{NodeIndex as NodeIndexBase, *},
+    prelude::{EdgeIndex as EdgeIndexBase, NodeIndex as NodeIndexBase, *},
     visit::{
         IntoEdgeReferences, IntoEdgesDirected, IntoNeighborsDirected, IntoNodeReferences, NodeRef,
         VisitMap, Visitable,
     },
 };
+use slotmap::{Key, SlotMap};
 use std::{
     collections::{hash_map::DefaultHasher, HashMap},
     fmt,
@@ -16,6 +18,7 @@ use std::{
 
 pub(crate) type Graph = StableDiGraph<Node, Edge, usize>;
 pub(crate) type NodeIndex = NodeIndexBase<usize>;
+pub(crate) type EdgeIndex = EdgeIndexBase<usize>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReduceOp {
@@ -60,34 +63,58 @@ enum PerElementKernelOp {
     Literal(f32),
     Unary {
         op: UnaryOp,
-        src_index: usize,
+        arg0_index: usize,
     },
     Binary {
         op: BinaryOp,
-        src1_index: usize,
-        src2_index: usize,
+        arg0_index: usize,
+        arg1_index: usize,
     },
 }
 
 #[derive(Debug)]
-struct PerElementKernelDesc {
-    shape: Shape,
+struct PerElementKernel {
     inputs: Vec<Shape>,
+    output_shape: Shape,
     outputs: Vec<usize>,
     ops: Vec<PerElementKernelOp>,
 }
 
 #[derive(Debug)]
-enum KernelDesc {
-    PerElement(PerElementKernelDesc),
+struct ReduceKernel {
+    input_shape: Shape,
+    reduce_op: ReduceOp,
+    axis: isize,
 }
 
 #[derive(Debug)]
-pub(crate) struct Kernel {
-    desc: KernelDesc,
+struct MatMulKernelInput {
+    shape: Shape,
+    transpose: bool,
+}
+
+#[derive(Debug)]
+struct MatMulKernel {
+    inputs: [MatMulKernelInput; 2],
+}
+
+#[derive(Debug)]
+enum Kernel {
+    PerElement(PerElementKernel),
+    Reduce(ReduceKernel),
+    MatMul(MatMulKernel),
+}
+
+#[derive(Debug)]
+pub(crate) struct Cluster {
+    kernel: Kernel,
     inputs: Vec<NodeIndex>,
     members: Vec<NodeIndex>,
     outputs: Vec<NodeIndex>,
+}
+
+slotmap::new_key_type! {
+    pub(crate) struct ClusterId;
 }
 
 #[derive(Debug, Clone)]
@@ -96,7 +123,19 @@ pub(crate) struct Node {
     pub(crate) colour: usize,
     pub(crate) shape: Shape,
     pub(crate) op: Op,
-    pub(crate) kernel_index: Option<usize>,
+    pub(crate) cluster_id: ClusterId,
+}
+
+impl Node {
+    pub(crate) fn new(colour: usize, shape: Shape, op: Op) -> Self {
+        Self {
+            name: None,
+            colour,
+            shape,
+            op,
+            cluster_id: ClusterId::null(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -121,11 +160,21 @@ impl Edge {
     }
 }
 
+fn get_arg_edges<const N: usize>(graph: &Graph, node_index: NodeIndex) -> [EdgeIndex; N] {
+    let mut edge_indices = [EdgeIndex::end(); N];
+    for edge_ref in graph.edges_directed(node_index, Incoming) {
+        let edge = edge_ref.weight();
+        assert_eq!(edge_indices[edge.arg], EdgeIndex::end());
+        edge_indices[edge.arg] = edge_ref.id();
+    }
+    edge_indices
+}
+
 pub struct Schedule {
     graph: Graph,
     roots: Vec<NodeIndex>,
     ordering: Vec<NodeIndex>,
-    kernels: Vec<Kernel>,
+    clusters: SlotMap<ClusterId, Cluster>,
 }
 
 impl Schedule {
@@ -139,7 +188,7 @@ impl Schedule {
             graph,
             roots,
             ordering: Vec::new(),
-            kernels: Vec::new(),
+            clusters: SlotMap::with_key(),
         };
 
         graph.rebuild_ordering();
@@ -267,16 +316,16 @@ impl Schedule {
         // first gather per-element nodes into kernels
         for first_node_index in self.ordering.iter().cloned() {
             let first_node = &self.graph[first_node_index];
-            if first_node.kernel_index.is_some() {
+            if !first_node.cluster_id.is_null() {
                 continue;
             }
             if matches!(first_node.op, Op::Unary(_) | Op::Binary(_)) {
-                let kernel_index = Some(self.kernels.len());
                 let shape = first_node.shape.clone();
-                self.kernels.push(Kernel {
-                    desc: KernelDesc::PerElement(PerElementKernelDesc {
-                        shape: shape.clone(),
+
+                let cluster_id = self.clusters.insert(Cluster {
+                    kernel: Kernel::PerElement(PerElementKernel {
                         inputs: Vec::new(),
+                        output_shape: shape.clone(),
                         outputs: Vec::new(),
                         ops: Vec::new(),
                     }),
@@ -284,14 +333,14 @@ impl Schedule {
                     members: Vec::new(),
                     outputs: Vec::new(),
                 });
-                self.graph[first_node_index].kernel_index = kernel_index;
+                self.graph[first_node_index].cluster_id = cluster_id;
 
                 'outer: loop {
                     'inner: for other_node_index in self.ordering.iter().cloned() {
                         let other_node = &self.graph[other_node_index];
 
-                        // check this node has no kernel and matches shape
-                        let can_include = other_node.kernel_index.is_none()
+                        // check this node has no cluster and matches shape
+                        let can_include = other_node.cluster_id.is_null()
                             && match other_node.op {
                                 Op::Unary(_) | Op::Binary(_) => other_node.shape == shape,
                                 Op::Literal(_) => true,
@@ -301,14 +350,14 @@ impl Schedule {
                             continue 'inner;
                         }
 
-                        // skip this node if any edges with kernel nodes are transpose
+                        // skip this node if any edges with cluster nodes are transpose
                         let mut has_kernel_neighbor = false;
                         if self
                             .graph
                             .edges_directed(other_node_index, Incoming)
                             .filter(|edge_ref| {
                                 assert_eq!(edge_ref.target(), other_node_index);
-                                self.graph[edge_ref.source()].kernel_index == kernel_index
+                                self.graph[edge_ref.source()].cluster_id == cluster_id
                             })
                             .inspect(|_| has_kernel_neighbor = true)
                             .any(|edge_ref| edge_ref.weight().transpose)
@@ -320,7 +369,7 @@ impl Schedule {
                             .edges_directed(other_node_index, Outgoing)
                             .filter(|edge_ref| {
                                 assert_eq!(edge_ref.source(), other_node_index);
-                                self.graph[edge_ref.target()].kernel_index == kernel_index
+                                self.graph[edge_ref.target()].cluster_id == cluster_id
                             })
                             .inspect(|_| has_kernel_neighbor = true)
                             .any(|edge_ref| edge_ref.weight().transpose)
@@ -328,38 +377,34 @@ impl Schedule {
                             continue 'inner;
                         }
 
-                        // placing this node in the kernel needs to save a load
+                        // placing this node in the cluster needs to save a load
                         // TODO: also check for sibling nodes?
                         if !has_kernel_neighbor {
                             continue 'inner;
                         }
 
-                        // check uses of this node don't re-enter this kernel
+                        // check uses of this node don't re-enter this cluster
                         if self.any_successor(&[other_node_index], |node_index| {
-                            self.graph[node_index].kernel_index.is_none()
+                            self.graph[node_index].cluster_id.is_null()
                                 && self.graph.neighbors_directed(node_index, Outgoing).any(
-                                    |node_index| {
-                                        self.graph[node_index].kernel_index == kernel_index
-                                    },
+                                    |node_index| self.graph[node_index].cluster_id == cluster_id,
                                 )
                         }) {
                             continue 'inner;
                         }
 
-                        // check inputs of this node don't re-enter this kernel
+                        // check inputs of this node don't re-enter this cluster
                         if self.any_predecessor(&[other_node_index], |node_index| {
-                            self.graph[node_index].kernel_index.is_none()
+                            self.graph[node_index].cluster_id.is_null()
                                 && self.graph.neighbors_directed(node_index, Incoming).any(
-                                    |node_index| {
-                                        self.graph[node_index].kernel_index == kernel_index
-                                    },
+                                    |node_index| self.graph[node_index].cluster_id == cluster_id,
                                 )
                         }) {
                             continue 'inner;
                         }
 
-                        // ok to merge, restart search with new kernel
-                        self.graph[other_node_index].kernel_index = kernel_index;
+                        // ok to merge, restart search with new cluster
+                        self.graph[other_node_index].cluster_id = cluster_id;
                         continue 'outer;
                     }
                     break 'outer;
@@ -367,23 +412,27 @@ impl Schedule {
             }
         }
 
-        // build per-element kernel members in usage order
+        // build per-element cluster members in usage order
         for node_index in self.ordering.iter().cloned() {
-            if let Some(kernel_index) = self.graph[node_index].kernel_index {
-                self.kernels[kernel_index].members.push(node_index);
+            if let Some(cluster) = self.clusters.get_mut(self.graph[node_index].cluster_id) {
+                cluster.members.push(node_index);
             }
         }
 
-        // finish the per-element kernel descriptions
-        for (kernel_index, kernel) in self.kernels.iter_mut().enumerate() {
-            let kernel_inputs = &mut kernel.inputs;
-            let kernel_desc = match &mut kernel.desc {
-                KernelDesc::PerElement(desc) => desc,
+        // finally build the per-element clusters and kernels
+        for (cluster_id, cluster) in self.clusters.iter_mut() {
+            let mut kernel = match &mut cluster.kernel {
+                Kernel::PerElement(kernel) => kernel,
+                _ => unreachable!(),
             };
+            let members = &cluster.members;
+            let mut inputs = &mut cluster.inputs;
+            let mut outputs = &mut cluster.outputs;
+
             let mut node_op_index = HashMap::new();
 
             let graph = &self.graph;
-            for node_index in kernel.members.iter().cloned() {
+            for node_index in members.iter().cloned() {
                 // gather the arguments (loading as necessary)
                 let mut args = [None, None];
                 for edge_ref in graph.edges_directed(node_index, Incoming) {
@@ -393,29 +442,27 @@ impl Schedule {
                     args[edge.arg] =
                         Some(*node_op_index.entry(source_node_index).or_insert_with(|| {
                             let source_node = &graph[source_node_index];
-                            assert_ne!(source_node.kernel_index, Some(kernel_index));
-                            let input_index = kernel_desc.inputs.len();
-                            kernel_desc.inputs.push(source_node.shape.clone());
-                            kernel_inputs.push(source_node_index);
-                            let op_index = kernel_desc.ops.len();
-                            kernel_desc
-                                .ops
-                                .push(PerElementKernelOp::Load { input_index });
+                            assert_ne!(source_node.cluster_id, cluster_id);
+                            let input_index = kernel.inputs.len();
+                            kernel.inputs.push(source_node.shape.clone());
+                            inputs.push(source_node_index);
+                            let op_index = kernel.ops.len();
+                            kernel.ops.push(PerElementKernelOp::Load { input_index });
                             op_index
                         }));
                 }
 
                 // emit the op
-                let op_index = kernel_desc.ops.len();
-                kernel_desc.ops.push(match graph[node_index].op {
+                let op_index = kernel.ops.len();
+                kernel.ops.push(match graph[node_index].op {
                     Op::Unary(op) => PerElementKernelOp::Unary {
                         op,
-                        src_index: args[0].unwrap(),
+                        arg0_index: args[0].unwrap(),
                     },
                     Op::Binary(op) => PerElementKernelOp::Binary {
                         op,
-                        src1_index: args[0].unwrap(),
-                        src2_index: args[1].unwrap(),
+                        arg0_index: args[0].unwrap(),
+                        arg1_index: args[1].unwrap(),
                     },
                     Op::Literal(value) => PerElementKernelOp::Literal(value),
                     _ => panic!("unexpected op type"),
@@ -425,23 +472,79 @@ impl Schedule {
                 // store the result if necessary
                 if graph
                     .neighbors_directed(node_index, Outgoing)
-                    .any(|other_index| graph[other_index].kernel_index != Some(kernel_index))
+                    .any(|other_index| graph[other_index].cluster_id != cluster_id)
                 {
-                    kernel_desc.outputs.push(op_index);
-                    kernel.outputs.push(node_index);
+                    kernel.outputs.push(op_index);
+                    outputs.push(node_index);
+                }
+            }
+        }
+
+        // add reduction and matrix multiply kernels
+        for node_index in self.ordering.iter().cloned() {
+            let node = &self.graph[node_index];
+            if node.cluster_id.is_null() {
+                match node.op {
+                    Op::Reduce { reduce_op, axis } => {
+                        let [edge_index] = get_arg_edges(&self.graph, node_index);
+                        let input_node_index = {
+                            assert_eq!(self.graph[edge_index].transpose, false);
+                            self.graph.edge_endpoints(edge_index).unwrap().0
+                        };
+                        self.graph[node_index].cluster_id = self.clusters.insert(Cluster {
+                            kernel: Kernel::Reduce(ReduceKernel {
+                                input_shape: self.graph[input_node_index].shape.clone(),
+                                reduce_op,
+                                axis,
+                            }),
+                            inputs: vec![input_node_index],
+                            members: vec![node_index],
+                            outputs: vec![node_index],
+                        });
+                    }
+                    Op::MatMul => {
+                        let edge_indices: [_; 2] = get_arg_edges(&self.graph, node_index);
+                        let input_node_indices = edge_indices
+                            .iter()
+                            .map(|&edge_index| self.graph.edge_endpoints(edge_index).unwrap().0)
+                            .collect::<ArrayVec<_, 2>>()
+                            .into_inner()
+                            .unwrap();
+                        let kernel_inputs = edge_indices
+                            .iter()
+                            .zip(input_node_indices.iter())
+                            .map(|(&edge_index, &node_index)| MatMulKernelInput {
+                                shape: self.graph[node_index].shape.clone(),
+                                transpose: self.graph[edge_index].transpose,
+                            })
+                            .collect::<ArrayVec<_, 2>>()
+                            .into_inner()
+                            .unwrap();
+                        self.graph[node_index].cluster_id = self.clusters.insert(Cluster {
+                            kernel: Kernel::MatMul(MatMulKernel {
+                                inputs: kernel_inputs,
+                            }),
+                            inputs: input_node_indices.iter().cloned().collect(),
+                            members: vec![node_index],
+                            outputs: vec![node_index],
+                        });
+                    }
+                    Op::Input { .. } | Op::Output { .. } => {}
+                    _ => panic!("unexpected op without a kernel"),
                 }
             }
         }
     }
 
-    fn generate_kernel_source(&self, kernel_index: usize) -> Result<String, fmt::Error> {
+    fn generate_kernel_source(&self, cluster_index: usize) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
 
         writeln!(w, "#version 460 core")?;
 
-        let desc = match &self.kernels[kernel_index].desc {
-            KernelDesc::PerElement(desc) => desc,
+        let desc = match &self.clusters.iter().nth(cluster_index).unwrap().1.kernel {
+            Kernel::PerElement(desc) => desc,
+            _ => panic!("not yet supported"),
         };
 
         let mut binding_index = 0;
@@ -475,25 +578,25 @@ impl Schedule {
                     write!(w, "input{}[gl_GlobalInvocationID.x]", input_index)?
                 }
                 PerElementKernelOp::Literal(value) => write!(w, "{:#?}", value)?,
-                PerElementKernelOp::Unary { op, src_index } => match op {
-                    UnaryOp::Neg => write!(w, "-{}", src_index)?,
-                    UnaryOp::Exp => write!(w, "exp({})", src_index)?,
-                    UnaryOp::Log => write!(w, "log({})", src_index)?,
+                PerElementKernelOp::Unary { op, arg0_index } => match op {
+                    UnaryOp::Neg => write!(w, "-{}", arg0_index)?,
+                    UnaryOp::Exp => write!(w, "exp({})", arg0_index)?,
+                    UnaryOp::Log => write!(w, "log({})", arg0_index)?,
                     UnaryOp::OneHot => write!(
                         w,
                         "(gl_GlobalInvocationID.x == uint({})) ? 1.0 : 0.0",
-                        src_index
+                        arg0_index
                     )?,
                 },
                 PerElementKernelOp::Binary {
                     op,
-                    src1_index,
-                    src2_index,
+                    arg0_index,
+                    arg1_index,
                 } => match op {
-                    BinaryOp::Add => write!(w, "{} + {}", src1_index, src2_index)?,
-                    BinaryOp::Sub => write!(w, "{} - {}", src1_index, src2_index)?,
-                    BinaryOp::Mul => write!(w, "{} * {}", src1_index, src2_index)?,
-                    BinaryOp::Div => write!(w, "{} / {}", src1_index, src2_index)?,
+                    BinaryOp::Add => write!(w, "{} + {}", arg0_index, arg1_index)?,
+                    BinaryOp::Sub => write!(w, "{} - {}", arg0_index, arg1_index)?,
+                    BinaryOp::Mul => write!(w, "{} * {}", arg0_index, arg1_index)?,
+                    BinaryOp::Div => write!(w, "{} / {}", arg0_index, arg1_index)?,
                 },
             }
             writeln!(w, ";")?;
@@ -512,8 +615,8 @@ impl Schedule {
         Ok(src)
     }
 
-    pub fn compile_kernel_source(&self, kernel_index: usize) -> Option<String> {
-        let source = self.generate_kernel_source(kernel_index).unwrap();
+    pub fn compile_kernel_source(&self, cluster_index: usize) -> Option<String> {
+        let source = self.generate_kernel_source(cluster_index).unwrap();
         println!("{}", source);
 
         let mut compiler = shaderc::Compiler::new().unwrap();
@@ -541,14 +644,17 @@ impl Schedule {
 
     pub fn write_dot(&self, w: &mut impl io::Write) -> io::Result<()> {
         writeln!(w, "digraph G {{")?;
-        for kernel in iter::once(None).chain((0..self.kernels.len()).map(Some)) {
-            if let Some(index) = kernel {
+        for (index, cluster_id) in iter::once(ClusterId::null())
+            .chain(self.clusters.iter().map(|(id, _)| id))
+            .enumerate()
+        {
+            if !cluster_id.is_null() {
                 writeln!(w, "subgraph cluster{} {{ style=filled;", index)?;
             }
             for node_ref in self
                 .graph
                 .node_references()
-                .filter(|node_ref| node_ref.weight().kernel_index == kernel)
+                .filter(|node_ref| node_ref.weight().cluster_id == cluster_id)
             {
                 let node = node_ref.weight();
                 let mut hasher = DefaultHasher::new();
@@ -566,7 +672,7 @@ impl Schedule {
                 }
                 writeln!(w, "{}\"];", node.shape)?;
             }
-            if kernel.is_some() {
+            if !cluster_id.is_null() {
                 writeln!(w, "}}")?;
             }
         }
