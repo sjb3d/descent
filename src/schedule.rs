@@ -52,25 +52,12 @@ pub(crate) enum Op {
     Accumulate, // accumulates grad from backprop
 }
 
-impl Op {
-    fn is_per_element(&self) -> bool {
-        matches!(self, Self::Unary(_) | Self::Binary(_))
-    }
-
-    fn is_literal(&self) -> bool {
-        matches!(self, Self::Literal(_))
-    }
-}
-
 #[derive(Debug)]
 enum PerElementKernelOp {
     Load {
         input_index: usize,
     },
-    Store {
-        src_index: usize,
-        output_index: usize,
-    },
+    Literal(f32),
     Unary {
         op: UnaryOp,
         src_index: usize,
@@ -86,13 +73,16 @@ enum PerElementKernelOp {
 struct PerElementKernelDesc {
     shape: Shape,
     inputs: Vec<Shape>,
+    outputs: Vec<usize>,
     ops: Vec<PerElementKernelOp>,
 }
 
+#[derive(Debug)]
 enum KernelDesc {
     PerElement(PerElementKernelDesc),
 }
 
+#[derive(Debug)]
 pub(crate) struct Kernel {
     desc: KernelDesc,
     inputs: Vec<NodeIndex>,
@@ -274,15 +264,20 @@ impl Schedule {
     }
 
     fn build_kernels(&mut self) {
+        // first gather per-element nodes into kernels
         for first_node_index in self.ordering.iter().cloned() {
             let first_node = &self.graph[first_node_index];
-            if first_node.op.is_per_element() && first_node.kernel_index.is_none() {
+            if first_node.kernel_index.is_some() {
+                continue;
+            }
+            if matches!(first_node.op, Op::Unary(_) | Op::Binary(_)) {
                 let kernel_index = Some(self.kernels.len());
-                let kernel_shape = first_node.shape.clone();
+                let shape = first_node.shape.clone();
                 self.kernels.push(Kernel {
                     desc: KernelDesc::PerElement(PerElementKernelDesc {
-                        shape: kernel_shape.clone(),
+                        shape: shape.clone(),
                         inputs: Vec::new(),
+                        outputs: Vec::new(),
                         ops: Vec::new(),
                     }),
                     inputs: Vec::new(),
@@ -297,9 +292,11 @@ impl Schedule {
 
                         // check this node has no kernel and matches shape
                         let can_include = other_node.kernel_index.is_none()
-                            && ((other_node.op.is_per_element()
-                                && other_node.shape == kernel_shape)
-                                || other_node.op.is_literal());
+                            && match other_node.op {
+                                Op::Unary(_) | Op::Binary(_) => other_node.shape == shape,
+                                Op::Literal(_) => true,
+                                _ => false,
+                            };
                         if !can_include {
                             continue 'inner;
                         }
@@ -369,31 +366,68 @@ impl Schedule {
                 }
             }
         }
+
+        // build per-element kernel members in usage order
         for node_index in self.ordering.iter().cloned() {
             if let Some(kernel_index) = self.graph[node_index].kernel_index {
                 self.kernels[kernel_index].members.push(node_index);
             }
         }
+
+        // finish the per-element kernel descriptions
         for (kernel_index, kernel) in self.kernels.iter_mut().enumerate() {
-            let mut markers = self.graph.visit_map();
+            let kernel_inputs = &mut kernel.inputs;
+            let kernel_desc = match &mut kernel.desc {
+                KernelDesc::PerElement(desc) => desc,
+            };
+            let mut node_op_index = HashMap::new();
+
             let graph = &self.graph;
             for node_index in kernel.members.iter().cloned() {
-                for input_node_index in
-                    graph
-                        .neighbors_directed(node_index, Incoming)
-                        .filter(|&other_index| {
-                            let other_node = &graph[other_index];
-                            other_node.kernel_index != Some(kernel_index)
-                        })
-                {
-                    if markers.visit(input_node_index) {
-                        kernel.inputs.push(input_node_index);
-                    }
+                // gather the arguments (loading as necessary)
+                let mut args = [None, None];
+                for edge_ref in graph.edges_directed(node_index, Incoming) {
+                    let source_node_index = edge_ref.source();
+                    let edge = edge_ref.weight();
+                    assert_eq!(edge.transpose, false);
+                    args[edge.arg] =
+                        Some(*node_op_index.entry(source_node_index).or_insert_with(|| {
+                            let source_node = &graph[source_node_index];
+                            assert_ne!(source_node.kernel_index, Some(kernel_index));
+                            let input_index = kernel_desc.inputs.len();
+                            kernel_desc.inputs.push(source_node.shape.clone());
+                            kernel_inputs.push(source_node_index);
+                            let op_index = kernel_desc.ops.len();
+                            kernel_desc
+                                .ops
+                                .push(PerElementKernelOp::Load { input_index });
+                            op_index
+                        }));
                 }
+
+                // emit the op
+                let op_index = kernel_desc.ops.len();
+                kernel_desc.ops.push(match graph[node_index].op {
+                    Op::Unary(op) => PerElementKernelOp::Unary {
+                        op,
+                        src_index: args[0].unwrap(),
+                    },
+                    Op::Binary(op) => PerElementKernelOp::Binary {
+                        op,
+                        src1_index: args[0].unwrap(),
+                        src2_index: args[1].unwrap(),
+                    },
+                    Op::Literal(value) => PerElementKernelOp::Literal(value),
+                    _ => panic!("unexpected op type"),
+                });
+                node_op_index.insert(node_index, op_index);
+
+                // store the result if necessary
                 if graph
                     .neighbors_directed(node_index, Outgoing)
                     .any(|other_index| graph[other_index].kernel_index != Some(kernel_index))
                 {
+                    kernel_desc.outputs.push(op_index);
                     kernel.outputs.push(node_index);
                 }
             }
@@ -406,24 +440,27 @@ impl Schedule {
 
         writeln!(w, "#version 460 core")?;
 
+        let desc = match &self.kernels[kernel_index].desc {
+            KernelDesc::PerElement(desc) => desc,
+        };
+
         let mut binding_index = 0;
 
-        let kernel = &self.kernels[kernel_index];
-        for node_index in kernel.inputs.iter().cloned() {
+        for input_index in 0..desc.inputs.len() {
             writeln!(w, "layout(std430, set = 0, binding = {})", binding_index)?;
             writeln!(
                 w,
-                "readonly restrict buffer layout{0} {{ float input{0}[]; }};",
-                node_index.index()
+                "readonly restrict buffer input_layout{0} {{ float input{0}[]; }};",
+                input_index
             )?;
             binding_index += 1;
         }
-        for node_index in kernel.outputs.iter().cloned() {
+        for output_index in 0..desc.outputs.len() {
             writeln!(w, "layout(std430, set = 0, binding = {})", binding_index)?;
             writeln!(
                 w,
-                "writeonly restrict buffer layout{0} {{ float output{0}[]; }};",
-                node_index.index()
+                "writeonly restrict buffer output_layout{0} {{ float output{0}[]; }};",
+                output_index
             )?;
             binding_index += 1;
         }
@@ -431,53 +468,42 @@ impl Schedule {
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
 
-        for node_index in kernel.members.iter().cloned() {
-            let mut args = [String::new(), String::new()];
-            for edge_ref in self.graph.edges_directed(node_index, Incoming) {
-                let source_node_index = edge_ref.source();
-                let source_node = &self.graph[source_node_index];
-                let edge = edge_ref.weight();
-                assert!(args[edge.arg].is_empty());
-                args[edge.arg] = if source_node.kernel_index == Some(kernel_index) {
-                    format!("tmp{}", source_node_index.index())
-                } else {
-                    assert!(!edge.transpose);
-                    format!(
-                        "input{}[gl_GlobalInvocationID.x]",
-                        source_node_index.index()
-                    )
-                };
-            }
-
-            write!(w, "float tmp{} = ", node_index.index())?;
-            match self.graph[node_index].op {
-                Op::Unary(op) => match op {
-                    UnaryOp::Neg => write!(w, "-{}", args[0])?,
-                    UnaryOp::Exp => write!(w, "exp({})", args[0])?,
-                    UnaryOp::Log => write!(w, "log({})", args[0])?,
+        for (op_index, op) in desc.ops.iter().enumerate() {
+            write!(w, "float tmp{} = ", op_index)?;
+            match op {
+                PerElementKernelOp::Load { input_index } => {
+                    write!(w, "input{}[gl_GlobalInvocationID.x]", input_index)?
+                }
+                PerElementKernelOp::Literal(value) => write!(w, "{:#?}", value)?,
+                PerElementKernelOp::Unary { op, src_index } => match op {
+                    UnaryOp::Neg => write!(w, "-{}", src_index)?,
+                    UnaryOp::Exp => write!(w, "exp({})", src_index)?,
+                    UnaryOp::Log => write!(w, "log({})", src_index)?,
                     UnaryOp::OneHot => write!(
                         w,
                         "(gl_GlobalInvocationID.x == uint({})) ? 1.0 : 0.0",
-                        args[0]
+                        src_index
                     )?,
                 },
-                Op::Binary(op) => match op {
-                    BinaryOp::Add => write!(w, "{} + {}", args[0], args[1])?,
-                    BinaryOp::Sub => write!(w, "{} - {}", args[0], args[1])?,
-                    BinaryOp::Mul => write!(w, "{} * {}", args[0], args[1])?,
-                    BinaryOp::Div => write!(w, "{} / {}", args[0], args[1])?,
+                PerElementKernelOp::Binary {
+                    op,
+                    src1_index,
+                    src2_index,
+                } => match op {
+                    BinaryOp::Add => write!(w, "{} + {}", src1_index, src2_index)?,
+                    BinaryOp::Sub => write!(w, "{} - {}", src1_index, src2_index)?,
+                    BinaryOp::Mul => write!(w, "{} * {}", src1_index, src2_index)?,
+                    BinaryOp::Div => write!(w, "{} / {}", src1_index, src2_index)?,
                 },
-                Op::Literal(value) => write!(w, "{:#?}", value)?,
-                _ => unreachable!(),
             }
             writeln!(w, ";")?;
         }
 
-        for node_index in kernel.outputs.iter().cloned() {
+        for (output_index, src_index) in desc.outputs.iter().enumerate() {
             writeln!(
                 w,
-                "output{0}[gl_GlobalInvocationID.x] = tmp{0};",
-                node_index.index()
+                "output{}[gl_GlobalInvocationID.x] = tmp{};",
+                output_index, src_index
             )?;
         }
 
