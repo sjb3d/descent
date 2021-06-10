@@ -24,11 +24,15 @@ pub(crate) enum ReduceOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PerElementOp {
+pub(crate) enum BinaryOp {
     Add,
     Sub,
     Mul,
     Div,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnaryOp {
     Neg,
     Exp,
     Log,
@@ -40,22 +44,57 @@ pub(crate) enum Op {
     Input { variable_id: VariableId },
     Output { variable_id: VariableId },
     Literal(f32),
-    PerElement(PerElementOp),
+    Unary(UnaryOp),
+    Binary(BinaryOp),
     MatMul,
     Transpose,
     Reduce { reduce_op: ReduceOp, axis: isize },
     Accumulate, // accumulates grad from backprop
 }
 
-pub(crate) enum KernelType {
-    PerElement,
-    MatMul,
-    Reduce,
+impl Op {
+    fn is_per_element(&self) -> bool {
+        matches!(self, Self::Unary(_) | Self::Binary(_))
+    }
+
+    fn is_literal(&self) -> bool {
+        matches!(self, Self::Literal(_))
+    }
+}
+
+#[derive(Debug)]
+enum PerElementKernelOp {
+    Load {
+        input_index: usize,
+    },
+    Store {
+        src_index: usize,
+        output_index: usize,
+    },
+    Unary {
+        op: UnaryOp,
+        src_index: usize,
+    },
+    Binary {
+        op: BinaryOp,
+        src1_index: usize,
+        src2_index: usize,
+    },
+}
+
+#[derive(Debug)]
+struct PerElementKernelDesc {
+    shape: Shape,
+    inputs: Vec<Shape>,
+    ops: Vec<PerElementKernelOp>,
+}
+
+enum KernelDesc {
+    PerElement(PerElementKernelDesc),
 }
 
 pub(crate) struct Kernel {
-    ty: KernelType,
-    shape: Shape,
+    desc: KernelDesc,
     inputs: Vec<NodeIndex>,
     members: Vec<NodeIndex>,
     outputs: Vec<NodeIndex>,
@@ -237,16 +276,19 @@ impl Schedule {
     fn build_kernels(&mut self) {
         for first_node_index in self.ordering.iter().cloned() {
             let first_node = &self.graph[first_node_index];
-            if matches!(first_node.op, Op::PerElement(_)) && first_node.kernel_index.is_none() {
+            if first_node.op.is_per_element() && first_node.kernel_index.is_none() {
                 let kernel_index = Some(self.kernels.len());
+                let kernel_shape = first_node.shape.clone();
                 self.kernels.push(Kernel {
-                    ty: KernelType::PerElement,
-                    shape: first_node.shape.clone(),
+                    desc: KernelDesc::PerElement(PerElementKernelDesc {
+                        shape: kernel_shape.clone(),
+                        inputs: Vec::new(),
+                        ops: Vec::new(),
+                    }),
                     inputs: Vec::new(),
                     members: Vec::new(),
                     outputs: Vec::new(),
                 });
-                let kernel = self.kernels.last().unwrap();
                 self.graph[first_node_index].kernel_index = kernel_index;
 
                 'outer: loop {
@@ -254,9 +296,10 @@ impl Schedule {
                         let other_node = &self.graph[other_node_index];
 
                         // check this node has no kernel and matches shape
-                        let can_include = matches!(other_node.op, Op::PerElement(_))
-                            && other_node.kernel_index.is_none()
-                            && other_node.shape == kernel.shape;
+                        let can_include = other_node.kernel_index.is_none()
+                            && ((other_node.op.is_per_element()
+                                && other_node.shape == kernel_shape)
+                                || other_node.op.is_literal());
                         if !can_include {
                             continue 'inner;
                         }
@@ -340,8 +383,7 @@ impl Schedule {
                         .neighbors_directed(node_index, Incoming)
                         .filter(|&other_index| {
                             let other_node = &graph[other_index];
-                            !matches!(other_node.op, Op::Literal(_))
-                                && other_node.kernel_index != Some(kernel_index)
+                            other_node.kernel_index != Some(kernel_index)
                         })
                 {
                     if markers.visit(input_node_index) {
@@ -398,8 +440,6 @@ impl Schedule {
                 assert!(args[edge.arg].is_empty());
                 args[edge.arg] = if source_node.kernel_index == Some(kernel_index) {
                     format!("tmp{}", source_node_index.index())
-                } else if let Op::Literal(value) = source_node.op {
-                    format!("{:#?}", value)
                 } else {
                     assert!(!edge.transpose);
                     format!(
@@ -410,23 +450,25 @@ impl Schedule {
             }
 
             write!(w, "float tmp{} = ", node_index.index())?;
-            if let Op::PerElement(per_element_op) = self.graph[node_index].op {
-                match per_element_op {
-                    PerElementOp::Add => write!(w, "{} + {}", args[0], args[1])?,
-                    PerElementOp::Sub => write!(w, "{} - {}", args[0], args[1])?,
-                    PerElementOp::Mul => write!(w, "{} * {}", args[0], args[1])?,
-                    PerElementOp::Div => write!(w, "{} / {}", args[0], args[1])?,
-                    PerElementOp::Neg => write!(w, "-{}", args[0])?,
-                    PerElementOp::Exp => write!(w, "exp({})", args[0])?,
-                    PerElementOp::Log => write!(w, "log({})", args[0])?,
-                    PerElementOp::OneHot => write!(
+            match self.graph[node_index].op {
+                Op::Unary(op) => match op {
+                    UnaryOp::Neg => write!(w, "-{}", args[0])?,
+                    UnaryOp::Exp => write!(w, "exp({})", args[0])?,
+                    UnaryOp::Log => write!(w, "log({})", args[0])?,
+                    UnaryOp::OneHot => write!(
                         w,
                         "(gl_GlobalInvocationID.x == uint({})) ? 1.0 : 0.0",
                         args[0]
                     )?,
-                }
-            } else {
-                unreachable!()
+                },
+                Op::Binary(op) => match op {
+                    BinaryOp::Add => write!(w, "{} + {}", args[0], args[1])?,
+                    BinaryOp::Sub => write!(w, "{} - {}", args[0], args[1])?,
+                    BinaryOp::Mul => write!(w, "{} * {}", args[0], args[1])?,
+                    BinaryOp::Div => write!(w, "{} / {}", args[0], args[1])?,
+                },
+                Op::Literal(value) => write!(w, "{:#?}", value)?,
+                _ => unreachable!(),
             }
             writeln!(w, ";")?;
         }

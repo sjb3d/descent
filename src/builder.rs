@@ -23,23 +23,23 @@ impl<'builder> Array<'builder> {
         self
     }
 
-    fn per_element_unary_op(self, op: PerElementOp) -> Self {
+    fn unary_op(self, op: UnaryOp) -> Self {
         self.builder.with_data(|data| {
             let shape = data.graph[self.index].shape.clone();
             Array {
-                index: data.new_node(shape, Op::PerElement(op), &[self.index]),
+                index: data.new_node(shape, Op::Unary(op), &[self.index]),
                 builder: self.builder,
             }
         })
     }
 
-    fn per_element_binary_op(self, rhs: Array, op: PerElementOp) -> Self {
+    fn binary_op(self, rhs: Array, op: BinaryOp) -> Self {
         self.builder.with_data(|data| {
             let shape = data.graph[self.index]
                 .shape
                 .per_element(&data.graph[rhs.index].shape);
             Array {
-                index: data.new_node(shape, Op::PerElement(op), &[self.index, rhs.index]),
+                index: data.new_node(shape, Op::Binary(op), &[self.index, rhs.index]),
                 builder: self.builder,
             }
         })
@@ -59,7 +59,7 @@ impl<'builder> Array<'builder> {
         self.builder.with_data(|data| {
             let shape = data.graph[self.index].shape.one_hot(count);
             Array {
-                index: data.new_node(shape, Op::PerElement(PerElementOp::OneHot), &[self.index]),
+                index: data.new_node(shape, Op::Unary(UnaryOp::OneHot), &[self.index]),
                 builder: self.builder,
             }
         })
@@ -81,10 +81,10 @@ impl<'builder> Array<'builder> {
     }
 
     pub fn exp(self) -> Self {
-        self.per_element_unary_op(PerElementOp::Exp)
+        self.unary_op(UnaryOp::Exp)
     }
     pub fn log(self) -> Self {
-        self.per_element_unary_op(PerElementOp::Log)
+        self.unary_op(UnaryOp::Log)
     }
 
     pub fn matmul(self, rhs: Array) -> Self {
@@ -134,31 +134,31 @@ impl<'builder> Array<'builder> {
 impl<'builder> ops::Add for Array<'builder> {
     type Output = Array<'builder>;
     fn add(self, rhs: Array) -> Self::Output {
-        self.per_element_binary_op(rhs, PerElementOp::Add)
+        self.binary_op(rhs, BinaryOp::Add)
     }
 }
 impl<'builder> ops::Sub for Array<'builder> {
     type Output = Array<'builder>;
     fn sub(self, rhs: Array) -> Self::Output {
-        self.per_element_binary_op(rhs, PerElementOp::Sub)
+        self.binary_op(rhs, BinaryOp::Sub)
     }
 }
 impl<'builder> ops::Mul for Array<'builder> {
     type Output = Array<'builder>;
     fn mul(self, rhs: Array) -> Self::Output {
-        self.per_element_binary_op(rhs, PerElementOp::Mul)
+        self.binary_op(rhs, BinaryOp::Mul)
     }
 }
 impl<'builder> ops::Div for Array<'builder> {
     type Output = Array<'builder>;
     fn div(self, rhs: Array) -> Self::Output {
-        self.per_element_binary_op(rhs, PerElementOp::Div)
+        self.binary_op(rhs, BinaryOp::Div)
     }
 }
 impl<'builder> ops::Neg for Array<'builder> {
     type Output = Array<'builder>;
     fn neg(self) -> Self::Output {
-        self.per_element_unary_op(PerElementOp::Neg)
+        self.unary_op(UnaryOp::Neg)
     }
 }
 
@@ -166,14 +166,14 @@ impl<'builder> ops::Mul<Array<'builder>> for f32 {
     type Output = Array<'builder>;
     fn mul(self, rhs: Array<'builder>) -> Self::Output {
         let lhs = rhs.builder.literal(self);
-        lhs.per_element_binary_op(rhs, PerElementOp::Mul)
+        lhs.binary_op(rhs, BinaryOp::Mul)
     }
 }
 impl<'builder> ops::Div<f32> for Array<'builder> {
     type Output = Array<'builder>;
     fn div(self, rhs: f32) -> Self::Output {
         let rhs = self.builder.literal(rhs);
-        self.per_element_binary_op(rhs, PerElementOp::Div)
+        self.binary_op(rhs, BinaryOp::Div)
     }
 }
 
