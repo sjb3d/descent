@@ -73,7 +73,7 @@ enum PerElementKernelOp {
 }
 
 #[derive(Debug)]
-struct PerElementKernelInput {
+struct KernelInput {
     view: View,
     shape: Shape,
 }
@@ -81,7 +81,7 @@ struct PerElementKernelInput {
 #[derive(Debug)]
 struct PerElementKernel {
     shape: Shape,
-    inputs: Vec<PerElementKernelInput>,
+    inputs: Vec<KernelInput>,
     outputs: Vec<usize>,
     ops: Vec<PerElementKernelOp>,
 }
@@ -94,14 +94,8 @@ struct ReduceKernel {
 }
 
 #[derive(Debug)]
-struct MatMulKernelInput {
-    view: View,
-    shape: Shape,
-}
-
-#[derive(Debug)]
 struct MatMulKernel {
-    inputs: [MatMulKernelInput; 2],
+    inputs: [KernelInput; 2],
 }
 
 #[derive(Debug)]
@@ -448,7 +442,7 @@ impl Schedule {
                                 op_index
                             } else {
                                 let input_index = kernel.inputs.len();
-                                kernel.inputs.push(PerElementKernelInput {
+                                kernel.inputs.push(KernelInput {
                                     shape: source_node.shape.clone(),
                                     view: edge.view.clone(),
                                 });
@@ -520,7 +514,7 @@ impl Schedule {
                         let kernel_inputs = edge_indices
                             .iter()
                             .zip(input_node_indices.iter())
-                            .map(|(&edge_index, &node_index)| MatMulKernelInput {
+                            .map(|(&edge_index, &node_index)| KernelInput {
                                 view: self.graph[edge_index].view.clone(),
                                 shape: self.graph[node_index].shape.clone(),
                             })
