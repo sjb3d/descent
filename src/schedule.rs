@@ -73,9 +73,15 @@ enum PerElementKernelOp {
 }
 
 #[derive(Debug)]
+struct PerElementKernelInput {
+    view: View,
+    shape: Shape,
+}
+
+#[derive(Debug)]
 struct PerElementKernel {
-    inputs: Vec<Shape>,
-    output_shape: Shape,
+    shape: Shape,
+    inputs: Vec<PerElementKernelInput>,
     outputs: Vec<usize>,
     ops: Vec<PerElementKernelOp>,
 }
@@ -319,8 +325,8 @@ impl Schedule {
 
                 let cluster_id = self.clusters.insert(Cluster {
                     kernel: Kernel::PerElement(PerElementKernel {
+                        shape: shape.clone(),
                         inputs: Vec::new(),
-                        output_shape: shape.clone(),
                         outputs: Vec::new(),
                         ops: Vec::new(),
                     }),
@@ -441,9 +447,11 @@ impl Schedule {
                                 kernel.ops.push(PerElementKernelOp::Literal(value));
                                 op_index
                             } else {
-                                // TODO: handle view
                                 let input_index = kernel.inputs.len();
-                                kernel.inputs.push(source_node.shape.clone());
+                                kernel.inputs.push(PerElementKernelInput {
+                                    shape: source_node.shape.clone(),
+                                    view: edge.view.clone(),
+                                });
                                 inputs.push(source_node_index);
                                 let op_index = kernel.ops.len();
                                 kernel.ops.push(PerElementKernelOp::Load { input_index });
@@ -539,7 +547,7 @@ impl Schedule {
         let mut src = String::new();
         let w = &mut src;
 
-        writeln!(w, "#version 460 core")?;
+        write!(w, "{}", include_str!("kernel_common.glsl"))?;
 
         let desc = match &self.clusters.iter().nth(cluster_index).unwrap().1.kernel {
             Kernel::PerElement(desc) => desc,
@@ -570,20 +578,40 @@ impl Schedule {
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
 
+        writeln!(w, "uint coord[{}];", desc.shape.len())?;
+        write!(w, "if (!compute_grid_coord(coord")?;
+        for &n in desc.shape.iter() {
+            write!(w, ", {}", n)?;
+        }
+        writeln!(w, ")) {{ return; }}")?;
+
         for (op_index, op) in desc.ops.iter().enumerate() {
             write!(w, "float tmp{} = ", op_index)?;
             match op {
                 PerElementKernelOp::Load { input_index } => {
-                    write!(w, "input{}[gl_GlobalInvocationID.x]", input_index)?
+                    let input = &desc.inputs[*input_index];
+                    if input.view.is_identity() {
+                        write!(w, "input{}[gl_GlobalInvocationID.x]", input_index)?
+                    } else {
+                        let params = FlatIndexParams::new(&input.shape, &input.view);
+                        write!(w, "input{}[{}", input_index, params.offset)?;
+                        for (index, scale) in params.scale.iter().cloned().enumerate() {
+                            if scale != 0 {
+                                write!(w, " + {}*coord[{}]", scale, index)?;
+                            }
+                        }
+                        write!(w, "]")?;
+                    }
                 }
                 PerElementKernelOp::Literal(value) => write!(w, "{:#?}", value)?,
                 PerElementKernelOp::Unary { op, arg0_index } => match op {
-                    UnaryOp::Neg => write!(w, "-{}", arg0_index)?,
-                    UnaryOp::Exp => write!(w, "exp({})", arg0_index)?,
-                    UnaryOp::Log => write!(w, "log({})", arg0_index)?,
+                    UnaryOp::Neg => write!(w, "-tmp{}", arg0_index)?,
+                    UnaryOp::Exp => write!(w, "exp(tmp{})", arg0_index)?,
+                    UnaryOp::Log => write!(w, "log(tmp{})", arg0_index)?,
                     UnaryOp::OneHot => write!(
                         w,
-                        "(gl_GlobalInvocationID.x == uint({})) ? 1.0 : 0.0",
+                        "(coord[{}] == uint(tmp{})) ? 1.0 : 0.0",
+                        desc.shape.len() - 1,
                         arg0_index
                     )?,
                 },
@@ -592,10 +620,10 @@ impl Schedule {
                     arg0_index,
                     arg1_index,
                 } => match op {
-                    BinaryOp::Add => write!(w, "{} + {}", arg0_index, arg1_index)?,
-                    BinaryOp::Sub => write!(w, "{} - {}", arg0_index, arg1_index)?,
-                    BinaryOp::Mul => write!(w, "{} * {}", arg0_index, arg1_index)?,
-                    BinaryOp::Div => write!(w, "{} / {}", arg0_index, arg1_index)?,
+                    BinaryOp::Add => write!(w, "tmp{} + tmp{}", arg0_index, arg1_index)?,
+                    BinaryOp::Sub => write!(w, "tmp{} - tmp{}", arg0_index, arg1_index)?,
+                    BinaryOp::Mul => write!(w, "tmp{} * tmp{}", arg0_index, arg1_index)?,
+                    BinaryOp::Div => write!(w, "tmp{} / tmp{}", arg0_index, arg1_index)?,
                 },
             }
             writeln!(w, ";")?;

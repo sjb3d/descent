@@ -122,6 +122,21 @@ impl Shape {
         v.push(count);
         Shape::new(v)
     }
+
+    fn strides(&self) -> Self {
+        let mut stride = 1;
+        let mut v: ShapeVec = self
+            .0
+            .iter()
+            .cloned()
+            .rev()
+            .map(|n| {
+                stride *= n;
+                stride
+            })
+            .collect();
+        Shape(v.iter().cloned().rev().collect())
+    }
 }
 
 impl ops::Deref for Shape {
@@ -220,6 +235,27 @@ impl View {
             .iter()
             .enumerate()
             .all(|(index, remap)| AxisRemap::new(Axis::from_index(index)) == *remap)
+    }
+}
+
+pub(crate) struct FlatIndexParams {
+    pub(crate) scale: [isize; MAX_DIM],
+    pub(crate) offset: isize,
+}
+
+impl FlatIndexParams {
+    pub(crate) fn new(shape: &Shape, view: &View) -> Self {
+        let strides = shape.strides();
+        let mut params = FlatIndexParams {
+            scale: [0; MAX_DIM],
+            offset: 0,
+        };
+        for (stride, remap) in strides.iter().cloned().zip(view.0.iter()) {
+            let index = remap.axis.index();
+            params.scale[index] += stride * remap.step;
+            params.offset += stride * remap.offset;
+        }
+        params
     }
 }
 
