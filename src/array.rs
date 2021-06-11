@@ -104,7 +104,7 @@ impl Size {
     fn split_first(&self) -> Option<(usize, Self)> {
         self.0
             .split_first()
-            .map(|(first, remain)| (*first, remain.iter().cloned().collect()))
+            .map(|(first, remain)| (*first, remain.iter().copied().collect()))
     }
 
     fn as_1d(&self) -> usize {
@@ -120,8 +120,8 @@ impl Size {
     fn from_add(a: &Size, b: &Size) -> Self {
         assert_eq!(a.dims(), b.dims());
         a.0.iter()
-            .cloned()
-            .zip(b.0.iter().cloned())
+            .copied()
+            .zip(b.0.iter().copied())
             .map(|(a, b)| a.max(b))
             .collect()
     }
@@ -168,7 +168,7 @@ impl FromIterator<usize> for Size {
 
 impl<const N: usize> From<[usize; N]> for Size {
     fn from(arr: [usize; N]) -> Self {
-        arr.iter().cloned().collect()
+        arr.iter().copied().collect()
     }
 }
 
@@ -189,7 +189,7 @@ impl Stride {
     fn split_first(&self) -> Option<(isize, Self)> {
         self.0
             .split_first()
-            .map(|(first, remain)| (*first, remain.iter().cloned().collect()))
+            .map(|(first, remain)| (*first, remain.iter().copied().collect()))
     }
 }
 

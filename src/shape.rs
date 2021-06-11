@@ -31,7 +31,7 @@ impl Shape {
     fn iter_rev_then_one<'s>(&'s self, len: usize) -> impl Iterator<Item = isize> + 's {
         self.0
             .iter()
-            .cloned()
+            .copied()
             .rev()
             .chain(iter::repeat(1))
             .take(len)
@@ -63,8 +63,8 @@ impl Shape {
         for (i, (a, b)) in self
             .0
             .iter()
-            .cloned()
-            .zip(rhs.0.iter().cloned())
+            .copied()
+            .zip(rhs.0.iter().copied())
             .enumerate()
         {
             if a != b {
@@ -88,7 +88,7 @@ impl Shape {
 
     pub(crate) fn transposed(&self) -> Self {
         assert_eq!(self.0.len(), 2);
-        Shape::new(self.0.iter().cloned().rev().collect())
+        Shape::new(self.0.iter().copied().rev().collect())
     }
 
     pub(crate) fn identity_view(&self) -> View {
@@ -105,7 +105,7 @@ impl Shape {
 
         // strip outermost dimension if reduced, otherwise keep with length 1
         if axis == 0 {
-            Shape::new(self.0.iter().cloned().skip(1).collect())
+            Shape::new(self.0.iter().copied().skip(1).collect())
         } else {
             let mut v = self.0.clone();
             v[axis] = 1;
@@ -128,14 +128,14 @@ impl Shape {
         let mut v: ShapeVec = self
             .0
             .iter()
-            .cloned()
+            .copied()
             .rev()
             .map(|n| {
                 stride *= n;
                 stride
             })
             .collect();
-        Shape(v.iter().cloned().rev().collect())
+        Shape(v.iter().copied().rev().collect())
     }
 }
 
@@ -154,7 +154,7 @@ impl fmt::Display for Shape {
 
 impl<const N: usize> From<[isize; N]> for Shape {
     fn from(s: [isize; N]) -> Self {
-        Self::new(s.iter().cloned().collect())
+        Self::new(s.iter().copied().collect())
     }
 }
 
@@ -190,7 +190,7 @@ pub(crate) struct View(ArrayVec<AxisRemap, MAX_DIM>);
 impl View {
     pub(crate) fn transposed(&self) -> Self {
         assert_eq!(self.0.len(), 2);
-        Self(self.0.iter().cloned().rev().collect())
+        Self(self.0.iter().copied().rev().collect())
     }
 
     pub(crate) fn through(&self, view: &View) -> Self {
@@ -250,7 +250,7 @@ impl FlatIndexParams {
             scale: [0; MAX_DIM],
             offset: 0,
         };
-        for (stride, remap) in strides.iter().cloned().zip(view.0.iter()) {
+        for (stride, remap) in strides.iter().copied().zip(view.0.iter()) {
             let index = remap.axis.index();
             params.scale[index] += stride * remap.step;
             params.offset += stride * remap.offset;

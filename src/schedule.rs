@@ -206,10 +206,10 @@ impl Schedule {
 
     fn eliminate_dead_code(&mut self) {
         let mut live = self.graph.visit_map();
-        for index in self.roots.iter().cloned() {
+        for index in self.roots.iter().copied() {
             live.visit(index);
         }
-        for index in self.ordering.iter().rev().cloned() {
+        for index in self.ordering.iter().rev().copied() {
             if live.is_visited(&index) {
                 for input_index in self.graph.neighbors_directed(index, Incoming) {
                     live.visit(input_index);
@@ -220,7 +220,7 @@ impl Schedule {
     }
 
     fn eliminate_accumulate_nodes(&mut self) {
-        for node_index in self.ordering.iter().cloned() {
+        for node_index in self.ordering.iter().copied() {
             if matches!(self.graph[node_index].op, Op::Accumulate) {
                 assert_eq!(self.graph.edges_directed(node_index, Incoming).count(), 1); // TODO: generate adds
                 let mut in_edges = self.graph.neighbors_directed(node_index, Incoming).detach();
@@ -245,7 +245,7 @@ impl Schedule {
     }
 
     fn eliminate_view_nodes(&mut self) {
-        for node_index in self.ordering.iter().cloned() {
+        for node_index in self.ordering.iter().copied() {
             if let Op::View(view) = &self.graph[node_index].op {
                 let view = view.clone();
                 assert_eq!(
@@ -278,7 +278,7 @@ impl Schedule {
         for &node_index in roots {
             markers.visit(node_index);
         }
-        for node_index in self.ordering.iter().cloned().rev() {
+        for node_index in self.ordering.iter().copied().rev() {
             if self
                 .graph
                 .neighbors_directed(node_index, Outgoing)
@@ -298,7 +298,7 @@ impl Schedule {
         for &node_index in roots {
             markers.visit(node_index);
         }
-        for node_index in self.ordering.iter().cloned().rev() {
+        for node_index in self.ordering.iter().copied().rev() {
             if self
                 .graph
                 .neighbors_directed(node_index, Incoming)
@@ -315,7 +315,7 @@ impl Schedule {
 
     fn build_kernels(&mut self) {
         // first gather per-element nodes into kernels
-        for first_node_index in self.ordering.iter().cloned() {
+        for first_node_index in self.ordering.iter().copied() {
             let first_node = &self.graph[first_node_index];
             if !first_node.cluster_id.is_null() {
                 continue;
@@ -337,7 +337,7 @@ impl Schedule {
                 self.graph[first_node_index].cluster_id = cluster_id;
 
                 'outer: loop {
-                    'inner: for other_node_index in self.ordering.iter().cloned() {
+                    'inner: for other_node_index in self.ordering.iter().copied() {
                         let other_node = &self.graph[other_node_index];
 
                         // check this node has no cluster and matches shape
@@ -413,7 +413,7 @@ impl Schedule {
         }
 
         // build per-element cluster members in usage order
-        for node_index in self.ordering.iter().cloned() {
+        for node_index in self.ordering.iter().copied() {
             if let Some(cluster) = self.clusters.get_mut(self.graph[node_index].cluster_id) {
                 cluster.members.push(node_index);
             }
@@ -432,7 +432,7 @@ impl Schedule {
             let mut node_op_index = HashMap::new();
 
             let graph = &self.graph;
-            for node_index in members.iter().cloned() {
+            for node_index in members.iter().copied() {
                 // gather the arguments (loading as necessary)
                 let mut args = [None, None];
                 for edge_ref in graph.edges_directed(node_index, Incoming) {
@@ -488,7 +488,7 @@ impl Schedule {
         }
 
         // add reduction and matrix multiply kernels
-        for node_index in self.ordering.iter().cloned() {
+        for node_index in self.ordering.iter().copied() {
             let node = &self.graph[node_index];
             if node.cluster_id.is_null() {
                 match node.op {
@@ -531,7 +531,7 @@ impl Schedule {
                             kernel: Kernel::MatMul(MatMulKernel {
                                 inputs: kernel_inputs,
                             }),
-                            inputs: input_node_indices.iter().cloned().collect(),
+                            inputs: input_node_indices.iter().copied().collect(),
                             members: vec![node_index],
                             outputs: vec![node_index],
                         });
@@ -595,7 +595,7 @@ impl Schedule {
                     } else {
                         let params = FlatIndexParams::new(&input.shape, &input.view);
                         write!(w, "input{}[{}", input_index, params.offset)?;
-                        for (index, scale) in params.scale.iter().cloned().enumerate() {
+                        for (index, scale) in params.scale.iter().copied().enumerate() {
                             if scale != 0 {
                                 write!(w, " + {}*coord[{}]", scale, index)?;
                             }

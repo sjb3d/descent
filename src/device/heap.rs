@@ -215,7 +215,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
     }
 
     fn print_state(&self) {
-        for (index, first_block_id) in self.free_lists.iter().cloned().enumerate() {
+        for (index, first_block_id) in self.free_lists.iter().copied().enumerate() {
             println!("free list {}:", index);
             if let Some(first_block_id) = first_block_id {
                 let mut block_id = first_block_id;
@@ -246,7 +246,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
         for first_block_id in free_lists
             .get(start_free_list_index..)?
             .iter()
-            .cloned()
+            .copied()
             .filter_map(|id| id)
         {
             let mut block_id = first_block_id;
