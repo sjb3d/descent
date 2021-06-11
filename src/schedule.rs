@@ -42,15 +42,15 @@ pub(crate) enum UnaryOp {
     OneHot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Op {
     Input { variable_id: VariableId },
     Output { variable_id: VariableId },
     Literal(f32),
+    View(View),
     Unary(UnaryOp),
     Binary(BinaryOp),
     MatMul,
-    Transpose,
     Reduce { reduce_op: ReduceOp, axis: isize },
     Accumulate, // accumulates grad from backprop
 }
@@ -89,8 +89,8 @@ struct ReduceKernel {
 
 #[derive(Debug)]
 struct MatMulKernelInput {
+    view: View,
     shape: Shape,
-    transpose: bool,
 }
 
 #[derive(Debug)]
@@ -141,23 +141,7 @@ impl Node {
 #[derive(Debug, Clone)]
 pub(crate) struct Edge {
     pub(crate) arg: usize,
-    pub(crate) transpose: bool,
-}
-
-impl Edge {
-    pub(crate) fn chain(&self, rhs: &Edge) -> Self {
-        Self {
-            arg: rhs.arg,
-            transpose: self.transpose ^ rhs.transpose,
-        }
-    }
-
-    pub(crate) fn transposed(&self) -> Self {
-        Self {
-            transpose: !self.transpose,
-            ..*self
-        }
-    }
+    pub(crate) view: View,
 }
 
 fn get_arg_edges<const N: usize>(graph: &Graph, node_index: NodeIndex) -> [EdgeIndex; N] {
@@ -195,10 +179,10 @@ impl Schedule {
         graph.eliminate_dead_code();
 
         graph.rebuild_ordering();
-        graph.eliminate_accumulate();
+        graph.eliminate_accumulate_nodes();
 
         graph.rebuild_ordering();
-        graph.eliminate_transpose();
+        graph.eliminate_view_nodes();
 
         graph.rebuild_ordering();
         graph.build_kernels();
@@ -229,7 +213,7 @@ impl Schedule {
         self.graph.retain_nodes(|_, index| live.is_visited(&index));
     }
 
-    fn eliminate_accumulate(&mut self) {
+    fn eliminate_accumulate_nodes(&mut self) {
         for node_index in self.ordering.iter().cloned() {
             if matches!(self.graph[node_index].op, Op::Accumulate) {
                 assert_eq!(self.graph.edges_directed(node_index, Incoming).count(), 1); // TODO: generate adds
@@ -237,10 +221,16 @@ impl Schedule {
                 let (in_edge_index, in_node_index) = in_edges.next(&self.graph).unwrap();
                 let mut out_edges = self.graph.neighbors_directed(node_index, Outgoing).detach();
                 while let Some((out_edge_index, out_node_index)) = out_edges.next(&self.graph) {
+                    let in_edge = &self.graph[in_edge_index];
+                    let out_edge = &self.graph[out_edge_index];
+                    assert_eq!(in_edge.arg, 0);
                     self.graph.add_edge(
                         in_node_index,
                         out_node_index,
-                        self.graph[in_edge_index].chain(&self.graph[out_edge_index]),
+                        Edge {
+                            arg: out_edge.arg,
+                            view: in_edge.view.through(&out_edge.view),
+                        },
                     );
                 }
                 self.graph.remove_node(node_index);
@@ -248,9 +238,10 @@ impl Schedule {
         }
     }
 
-    fn eliminate_transpose(&mut self) {
+    fn eliminate_view_nodes(&mut self) {
         for node_index in self.ordering.iter().cloned() {
-            if matches!(self.graph[node_index].op, Op::Transpose) {
+            if let Op::View(view) = &self.graph[node_index].op {
+                let view = view.clone();
                 assert_eq!(
                     self.graph.neighbors_directed(node_index, Incoming).count(),
                     1
@@ -259,12 +250,16 @@ impl Schedule {
                 let (in_edge_index, in_node_index) = in_edges.next(&self.graph).unwrap();
                 let mut out_edges = self.graph.neighbors_directed(node_index, Outgoing).detach();
                 while let Some((out_edge_index, out_node_index)) = out_edges.next(&self.graph) {
+                    let in_edge = &self.graph[in_edge_index];
+                    let out_edge = &self.graph[out_edge_index];
+                    assert_eq!(in_edge.arg, 0);
                     self.graph.add_edge(
                         in_node_index,
                         out_node_index,
-                        self.graph[in_edge_index]
-                            .chain(&self.graph[out_edge_index])
-                            .transposed(),
+                        Edge {
+                            arg: out_edge.arg,
+                            view: in_edge.view.through(&view).through(&out_edge.view),
+                        },
                     );
                 }
                 self.graph.remove_node(node_index);
@@ -343,14 +338,13 @@ impl Schedule {
                         let can_include = other_node.cluster_id.is_null()
                             && match other_node.op {
                                 Op::Unary(_) | Op::Binary(_) => other_node.shape == shape,
-                                Op::Literal(_) => true,
                                 _ => false,
                             };
                         if !can_include {
                             continue 'inner;
                         }
 
-                        // skip this node if any edges with cluster nodes are transpose
+                        // skip this node if any edges with cluster nodes have non-identity views
                         let mut has_kernel_neighbor = false;
                         if self
                             .graph
@@ -360,7 +354,7 @@ impl Schedule {
                                 self.graph[edge_ref.source()].cluster_id == cluster_id
                             })
                             .inspect(|_| has_kernel_neighbor = true)
-                            .any(|edge_ref| edge_ref.weight().transpose)
+                            .any(|edge_ref| !edge_ref.weight().view.is_identity())
                         {
                             continue 'inner;
                         }
@@ -372,7 +366,7 @@ impl Schedule {
                                 self.graph[edge_ref.target()].cluster_id == cluster_id
                             })
                             .inspect(|_| has_kernel_neighbor = true)
-                            .any(|edge_ref| edge_ref.weight().transpose)
+                            .any(|edge_ref| !edge_ref.weight().view.is_identity())
                         {
                             continue 'inner;
                         }
@@ -421,13 +415,13 @@ impl Schedule {
 
         // finally build the per-element clusters and kernels
         for (cluster_id, cluster) in self.clusters.iter_mut() {
-            let mut kernel = match &mut cluster.kernel {
+            let kernel = match &mut cluster.kernel {
                 Kernel::PerElement(kernel) => kernel,
                 _ => unreachable!(),
             };
             let members = &cluster.members;
-            let mut inputs = &mut cluster.inputs;
-            let mut outputs = &mut cluster.outputs;
+            let inputs = &mut cluster.inputs;
+            let outputs = &mut cluster.outputs;
 
             let mut node_op_index = HashMap::new();
 
@@ -438,17 +432,23 @@ impl Schedule {
                 for edge_ref in graph.edges_directed(node_index, Incoming) {
                     let source_node_index = edge_ref.source();
                     let edge = edge_ref.weight();
-                    assert_eq!(edge.transpose, false);
                     args[edge.arg] =
                         Some(*node_op_index.entry(source_node_index).or_insert_with(|| {
                             let source_node = &graph[source_node_index];
                             assert_ne!(source_node.cluster_id, cluster_id);
-                            let input_index = kernel.inputs.len();
-                            kernel.inputs.push(source_node.shape.clone());
-                            inputs.push(source_node_index);
-                            let op_index = kernel.ops.len();
-                            kernel.ops.push(PerElementKernelOp::Load { input_index });
-                            op_index
+                            if let Op::Literal(value) = source_node.op {
+                                let op_index = kernel.ops.len();
+                                kernel.ops.push(PerElementKernelOp::Literal(value));
+                                op_index
+                            } else {
+                                // TODO: handle view
+                                let input_index = kernel.inputs.len();
+                                kernel.inputs.push(source_node.shape.clone());
+                                inputs.push(source_node_index);
+                                let op_index = kernel.ops.len();
+                                kernel.ops.push(PerElementKernelOp::Load { input_index });
+                                op_index
+                            }
                         }));
                 }
 
@@ -464,7 +464,6 @@ impl Schedule {
                         arg0_index: args[0].unwrap(),
                         arg1_index: args[1].unwrap(),
                     },
-                    Op::Literal(value) => PerElementKernelOp::Literal(value),
                     _ => panic!("unexpected op type"),
                 });
                 node_op_index.insert(node_index, op_index);
@@ -488,7 +487,7 @@ impl Schedule {
                     Op::Reduce { reduce_op, axis } => {
                         let [edge_index] = get_arg_edges(&self.graph, node_index);
                         let input_node_index = {
-                            assert_eq!(self.graph[edge_index].transpose, false);
+                            assert!(self.graph[edge_index].view.is_identity());
                             self.graph.edge_endpoints(edge_index).unwrap().0
                         };
                         self.graph[node_index].cluster_id = self.clusters.insert(Cluster {
@@ -514,8 +513,8 @@ impl Schedule {
                             .iter()
                             .zip(input_node_indices.iter())
                             .map(|(&edge_index, &node_index)| MatMulKernelInput {
+                                view: self.graph[edge_index].view.clone(),
                                 shape: self.graph[node_index].shape.clone(),
-                                transpose: self.graph[edge_index].transpose,
                             })
                             .collect::<ArrayVec<_, 2>>()
                             .into_inner()
@@ -529,7 +528,7 @@ impl Schedule {
                             outputs: vec![node_index],
                         });
                     }
-                    Op::Input { .. } | Op::Output { .. } => {}
+                    Op::Input { .. } | Op::Output { .. } | Op::Literal(_) => {}
                     _ => panic!("unexpected op without a kernel"),
                 }
             }
@@ -683,8 +682,8 @@ impl Schedule {
                 edge_ref.source().index(),
                 edge_ref.target().index()
             )?;
-            if edge_ref.weight().transpose {
-                write!(w, " [label=\"T\"]")?;
+            if !edge_ref.weight().view.is_identity() {
+                write!(w, " [label=\"V\"]")?;
             }
             writeln!(w, ";")?;
         }

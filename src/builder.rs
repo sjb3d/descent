@@ -35,11 +35,31 @@ impl<'builder> Array<'builder> {
 
     fn binary_op(self, rhs: Array, op: BinaryOp) -> Self {
         self.builder.with_data(|data| {
-            let shape = data.graph[self.index]
-                .shape
-                .per_element(&data.graph[rhs.index].shape);
+            let lhs_shape = data.graph[self.index].shape.clone();
+            let rhs_shape = data.graph[rhs.index].shape.clone();
+            let op_shape = lhs_shape.match_with_broadcast(&rhs_shape);
+
+            let lhs = if op_shape == lhs_shape {
+                self.index
+            } else {
+                data.new_node(
+                    op_shape.clone(),
+                    Op::View(View::broadcast(&lhs_shape, &op_shape)),
+                    &[self.index],
+                )
+            };
+            let rhs = if op_shape == rhs_shape {
+                rhs.index
+            } else {
+                data.new_node(
+                    op_shape.clone(),
+                    Op::View(View::broadcast(&rhs_shape, &op_shape)),
+                    &[rhs.index],
+                )
+            };
+
             Array {
-                index: data.new_node(shape, Op::Binary(op), &[self.index, rhs.index]),
+                index: data.new_node(op_shape, Op::Binary(op), &[lhs, rhs]),
                 builder: self.builder,
             }
         })
@@ -55,7 +75,7 @@ impl<'builder> Array<'builder> {
         })
     }
 
-    pub fn one_hot(self, count: AxisLen) -> Self {
+    pub fn one_hot(self, count: isize) -> Self {
         self.builder.with_data(|data| {
             let shape = data.graph[self.index].shape.one_hot(count);
             Array {
@@ -101,9 +121,11 @@ impl<'builder> Array<'builder> {
 
     pub fn transpose(self) -> Self {
         self.builder.with_data(|data| {
-            let shape = data.graph[self.index].shape.transpose();
+            let input_shape = &data.graph[self.index].shape;
+            let view = input_shape.identity_view().transposed();
+            let output_shape = input_shape.transposed();
             Array {
-                index: data.new_node(shape, Op::Transpose, &[self.index]),
+                index: data.new_node(output_shape, Op::View(view), &[self.index]),
                 builder: self.builder,
             }
         })
@@ -124,7 +146,7 @@ impl<'builder> Array<'builder> {
                 self.index,
                 Edge {
                     arg,
-                    transpose: false,
+                    view: data.graph[src.index].shape.identity_view(),
                 },
             );
         })
@@ -249,7 +271,7 @@ impl GraphBuilderData {
                 node_index,
                 Edge {
                     arg: index,
-                    transpose: false,
+                    view: self.graph[input].shape.identity_view(),
                 },
             );
         }

@@ -1,24 +1,49 @@
 use arrayvec::ArrayVec;
-use std::{fmt, iter};
+use std::{fmt, iter, ops};
 
-pub(crate) type AxisLen = usize;
-pub(crate) type ShapeVec = ArrayVec<AxisLen, 4>;
+pub(crate) const MAX_DIM: usize = 4;
+pub(crate) type ShapeVec = ArrayVec<isize, MAX_DIM>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Axis(u8);
+
+impl Axis {
+    pub(crate) fn from_index(index: usize) -> Axis {
+        assert!(index < MAX_DIM);
+        Self(index as u8)
+    }
+
+    pub(crate) fn index(&self) -> usize {
+        self.0 as usize
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shape(ShapeVec);
 
 impl Shape {
-    pub(crate) fn iter_rev_then_one(&self, len: usize) -> impl Iterator<Item = &AxisLen> {
-        self.0.iter().rev().chain(iter::repeat(&1)).take(len)
+    pub(crate) fn new(v: ShapeVec) -> Self {
+        assert!(!v.is_empty());
+        assert!(v.iter().all(|&a| a > 0));
+        Self(v)
     }
 
-    pub(crate) fn per_element(&self, rhs: &Shape) -> Self {
+    fn iter_rev_then_one<'s>(&'s self, len: usize) -> impl Iterator<Item = isize> + 's {
+        self.0
+            .iter()
+            .cloned()
+            .rev()
+            .chain(iter::repeat(1))
+            .take(len)
+    }
+
+    pub(crate) fn match_with_broadcast(&self, rhs: &Shape) -> Self {
         // broadcast axes from 1 => n where necessary
         let len = self.0.len().max(rhs.0.len());
         let rev: ShapeVec = self
             .iter_rev_then_one(len)
             .zip(rhs.iter_rev_then_one(len))
-            .map(|(&a, &b)| match (a, b) {
+            .map(|(a, b)| match (a, b) {
                 (1, n) => n,
                 (m, 1) => m,
                 (m, n) => {
@@ -27,7 +52,7 @@ impl Shape {
                 }
             })
             .collect();
-        Shape(rev.iter().cloned().rev().collect())
+        Shape::new(rev.into_iter().rev().collect())
     }
 
     pub(crate) fn reduce_axis_onto_per_element(&self, rhs: &Shape) -> Option<isize> {
@@ -58,12 +83,20 @@ impl Shape {
         let mut v = ArrayVec::new();
         v.try_extend_from_slice(a_prefix).unwrap();
         v.try_extend_from_slice(b_suffix).unwrap();
-        Shape(v)
+        Shape::new(v)
     }
 
-    pub(crate) fn transpose(&self) -> Self {
+    pub(crate) fn transposed(&self) -> Self {
         assert_eq!(self.0.len(), 2);
-        Shape(self.0.iter().cloned().rev().collect())
+        Shape::new(self.0.iter().cloned().rev().collect())
+    }
+
+    pub(crate) fn identity_view(&self) -> View {
+        View::new(self.0.len())
+    }
+
+    pub(crate) fn axis(&self, index: isize) -> Axis {
+        Axis::from_index((index as usize).wrapping_add(if index < 0 { self.0.len() } else { 0 }))
     }
 
     pub(crate) fn reduce(&self, axis: isize) -> Self {
@@ -72,22 +105,29 @@ impl Shape {
 
         // strip outermost dimension if reduced, otherwise keep with length 1
         if axis == 0 {
-            Shape(self.0.iter().cloned().skip(1).collect())
+            Shape::new(self.0.iter().cloned().skip(1).collect())
         } else {
             let mut v = self.0.clone();
             v[axis] = 1;
-            Shape(v)
+            Shape::new(v)
         }
     }
 
-    pub(crate) fn one_hot(&self, count: AxisLen) -> Self {
+    pub(crate) fn one_hot(&self, count: isize) -> Self {
         // expand last axis (innermost dimension) from 1 to n
         let (last, prefix) = self.0.split_last().unwrap();
         assert_eq!(*last, 1);
         let mut v = ArrayVec::new();
         v.try_extend_from_slice(prefix).unwrap();
         v.push(count);
-        Shape(v)
+        Shape::new(v)
+    }
+}
+
+impl ops::Deref for Shape {
+    type Target = [isize];
+    fn deref(&self) -> &Self::Target {
+        self.0.as_slice()
     }
 }
 
@@ -97,9 +137,89 @@ impl fmt::Display for Shape {
     }
 }
 
-impl<const N: usize> From<[AxisLen; N]> for Shape {
-    fn from(s: [AxisLen; N]) -> Self {
-        Self(s.iter().cloned().collect())
+impl<const N: usize> From<[isize; N]> for Shape {
+    fn from(s: [isize; N]) -> Self {
+        Self::new(s.iter().cloned().collect())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AxisRemap {
+    axis: Axis,
+    offset: isize,
+    step: isize,
+}
+
+impl AxisRemap {
+    fn new(axis: Axis) -> Self {
+        Self {
+            axis,
+            offset: 0,
+            step: 1,
+        }
+    }
+
+    fn apply(&self, view: &View) -> Self {
+        let src = &view.0[self.axis.index()];
+        AxisRemap {
+            axis: src.axis,
+            offset: self.offset * src.step + src.offset,
+            step: self.step * src.step,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct View(ArrayVec<AxisRemap, MAX_DIM>);
+
+impl View {
+    pub(crate) fn transposed(&self) -> Self {
+        assert_eq!(self.0.len(), 2);
+        Self(self.0.iter().cloned().rev().collect())
+    }
+
+    pub(crate) fn through(&self, view: &View) -> Self {
+        Self(view.0.iter().map(|remap| remap.apply(self)).collect())
+    }
+
+    fn new(dims: usize) -> Self {
+        Self(
+            (0..dims)
+                .map(|index| AxisRemap::new(Axis::from_index(index)))
+                .collect(),
+        )
+    }
+
+    pub(crate) fn broadcast(from: &Shape, to: &Shape) -> Self {
+        let mut remap = ArrayVec::new();
+        while from.len() + remap.len() < to.len() {
+            remap.push(AxisRemap {
+                axis: Axis::from_index(0),
+                offset: 0,
+                step: 0,
+            });
+        }
+        assert_eq!(from.len() + remap.len(), to.len());
+        for (index, (&from, &to)) in from.iter().zip(to.iter().skip(remap.len())).enumerate() {
+            remap.push(AxisRemap {
+                axis: Axis::from_index(index),
+                offset: 0,
+                step: if from == to {
+                    1
+                } else {
+                    assert_eq!(from, 1);
+                    0
+                },
+            });
+        }
+        Self(remap)
+    }
+
+    pub(crate) fn is_identity(&self) -> bool {
+        self.0
+            .iter()
+            .enumerate()
+            .all(|(index, remap)| AxisRemap::new(Axis::from_index(index)) == *remap)
     }
 }
 
