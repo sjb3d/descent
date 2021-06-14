@@ -1,8 +1,8 @@
-use super::{heap::*, prelude::*};
+use super::{common::*, heap::*};
 use spark::vk;
 
 slotmap::new_key_type! {
-    pub struct BufferId;
+    pub(crate) struct BufferId;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,7 +13,7 @@ struct Chunk {
     buffer: vk::Buffer,
 }
 
-pub struct BufferHeap {
+pub(crate) struct BufferHeap {
     context: SharedContext,
     chunks: Vec<Chunk>,
     heap: Heap<BufferId, ChunkIndex>,
@@ -22,7 +22,7 @@ pub struct BufferHeap {
 impl BufferHeap {
     const CHUNK_SIZE: usize = 256 * 1024 * 1024;
 
-    pub fn new(context: &SharedContext) -> Self {
+    pub(crate) fn new(context: &SharedContext) -> Self {
         Self {
             context: SharedContext::clone(context),
             chunks: Vec::new(),
@@ -68,7 +68,7 @@ impl BufferHeap {
         self.heap.extend_with(chunk_index, chunk_size);
     }
 
-    pub fn alloc(&mut self, size: usize) -> Option<BufferId> {
+    pub(crate) fn alloc(&mut self, size: usize) -> Option<BufferId> {
         let align = self
             .context
             .physical_device_properties
@@ -83,7 +83,7 @@ impl BufferHeap {
         }
     }
 
-    pub fn free(&mut self, id: BufferId) {
+    pub(crate) fn free(&mut self, id: BufferId) {
         self.heap.free(id);
     }
 }

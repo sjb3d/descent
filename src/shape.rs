@@ -125,7 +125,7 @@ impl Shape {
 
     fn strides(&self) -> Self {
         let mut stride = 1;
-        let mut v: ShapeVec = self
+        let v: ShapeVec = self
             .0
             .iter()
             .copied()

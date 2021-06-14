@@ -51,7 +51,7 @@ impl Range {
 }
 
 trait_set! {
-    pub trait Tag = Debug + Clone + Copy + PartialEq + Eq;
+    pub(crate) trait Tag = Debug + Clone + Copy + PartialEq + Eq;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -85,7 +85,7 @@ impl<K: Key, T: Tag> Block<K, T> {
 type BlockSlotMap<K, T> = SlotMap<K, Block<K, T>>;
 
 #[derive(Debug)]
-pub struct Heap<K: Key, T: Tag> {
+pub(crate) struct Heap<K: Key, T: Tag> {
     blocks: BlockSlotMap<K, T>,
     free_lists: Vec<Option<K>>,
 }
@@ -104,7 +104,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
         (0usize.leading_zeros() - size.leading_zeros()) as usize
     }
 
-    pub fn extend_with(&mut self, tag: T, size: usize) {
+    pub(crate) fn extend_with(&mut self, tag: T, size: usize) {
         let free_list_index = Self::free_list_index(size);
 
         while free_list_index >= self.free_lists.len() {
@@ -237,7 +237,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
         }
     }
 
-    pub fn alloc(&mut self, size: usize, align: usize) -> Option<K> {
+    pub(crate) fn alloc(&mut self, size: usize, align: usize) -> Option<K> {
         let blocks = &mut self.blocks;
         let free_lists = self.free_lists.as_mut_slice();
 
@@ -280,11 +280,11 @@ impl<K: Key, T: Tag> Heap<K, T> {
         None
     }
 
-    pub fn tag(&self, id: K) -> (T, usize) {
+    pub(crate) fn tag(&self, id: K) -> (T, usize) {
         self.blocks[id].tag()
     }
 
-    pub fn free(&mut self, id: K) {
+    pub(crate) fn free(&mut self, id: K) {
         let blocks = &mut self.blocks;
         let free_lists = self.free_lists.as_mut_slice();
 

@@ -1,11 +1,8 @@
-use crate::prelude::*;
+use crate::common::*;
 use arrayvec::ArrayVec;
 use petgraph::{
     prelude::*,
-    visit::{
-        IntoEdgeReferences, IntoEdgesDirected, IntoNeighborsDirected, IntoNodeReferences, NodeRef,
-        VisitMap, Visitable,
-    },
+    visit::{IntoEdgeReferences, IntoNodeReferences, NodeRef, VisitMap, Visitable},
 };
 use slotmap::{Key, SlotMap};
 use std::{
@@ -16,93 +13,14 @@ use std::{
     io, iter,
 };
 
-pub(crate) type OpGraph = StableDiGraph<OpNode, OpEdge, usize>;
-pub(crate) type OpNodeIndex = NodeIndex<usize>;
-pub(crate) type OpEdgeIndex = EdgeIndex<usize>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReduceOp {
-    Max,
-    Sum,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BinaryOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UnaryOp {
-    Neg,
-    Exp,
-    Log,
-    OneHot,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Op {
-    Input { variable_id: VariableId },
-    Output { variable_id: VariableId },
-    Literal(f32),
-    View(View),
-    Unary(UnaryOp),
-    Binary(BinaryOp),
-    MatMul,
-    Reduce { reduce_op: ReduceOp, axis: isize },
-    Accumulate, // accumulates grad from backprop
-}
-
-#[derive(Debug)]
-enum PerElementKernelOp {
-    Load {
-        input_index: usize,
-    },
-    Literal(f32),
-    Unary {
-        op: UnaryOp,
-        arg0_index: usize,
-    },
-    Binary {
-        op: BinaryOp,
-        arg0_index: usize,
-        arg1_index: usize,
-    },
-}
-
-#[derive(Debug)]
-struct KernelInput {
-    view: View,
-    shape: Shape,
-}
-
-#[derive(Debug)]
-struct PerElementKernel {
-    shape: Shape,
-    inputs: Vec<KernelInput>,
-    outputs: Vec<usize>,
-    ops: Vec<PerElementKernelOp>,
-}
-
-#[derive(Debug)]
-struct ReduceKernel {
-    input_shape: Shape,
-    reduce_op: ReduceOp,
-    axis: isize,
-}
-
-#[derive(Debug)]
-struct MatMulKernel {
-    inputs: [KernelInput; 2],
-}
-
-#[derive(Debug)]
-enum Kernel {
-    PerElement(PerElementKernel),
-    Reduce(ReduceKernel),
-    MatMul(MatMulKernel),
+fn get_arg_edges<const N: usize>(graph: &OpGraph, node_index: OpNodeIndex) -> [OpEdgeIndex; N] {
+    let mut edge_indices = [OpEdgeIndex::end(); N];
+    for edge_ref in graph.edges_directed(node_index, Incoming) {
+        let edge = edge_ref.weight();
+        assert_eq!(edge_indices[edge.arg], OpEdgeIndex::end());
+        edge_indices[edge.arg] = edge_ref.id();
+    }
+    edge_indices
 }
 
 #[derive(Debug)]
@@ -115,43 +33,6 @@ pub(crate) struct Cluster {
 
 slotmap::new_key_type! {
     pub(crate) struct ClusterId;
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct OpNode {
-    pub(crate) name: Option<String>,
-    pub(crate) colour: usize,
-    pub(crate) shape: Shape,
-    pub(crate) op: Op,
-    pub(crate) cluster_id: ClusterId,
-}
-
-impl OpNode {
-    pub(crate) fn new(colour: usize, shape: Shape, op: Op) -> Self {
-        Self {
-            name: None,
-            colour,
-            shape,
-            op,
-            cluster_id: ClusterId::null(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct OpEdge {
-    pub(crate) arg: usize,
-    pub(crate) view: View,
-}
-
-fn get_arg_edges<const N: usize>(graph: &OpGraph, node_index: OpNodeIndex) -> [OpEdgeIndex; N] {
-    let mut edge_indices = [OpEdgeIndex::end(); N];
-    for edge_ref in graph.edges_directed(node_index, Incoming) {
-        let edge = edge_ref.weight();
-        assert_eq!(edge_indices[edge.arg], OpEdgeIndex::end());
-        edge_indices[edge.arg] = edge_ref.id();
-    }
-    edge_indices
 }
 
 pub struct Schedule {
@@ -224,14 +105,11 @@ impl Schedule {
                     let in_edge = &self.graph[in_edge_index];
                     let out_edge = &self.graph[out_edge_index];
                     assert_eq!(in_edge.arg, 0);
-                    self.graph.add_edge(
-                        in_node_index,
-                        out_node_index,
-                        OpEdge {
-                            arg: out_edge.arg,
-                            view: in_edge.view.through(&out_edge.view),
-                        },
-                    );
+                    let new_edge = OpEdge {
+                        arg: out_edge.arg,
+                        view: in_edge.view.through(&out_edge.view),
+                    };
+                    self.graph.add_edge(in_node_index, out_node_index, new_edge);
                 }
                 self.graph.remove_node(node_index);
             }
@@ -253,21 +131,22 @@ impl Schedule {
                     let in_edge = &self.graph[in_edge_index];
                     let out_edge = &self.graph[out_edge_index];
                     assert_eq!(in_edge.arg, 0);
-                    self.graph.add_edge(
-                        in_node_index,
-                        out_node_index,
-                        OpEdge {
-                            arg: out_edge.arg,
-                            view: in_edge.view.through(&view).through(&out_edge.view),
-                        },
-                    );
+                    let new_edge = OpEdge {
+                        arg: out_edge.arg,
+                        view: in_edge.view.through(&view).through(&out_edge.view),
+                    };
+                    self.graph.add_edge(in_node_index, out_node_index, new_edge);
                 }
                 self.graph.remove_node(node_index);
             }
         }
     }
 
-    fn any_predecessor(&self, roots: &[OpNodeIndex], mut f: impl FnMut(OpNodeIndex) -> bool) -> bool {
+    fn any_predecessor(
+        &self,
+        roots: &[OpNodeIndex],
+        mut f: impl FnMut(OpNodeIndex) -> bool,
+    ) -> bool {
         let mut markers = self.graph.visit_map();
         for &node_index in roots {
             markers.visit(node_index);

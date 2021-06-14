@@ -1,4 +1,4 @@
-use super::prelude::*;
+use super::common::*;
 use arrayvec::ArrayVec;
 use spark::{vk, Builder};
 use std::slice;
@@ -101,7 +101,7 @@ impl CommandBufferSet {
     }
 }
 
-pub struct CommandBufferPool {
+pub(crate) struct CommandBufferPool {
     context: SharedContext,
     sets: [CommandBufferSet; Self::COUNT],
     index: usize,
@@ -110,7 +110,7 @@ pub struct CommandBufferPool {
 impl CommandBufferPool {
     const COUNT: usize = 4;
 
-    pub fn new(context: &SharedContext) -> Self {
+    pub(crate) fn new(context: &SharedContext) -> Self {
         let mut sets = ArrayVec::new();
         for _ in 0..Self::COUNT {
             sets.push(CommandBufferSet::new(context));
@@ -122,12 +122,12 @@ impl CommandBufferPool {
         }
     }
 
-    pub fn acquire(&mut self) -> vk::CommandBuffer {
+    pub(crate) fn acquire(&mut self) -> vk::CommandBuffer {
         self.index = (self.index + 1) % Self::COUNT;
         self.sets[self.index].acquire(&self.context)
     }
 
-    pub fn submit(&self) {
+    pub(crate) fn submit(&self) {
         self.sets[self.index].submit(&self.context);
     }
 }

@@ -1,4 +1,4 @@
-use crate::{device::prelude::*, prelude::*};
+use crate::{device::common::*, prelude::*};
 use slotmap::SlotMap;
 use std::{cell::RefCell, rc::Rc};
 
