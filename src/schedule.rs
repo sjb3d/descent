@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use arrayvec::ArrayVec;
 use petgraph::{
-    prelude::{EdgeIndex as EdgeIndexBase, NodeIndex as NodeIndexBase, *},
+    prelude::*,
     visit::{
         IntoEdgeReferences, IntoEdgesDirected, IntoNeighborsDirected, IntoNodeReferences, NodeRef,
         VisitMap, Visitable,
@@ -16,9 +16,9 @@ use std::{
     io, iter,
 };
 
-pub(crate) type Graph = StableDiGraph<Node, Edge, usize>;
-pub(crate) type NodeIndex = NodeIndexBase<usize>;
-pub(crate) type EdgeIndex = EdgeIndexBase<usize>;
+pub(crate) type OpGraph = StableDiGraph<OpNode, OpEdge, usize>;
+pub(crate) type OpNodeIndex = NodeIndex<usize>;
+pub(crate) type OpEdgeIndex = EdgeIndex<usize>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReduceOp {
@@ -108,9 +108,9 @@ enum Kernel {
 #[derive(Debug)]
 pub(crate) struct Cluster {
     kernel: Kernel,
-    inputs: Vec<NodeIndex>,
-    members: Vec<NodeIndex>,
-    outputs: Vec<NodeIndex>,
+    inputs: Vec<OpNodeIndex>,
+    members: Vec<OpNodeIndex>,
+    outputs: Vec<OpNodeIndex>,
 }
 
 slotmap::new_key_type! {
@@ -118,7 +118,7 @@ slotmap::new_key_type! {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Node {
+pub(crate) struct OpNode {
     pub(crate) name: Option<String>,
     pub(crate) colour: usize,
     pub(crate) shape: Shape,
@@ -126,7 +126,7 @@ pub(crate) struct Node {
     pub(crate) cluster_id: ClusterId,
 }
 
-impl Node {
+impl OpNode {
     pub(crate) fn new(colour: usize, shape: Shape, op: Op) -> Self {
         Self {
             name: None,
@@ -139,30 +139,30 @@ impl Node {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Edge {
+pub(crate) struct OpEdge {
     pub(crate) arg: usize,
     pub(crate) view: View,
 }
 
-fn get_arg_edges<const N: usize>(graph: &Graph, node_index: NodeIndex) -> [EdgeIndex; N] {
-    let mut edge_indices = [EdgeIndex::end(); N];
+fn get_arg_edges<const N: usize>(graph: &OpGraph, node_index: OpNodeIndex) -> [OpEdgeIndex; N] {
+    let mut edge_indices = [OpEdgeIndex::end(); N];
     for edge_ref in graph.edges_directed(node_index, Incoming) {
         let edge = edge_ref.weight();
-        assert_eq!(edge_indices[edge.arg], EdgeIndex::end());
+        assert_eq!(edge_indices[edge.arg], OpEdgeIndex::end());
         edge_indices[edge.arg] = edge_ref.id();
     }
     edge_indices
 }
 
 pub struct Schedule {
-    graph: Graph,
-    roots: Vec<NodeIndex>,
-    ordering: Vec<NodeIndex>,
+    graph: OpGraph,
+    roots: Vec<OpNodeIndex>,
+    ordering: Vec<OpNodeIndex>,
     clusters: SlotMap<ClusterId, Cluster>,
 }
 
 impl Schedule {
-    pub(crate) fn new(graph: Graph) -> Self {
+    pub(crate) fn new(graph: OpGraph) -> Self {
         let roots = graph
             .node_indices()
             .filter(|&node_index| matches!(graph[node_index].op, Op::Output { .. }))
@@ -227,7 +227,7 @@ impl Schedule {
                     self.graph.add_edge(
                         in_node_index,
                         out_node_index,
-                        Edge {
+                        OpEdge {
                             arg: out_edge.arg,
                             view: in_edge.view.through(&out_edge.view),
                         },
@@ -256,7 +256,7 @@ impl Schedule {
                     self.graph.add_edge(
                         in_node_index,
                         out_node_index,
-                        Edge {
+                        OpEdge {
                             arg: out_edge.arg,
                             view: in_edge.view.through(&view).through(&out_edge.view),
                         },
@@ -267,7 +267,7 @@ impl Schedule {
         }
     }
 
-    fn any_predecessor(&self, roots: &[NodeIndex], mut f: impl FnMut(NodeIndex) -> bool) -> bool {
+    fn any_predecessor(&self, roots: &[OpNodeIndex], mut f: impl FnMut(OpNodeIndex) -> bool) -> bool {
         let mut markers = self.graph.visit_map();
         for &node_index in roots {
             markers.visit(node_index);
@@ -287,7 +287,7 @@ impl Schedule {
         return false;
     }
 
-    fn any_successor(&self, roots: &[NodeIndex], mut f: impl FnMut(NodeIndex) -> bool) -> bool {
+    fn any_successor(&self, roots: &[OpNodeIndex], mut f: impl FnMut(OpNodeIndex) -> bool) -> bool {
         let mut markers = self.graph.visit_map();
         for &node_index in roots {
             markers.visit(node_index);

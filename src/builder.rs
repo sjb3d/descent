@@ -4,14 +4,14 @@ use std::{cell::RefCell, ops};
 
 #[derive(Clone, Copy)]
 pub struct Array<'builder> {
-    index: NodeIndex,
+    index: OpNodeIndex,
     builder: &'builder GraphBuilder,
 }
 
 #[derive(Clone, Copy)]
 pub struct Tensor<'builder> {
-    value: NodeIndex,
-    grad: NodeIndex,
+    value: OpNodeIndex,
+    grad: OpNodeIndex,
     builder: &'builder GraphBuilder,
 }
 
@@ -144,7 +144,7 @@ impl<'builder> Array<'builder> {
             data.graph.add_edge(
                 src.index,
                 self.index,
-                Edge {
+                OpEdge {
                     arg,
                     view: data.graph[src.index].shape.identity_view(),
                 },
@@ -257,19 +257,19 @@ impl<'builder> ops::Add for Tensor<'builder> {
 }
 
 struct GraphBuilderData {
-    graph: Graph,
+    graph: OpGraph,
     colour: usize,
 }
 
 impl GraphBuilderData {
-    fn new_node(&mut self, shape: impl Into<Shape>, op: Op, inputs: &[NodeIndex]) -> NodeIndex {
+    fn new_node(&mut self, shape: impl Into<Shape>, op: Op, inputs: &[OpNodeIndex]) -> OpNodeIndex {
         let shape = shape.into();
-        let node_index = self.graph.add_node(Node::new(self.colour, shape, op));
+        let node_index = self.graph.add_node(OpNode::new(self.colour, shape, op));
         for (index, input) in inputs.iter().copied().enumerate() {
             self.graph.add_edge(
                 input,
                 node_index,
-                Edge {
+                OpEdge {
                     arg: index,
                     view: self.graph[input].shape.identity_view(),
                 },
