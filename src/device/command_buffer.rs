@@ -1,25 +1,25 @@
 use super::common::*;
-use arrayvec::ArrayVec;
 use spark::{vk, Builder};
-use std::slice;
+use std::{collections::VecDeque, slice};
 
-#[derive(Debug)]
-struct CommandBufferSet {
+struct CommandBuffer {
     pool: vk::CommandPool,
     cmd: vk::CommandBuffer,
-    fence: vk::Fence,
 }
 
-impl CommandBufferSet {
+impl CommandBuffer {
     fn new(context: &SharedContext) -> Self {
-        let device = &context.device;
-
         let pool = {
             let command_pool_create_info = vk::CommandPoolCreateInfo {
                 queue_family_index: context.queue_family_index,
                 ..Default::default()
             };
-            unsafe { device.create_command_pool(&command_pool_create_info, None) }.unwrap()
+            unsafe {
+                context
+                    .device
+                    .create_command_pool(&command_pool_create_info, None)
+            }
+            .unwrap()
         };
 
         let cmd = {
@@ -29,29 +29,48 @@ impl CommandBufferSet {
                 command_buffer_count: 1,
                 ..Default::default()
             };
-            unsafe { device.allocate_command_buffers_single(&command_buffer_allocate_info) }
-                .unwrap()
+            unsafe {
+                context
+                    .device
+                    .allocate_command_buffers_single(&command_buffer_allocate_info)
+            }
+            .unwrap()
         };
 
-        let fence = {
-            let fence_create_info = vk::FenceCreateInfo {
-                flags: vk::FenceCreateFlags::SIGNALED,
-                ..Default::default()
-            };
-            unsafe { device.create_fence(&fence_create_info, None) }.unwrap()
-        };
+        Self { pool, cmd }
+    }
+}
 
-        Self { pool, cmd, fence }
+pub(crate) struct CommandBufferSet {
+    context: SharedContext,
+    buffers: VecDeque<Fenced<CommandBuffer>>,
+    active: Option<CommandBuffer>,
+}
+
+impl CommandBufferSet {
+    const COUNT: usize = 2;
+
+    pub(crate) fn new(context: &SharedContext, fences: &FenceSet) -> Self {
+        let mut buffers = VecDeque::new();
+        for _ in 0..Self::COUNT {
+            buffers.push_back(Fenced::new(CommandBuffer::new(context), fences.old_id()));
+        }
+        Self {
+            context: SharedContext::clone(&context),
+            buffers,
+            active: None,
+        }
     }
 
-    fn acquire(&self, context: &Context) -> vk::CommandBuffer {
-        self.wait_for_fence(context);
+    pub(crate) fn acquire(&mut self, fences: &FenceSet) -> vk::CommandBuffer {
+        assert!(self.active.is_none());
 
-        let device = &context.device;
+        let active = self.buffers.pop_front().unwrap().take(fences);
+
         unsafe {
-            device.reset_fences(slice::from_ref(&self.fence)).unwrap();
-            device
-                .reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty())
+            self.context
+                .device
+                .reset_command_pool(active.pool, vk::CommandPoolResetFlags::empty())
                 .unwrap();
         }
 
@@ -60,86 +79,50 @@ impl CommandBufferSet {
             ..Default::default()
         };
         unsafe {
-            device
-                .begin_command_buffer(self.cmd, &command_buffer_begin_info)
+            self.context
+                .device
+                .begin_command_buffer(active.cmd, &command_buffer_begin_info)
                 .unwrap();
         }
-        self.cmd
+
+        let cmd = active.cmd;
+        self.active = Some(active);
+        cmd
     }
 
-    fn submit(&self, context: &Context) {
-        let device = &context.device;
+    pub(crate) fn submit(&mut self, fences: &mut FenceSet) -> FenceId {
+        let active = self.active.take().unwrap();
+        unsafe { self.context.device.end_command_buffer(active.cmd) }.unwrap();
 
-        unsafe { device.end_command_buffer(self.cmd) }.unwrap();
-
-        let submit_info = vk::SubmitInfo::builder().p_command_buffers(slice::from_ref(&self.cmd));
+        let (fence_id, fence) = fences.next_unsignaled();
+        let submit_info = vk::SubmitInfo::builder().p_command_buffers(slice::from_ref(&active.cmd));
         unsafe {
-            device
+            self.context
+                .device
                 .queue_submit(
-                    context.queue,
+                    self.context.queue,
                     slice::from_ref(&submit_info),
-                    Some(self.fence),
+                    Some(fence),
                 )
                 .unwrap();
         }
-    }
+        self.buffers.push_back(Fenced::new(active, fence_id));
 
-    fn wait_for_fence(&self, context: &Context) {
-        let timeout_ns = 1000 * 1000 * 1000;
-        loop {
-            let res = unsafe {
-                context
-                    .device
-                    .wait_for_fences(slice::from_ref(&self.fence), true, timeout_ns)
-            };
-            match res {
-                Ok(_) => break,
-                Err(vk::Result::TIMEOUT) => {}
-                Err(err_code) => panic!("failed to wait for fence {}", err_code),
-            }
-        }
+        fence_id
     }
 }
 
-pub(crate) struct CommandBufferPool {
-    context: SharedContext,
-    sets: [CommandBufferSet; Self::COUNT],
-    index: usize,
-}
-
-impl CommandBufferPool {
-    const COUNT: usize = 4;
-
-    pub(crate) fn new(context: &SharedContext) -> Self {
-        let mut sets = ArrayVec::new();
-        for _ in 0..Self::COUNT {
-            sets.push(CommandBufferSet::new(context));
-        }
-        Self {
-            context: SharedContext::clone(context),
-            sets: sets.into_inner().unwrap(),
-            index: 0,
-        }
-    }
-
-    pub(crate) fn acquire(&mut self) -> vk::CommandBuffer {
-        self.index = (self.index + 1) % Self::COUNT;
-        self.sets[self.index].acquire(&self.context)
-    }
-
-    pub(crate) fn submit(&self) {
-        self.sets[self.index].submit(&self.context);
-    }
-}
-
-impl Drop for CommandBufferPool {
+impl Drop for CommandBufferSet {
     fn drop(&mut self) {
-        let device = &self.context.device;
-        for set in self.sets.iter() {
+        for buffer in self.buffers.iter() {
             unsafe {
-                device.destroy_fence(Some(set.fence), None);
-                device.free_command_buffers(set.pool, slice::from_ref(&set.cmd));
-                device.destroy_command_pool(Some(set.pool), None);
+                let buffer = buffer.get_unchecked();
+                self.context
+                    .device
+                    .free_command_buffers(buffer.pool, slice::from_ref(&buffer.cmd));
+                self.context
+                    .device
+                    .destroy_command_pool(Some(buffer.pool), None);
             }
         }
     }

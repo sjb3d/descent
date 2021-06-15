@@ -31,7 +31,8 @@ struct VariableData {
 
 pub struct Environment {
     context: SharedContext,
-    command_buffer_pool: CommandBufferPool,
+    fences: FenceSet,
+    command_buffers: CommandBufferSet,
     buffer_heap: BufferHeap,
     variables: SharedVariables,
 }
@@ -39,11 +40,13 @@ pub struct Environment {
 impl Environment {
     pub fn new() -> Self {
         let context = Context::new();
-        let command_buffer_pool = CommandBufferPool::new(&context);
+        let fences = FenceSet::new(&context);
+        let command_buffers = CommandBufferSet::new(&context, &fences);
         let buffer_heap = BufferHeap::new(&context);
         Self {
             context,
-            command_buffer_pool,
+            fences,
+            command_buffers,
             buffer_heap,
             variables: Rc::new(RefCell::new(SlotMap::with_key())),
         }
@@ -64,8 +67,10 @@ impl Environment {
     }
 
     pub fn test(&mut self) {
-        let _cmd = self.command_buffer_pool.acquire();
-        self.command_buffer_pool.submit();
+        for _ in 0..4 {
+            let _cmd = self.command_buffers.acquire(&self.fences);
+            self.command_buffers.submit(&mut self.fences);
+        }
 
         let a = self.buffer_heap.alloc(64 * 1024 * 1024).unwrap();
         let b = self.buffer_heap.alloc(64 * 1024 * 1024).unwrap();
