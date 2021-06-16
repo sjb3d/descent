@@ -42,7 +42,9 @@ impl BufferHeap {
         let buffer = {
             let buffer_create_info = vk::BufferCreateInfo {
                 size: chunk_size as vk::DeviceSize,
-                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                    | vk::BufferUsageFlags::TRANSFER_SRC
+                    | vk::BufferUsageFlags::TRANSFER_DST,
                 ..Default::default()
             };
             unsafe { device.create_buffer(&buffer_create_info, None) }.unwrap()

@@ -111,6 +111,16 @@ impl<T> Fenced<T> {
         self.value
     }
 
+    pub(crate) fn map<U, F>(self, f: F) -> Fenced<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        Fenced {
+            value: f(self.value),
+            fence_id: self.fence_id,
+        }
+    }
+
     pub(crate) unsafe fn get_unchecked(&self) -> &T {
         &self.value
     }

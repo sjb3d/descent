@@ -1,33 +1,35 @@
-use super::{common::*, heap::HeapRange};
+use super::common::*;
 use spark::vk;
-use std::{collections::VecDeque, io, slice};
+use std::{collections::VecDeque, slice};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct StagingCursor {
     next: usize,
-    limit: usize,
-    range: HeapRange,
+    end: usize,
+    region: StagingBufferRegion,
 }
 
 impl StagingCursor {
-    fn new(range: HeapRange, max_size: usize) -> Self {
-        let size = range.size().min(max_size);
+    fn new(region: StagingBufferRegion, max_size: usize) -> Self {
+        let begin = region.begin();
+        let size = StagingBuffer::REGION_SIZE.min(max_size);
         Self {
-            next: range.begin,
-            limit: range.begin + size,
-            range,
+            next: begin,
+            end: begin + size,
+            region,
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.next == self.range.begin
+        self.next == self.region.begin()
     }
 
     fn is_full(&self) -> bool {
-        self.next == self.limit
+        self.next == self.end
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 struct BufferCursor {
     next: usize,
     info: BufferInfo,
@@ -41,160 +43,143 @@ impl BufferCursor {
         }
     }
 
-    fn is_empty(&self) -> bool {
-        self.next == self.info.range.begin
-    }
-
     fn remaining(&self) -> usize {
         self.info.range.end - self.next
     }
 
-    fn is_full(&self) -> bool {
+    fn is_starting(&self) -> bool {
+        self.next == self.info.range.begin
+    }
+
+    fn is_finished(&self) -> bool {
         self.next == self.info.range.end
     }
 }
 
-struct StagingWriter<'a> {
-    staging: &'a mut StagingBuffer,
+pub(crate) struct StagingWriter<'a> {
+    owner: &'a mut StagingBuffer,
     command_buffers: &'a mut CommandBufferSet,
     fences: &'a mut FenceSet,
-    src: Option<StagingCursor>,
-    dest: BufferCursor,
+    staging: Option<StagingCursor>,
+    buffer: BufferCursor,
 }
 
 impl<'a> StagingWriter<'a> {
-    fn write_slice(&mut self, mut buf: &[u8]) -> usize {
-        let mut written = 0;
-        while !buf.is_empty() {
-            if let Some(src) = self.src.as_mut() {
-                let copy_dst = &mut self.staging.mapping(src);
-                let copy_size = copy_dst.len().min(buf.len());
-                copy_dst[..copy_size].copy_from_slice(&buf[..copy_size]);
-
-                src.next += copy_size;
-                buf = &buf[copy_size..];
-                written += copy_size;
-
-                if src.is_full() {
-                    self.flush_src();
-                }
-            } else {
-                self.next_src();
-                if self.src.is_none() {
-                    break;
-                }
-            }
-        }
-        written
+    pub(crate) fn new(
+        owner: &'a mut StagingBuffer,
+        command_buffers: &'a mut CommandBufferSet,
+        fences: &'a mut FenceSet,
+        buffer_info: BufferInfo,
+    ) -> Self {
+        let mut writer = Self {
+            owner,
+            command_buffers,
+            fences,
+            staging: None,
+            buffer: BufferCursor::new(buffer_info),
+        };
+        writer.next_staging();
+        writer
     }
 
-    fn write_zeros(&mut self, mut count: usize) -> usize {
-        let mut written = 0;
-        while count > 0 {
-            if let Some(src) = self.src.as_mut() {
-                let copy_dst = &mut self.staging.mapping(src);
-                let copy_size = copy_dst.len().min(count);
-                for b in copy_dst.iter_mut().take(copy_size) {
-                    *b = 0;
-                }
+    pub(crate) fn write_slice(&mut self, mut buf: &[u8]) -> usize {
+        let mut counter = 0;
+        while let Some(staging) = self.staging.as_mut() {
+            let copy_buf = self.owner.mapping(staging);
+            let copy_size = copy_buf.len().min(buf.len());
+            copy_buf[..copy_size].copy_from_slice(&buf[..copy_size]);
 
-                src.next += copy_size;
-                count -= copy_size;
-                written += copy_size;
+            staging.next += copy_size;
+            buf = &buf[copy_size..];
+            counter += copy_size;
 
-                if src.is_full() {
-                    self.flush_src();
-                }
-            } else {
-                self.next_src();
-                if self.src.is_none() {
-                    break;
-                }
+            if staging.is_full() {
+                self.flush_staging();
+            }
+            if buf.is_empty() {
+                break;
             }
         }
-        written
+        counter
     }
 
-    fn next_src(&mut self) {
-        if self.src.is_none() {
-            let max_size = self.dest.remaining();
-            if max_size > 0 {
-                let range = self
-                    .staging
-                    .ranges
-                    .pop_front()
-                    .unwrap()
-                    .take_when_signaled(self.fences);
-                self.src = Some(StagingCursor::new(range, max_size));
+    pub(crate) fn write_zeros(&mut self, mut count: usize) -> usize {
+        let mut counter = 0;
+        while let Some(staging) = self.staging.as_mut() {
+            let copy_buf = self.owner.mapping(staging);
+            let copy_size = copy_buf.len().min(count);
+            for b in copy_buf.iter_mut().take(copy_size) {
+                *b = 0;
             }
+
+            staging.next += copy_size;
+            count -= copy_size;
+            counter += copy_size;
+
+            if staging.is_full() {
+                self.flush_staging();
+            }
+            if count == 0 {
+                break;
+            }
+        }
+        counter
+    }
+
+    fn next_staging(&mut self) {
+        assert!(self.staging.is_none());
+        let max_size = self.buffer.remaining();
+        if max_size > 0 {
+            let range = self
+                .owner
+                .regions
+                .pop_front()
+                .unwrap()
+                .take_when_signaled(self.fences);
+            self.staging = Some(StagingCursor::new(range, max_size));
         }
     }
 
-    fn flush_src(&mut self) {
-        if let Some(src) = self.src.take() {
-            if src.is_empty() {
-                self.staging
-                    .ranges
-                    .push_front(Fenced::new(src.range, self.fences.old_id()));
+    pub(crate) fn flush_staging(&mut self) {
+        if let Some(staging) = self.staging.take() {
+            if staging.is_empty() {
+                self.staging = Some(staging);
             } else {
                 let cmd = self.command_buffers.acquire(self.fences);
 
-                if self.dest.is_empty() {
-                    let buffer_memory_barrier = vk::BufferMemoryBarrier {
-                        src_access_mask: vk::AccessFlags::empty(),
-                        dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-                        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                        buffer: Some(self.dest.info.buffer),
-                        offset: self.dest.info.range.begin as vk::DeviceSize,
-                        size: self.dest.info.range.size() as vk::DeviceSize,
-                        ..Default::default()
-                    };
-                    unsafe {
-                        self.staging.context.device.cmd_pipeline_barrier(
-                            cmd.get(),
-                            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                            vk::PipelineStageFlags::TRANSFER,
-                            vk::DependencyFlags::empty(),
-                            &[],
-                            slice::from_ref(&buffer_memory_barrier),
-                            &[],
-                        )
-                    }
-                }
-
-                let transfer_size = src.next - src.range.begin;
+                let staging_begin = staging.region.begin();
+                let transfer_size = staging.next - staging_begin;
                 {
                     let region = vk::BufferCopy {
-                        src_offset: src.range.begin as vk::DeviceSize,
-                        dst_offset: self.dest.next as vk::DeviceSize,
+                        src_offset: staging_begin as vk::DeviceSize,
+                        dst_offset: self.buffer.next as vk::DeviceSize,
                         size: transfer_size as vk::DeviceSize,
                     };
 
                     unsafe {
-                        self.staging.context.device.cmd_copy_buffer(
+                        self.owner.context.device.cmd_copy_buffer(
                             cmd.get(),
-                            self.staging.buffer,
-                            self.dest.info.buffer,
+                            self.owner.buffer,
+                            self.buffer.info.buffer,
                             slice::from_ref(&region),
                         )
                     };
                 }
-                self.dest.next += transfer_size;
+                self.buffer.next += transfer_size;
 
-                if self.dest.is_full() {
+                if self.buffer.is_finished() {
                     let buffer_memory_barrier = vk::BufferMemoryBarrier {
                         src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
                         dst_access_mask: vk::AccessFlags::SHADER_READ,
                         src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                         dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                        buffer: Some(self.dest.info.buffer),
-                        offset: self.dest.info.range.begin as vk::DeviceSize,
-                        size: self.dest.info.range.size() as vk::DeviceSize,
+                        buffer: Some(self.buffer.info.buffer),
+                        offset: self.buffer.info.range.begin as vk::DeviceSize,
+                        size: self.buffer.info.range.size() as vk::DeviceSize,
                         ..Default::default()
                     };
                     unsafe {
-                        self.staging.context.device.cmd_pipeline_barrier(
+                        self.owner.context.device.cmd_pipeline_barrier(
                             cmd.get(),
                             vk::PipelineStageFlags::TRANSFER,
                             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -207,29 +192,195 @@ impl<'a> StagingWriter<'a> {
                 }
 
                 let fence_id = cmd.submit(self.fences);
-                self.staging
-                    .ranges
-                    .push_back(Fenced::new(src.range, fence_id));
+                self.owner
+                    .regions
+                    .push_back(Fenced::new(staging.region, fence_id));
+
+                self.next_staging();
             }
         }
     }
 }
 
-impl<'a> io::Write for StagingWriter<'a> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        Ok(self.write_slice(buf))
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.flush_src();
-        Ok(())
+impl<'a> Drop for StagingWriter<'a> {
+    fn drop(&mut self) {
+        self.write_zeros(self.buffer.remaining());
+        self.flush_staging();
+        assert!(self.staging.is_none());
     }
 }
 
-impl<'a> Drop for StagingWriter<'a> {
+pub(crate) struct StagingReader<'a> {
+    owner: &'a mut StagingBuffer,
+    command_buffers: &'a mut CommandBufferSet,
+    fences: &'a mut FenceSet,
+    buffer: BufferCursor,
+    pending: VecDeque<Fenced<StagingCursor>>,
+    staging: Option<StagingCursor>,
+}
+
+impl<'a> StagingReader<'a> {
+    pub(crate) fn new(
+        owner: &'a mut StagingBuffer,
+        command_buffers: &'a mut CommandBufferSet,
+        fences: &'a mut FenceSet,
+        buffer_info: BufferInfo,
+    ) -> Self {
+        let mut reader = Self {
+            owner,
+            command_buffers,
+            fences,
+            buffer: BufferCursor::new(buffer_info),
+            pending: VecDeque::new(),
+            staging: None,
+        };
+        while !reader.buffer.is_finished() {
+            if let Some(region) = reader.owner.regions.pop_front() {
+                let region = region.take_when_signaled(reader.fences);
+                reader.add_pending(region);
+            } else {
+                break;
+            }
+        }
+        reader.next_staging();
+        reader
+    }
+
+    pub(crate) fn read_slice(&mut self, mut buf: &mut [u8]) -> usize {
+        let mut counter = 0;
+        while let Some(staging) = self.staging.as_mut() {
+            let copy_buf = self.owner.mapping(staging);
+            let copy_size = copy_buf.len().min(buf.len());
+            buf[..copy_size].copy_from_slice(&copy_buf[..copy_size]);
+
+            staging.next += copy_size;
+            buf = &mut buf[copy_size..];
+            counter += copy_size;
+
+            if staging.is_full() {
+                let region = staging.region;
+                self.staging = None;
+                self.add_pending(region);
+                self.next_staging();
+            }
+            if buf.is_empty() {
+                break;
+            }
+        }
+        counter
+    }
+
+    fn add_pending(&mut self, region: StagingBufferRegion) {
+        if self.buffer.is_finished() {
+            self.owner
+                .regions
+                .push_back(Fenced::new(region, self.fences.old_id()));
+        } else {
+            let cmd = self.command_buffers.acquire(self.fences);
+
+            if self.buffer.is_starting() {
+                let buffer_memory_barrier = vk::BufferMemoryBarrier {
+                    src_access_mask: vk::AccessFlags::SHADER_READ,
+                    dst_access_mask: vk::AccessFlags::TRANSFER_READ,
+                    src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                    dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                    buffer: Some(self.buffer.info.buffer),
+                    offset: self.buffer.info.range.begin as vk::DeviceSize,
+                    size: self.buffer.info.range.size() as vk::DeviceSize,
+                    ..Default::default()
+                };
+                unsafe {
+                    self.owner.context.device.cmd_pipeline_barrier(
+                        cmd.get(),
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        slice::from_ref(&buffer_memory_barrier),
+                        &[],
+                    )
+                }
+            }
+
+            let staging = StagingCursor::new(region, self.buffer.remaining());
+            let staging_begin = staging.region.begin();
+            let transfer_size = staging.end - staging_begin;
+            {
+                let region = vk::BufferCopy {
+                    src_offset: self.buffer.next as vk::DeviceSize,
+                    dst_offset: staging_begin as vk::DeviceSize,
+                    size: transfer_size as vk::DeviceSize,
+                };
+
+                unsafe {
+                    self.owner.context.device.cmd_copy_buffer(
+                        cmd.get(),
+                        self.buffer.info.buffer,
+                        self.owner.buffer,
+                        slice::from_ref(&region),
+                    )
+                };
+            }
+            self.buffer.next += transfer_size;
+
+            if self.buffer.is_finished() {
+                let buffer_memory_barrier = vk::BufferMemoryBarrier {
+                    src_access_mask: vk::AccessFlags::TRANSFER_READ,
+                    dst_access_mask: vk::AccessFlags::SHADER_READ,
+                    src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                    dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                    buffer: Some(self.buffer.info.buffer),
+                    offset: self.buffer.info.range.begin as vk::DeviceSize,
+                    size: self.buffer.info.range.size() as vk::DeviceSize,
+                    ..Default::default()
+                };
+                unsafe {
+                    self.owner.context.device.cmd_pipeline_barrier(
+                        cmd.get(),
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        slice::from_ref(&buffer_memory_barrier),
+                        &[],
+                    )
+                }
+            }
+
+            let fence_id = cmd.submit(self.fences);
+            self.pending.push_back(Fenced::new(staging, fence_id));
+        }
+    }
+
+    fn next_staging(&mut self) {
+        assert!(self.staging.is_none());
+        if let Some(pending) = self.pending.pop_front() {
+            self.staging = Some(pending.take_when_signaled(self.fences));
+        }
+    }
+}
+
+impl<'a> Drop for StagingReader<'a> {
     fn drop(&mut self) {
-        self.write_zeros(self.dest.remaining());
-        self.flush_src();
+        if let Some(staging) = self.staging.take() {
+            self.owner
+                .regions
+                .push_back(Fenced::new(staging.region, self.fences.old_id()));
+        }
+        while let Some(pending) = self.pending.pop_front() {
+            self.owner
+                .regions
+                .push_back(pending.map(|pending| pending.region));
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StagingBufferRegion(u8);
+
+impl StagingBufferRegion {
+    fn begin(&self) -> usize {
+        (self.0 as usize) * StagingBuffer::REGION_SIZE
     }
 }
 
@@ -238,7 +389,7 @@ pub(crate) struct StagingBuffer {
     device_memory: vk::DeviceMemory,
     buffer: vk::Buffer,
     mapping: *mut u8,
-    ranges: VecDeque<Fenced<HeapRange>>,
+    regions: VecDeque<Fenced<StagingBufferRegion>>,
 }
 
 impl StagingBuffer {
@@ -285,13 +436,7 @@ impl StagingBuffer {
 
         let mut ranges = VecDeque::new();
         for i in 0..Self::COUNT {
-            ranges.push_back(Fenced::new(
-                HeapRange {
-                    begin: i * Self::REGION_SIZE,
-                    end: (i + 1) * Self::REGION_SIZE,
-                },
-                fences.old_id(),
-            ));
+            ranges.push_back(Fenced::new(StagingBufferRegion(i as u8), fences.old_id()));
         }
 
         Self {
@@ -299,31 +444,14 @@ impl StagingBuffer {
             device_memory,
             buffer,
             mapping: mapping as *mut _,
-            ranges,
+            regions: ranges,
         }
     }
 
     fn mapping(&mut self, cursor: &StagingCursor) -> &mut [u8] {
         let full =
             unsafe { slice::from_raw_parts_mut(self.mapping, Self::REGION_SIZE * Self::COUNT) };
-        &mut full[cursor.next..cursor.limit]
-    }
-
-    pub(crate) fn write_buffer(
-        &mut self,
-        buffer_info: BufferInfo,
-        mut writer: impl FnMut(&mut dyn io::Write),
-        command_buffers: &mut CommandBufferSet,
-        fences: &mut FenceSet,
-    ) {
-        let mut w = StagingWriter {
-            staging: self,
-            command_buffers,
-            fences,
-            src: None,
-            dest: BufferCursor::new(buffer_info),
-        };
-        writer(&mut w);
+        &mut full[cursor.next..cursor.end]
     }
 }
 

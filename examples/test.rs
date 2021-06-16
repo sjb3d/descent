@@ -6,7 +6,7 @@ use rand::SeedableRng;
 use std::{
     env,
     fs::File,
-    io::{BufReader, BufWriter, Read},
+    io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
 
@@ -81,10 +81,17 @@ fn main() {
     let w_var = env.variable([28 * 28, 10], "w");
     let b_var = env.variable([10], "b");
 
-    env.write(&b_var, |w| {
-        let zeros = [0f32; 10];
-        w.write_all(bytemuck::cast_slice(&zeros)).unwrap();
-    });
+    let b_write: [f32; 10] = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+    env.writer(&b_var)
+        .write_all(bytemuck::cast_slice(&b_write))
+        .unwrap();
+
+    let mut b_read = [0f32; 10];
+    env.reader(&b_var)
+        .read_exact(bytemuck::cast_slice_mut(&mut b_read))
+        .unwrap();
+
+    assert_eq!(b_write, b_read);
 
     let w = g.input(&w_var);
     let b = g.input(&b_var);

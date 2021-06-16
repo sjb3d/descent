@@ -35,6 +35,27 @@ impl Variable {
     }
 }
 
+pub struct VariableWriter<'a>(StagingWriter<'a>);
+
+impl<'a> io::Write for VariableWriter<'a> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        Ok(self.0.write_slice(buf))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush_staging();
+        Ok(())
+    }
+}
+
+pub struct VariableReader<'a>(StagingReader<'a>);
+
+impl<'a> io::Read for VariableReader<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        Ok(self.0.read_slice(buf))
+    }
+}
+
 struct VariableData {
     shape: Shape,
     name: String,
@@ -81,7 +102,7 @@ impl Environment {
         }
     }
 
-    pub fn write(&mut self, var: &Variable, writer: impl FnMut(&mut dyn io::Write)) {
+    pub fn writer(&mut self, var: &Variable) -> VariableWriter {
         let mut variables = self.variables.borrow_mut();
         let variable_data = &mut variables[var.id];
         if let Some(buffer_id) = variable_data.buffer_id.take() {
@@ -91,14 +112,25 @@ impl Environment {
             .buffer_heap
             .alloc(variable_data.shape.dim_product() * mem::size_of::<f32>())
             .unwrap();
-        let buffer_info = self.buffer_heap.info(buffer_id);
-        self.staging_buffer.write_buffer(
-            buffer_info,
-            writer,
+        variable_data.buffer_id = Some(buffer_id);
+        VariableWriter(StagingWriter::new(
+            &mut self.staging_buffer,
             &mut self.command_buffers,
             &mut self.fences,
-        );
-        variable_data.buffer_id = Some(buffer_id);
+            self.buffer_heap.info(buffer_id),
+        ))
+    }
+
+    pub fn reader(&mut self, var: &Variable) -> VariableReader {
+        let variables = self.variables.borrow();
+        let variable_data = &variables[var.id];
+        let buffer_id = variable_data.buffer_id.unwrap();
+        VariableReader(StagingReader::new(
+            &mut self.staging_buffer,
+            &mut self.command_buffers,
+            &mut self.fences,
+            self.buffer_heap.info(buffer_id),
+        ))
     }
 
     pub fn test(&mut self) {
