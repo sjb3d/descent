@@ -41,10 +41,24 @@ impl CommandBuffer {
     }
 }
 
+pub(crate) struct ScopedCommandBuffer<'a> {
+    buffer: CommandBuffer,
+    set: &'a mut CommandBufferSet,
+}
+
+impl<'a> ScopedCommandBuffer<'a> {
+    pub(crate) fn get(&self) -> vk::CommandBuffer {
+        self.buffer.cmd
+    }
+
+    pub(crate) fn submit(self, fences: &mut FenceSet) -> FenceId {
+        self.set.submit(self.buffer, fences)
+    }
+}
+
 pub(crate) struct CommandBufferSet {
     context: SharedContext,
     buffers: VecDeque<Fenced<CommandBuffer>>,
-    active: Option<CommandBuffer>,
 }
 
 impl CommandBufferSet {
@@ -58,14 +72,11 @@ impl CommandBufferSet {
         Self {
             context: SharedContext::clone(&context),
             buffers,
-            active: None,
         }
     }
 
-    pub(crate) fn acquire(&mut self, fences: &FenceSet) -> vk::CommandBuffer {
-        assert!(self.active.is_none());
-
-        let active = self.buffers.pop_front().unwrap().take(fences);
+    pub(crate) fn acquire(&mut self, fences: &FenceSet) -> ScopedCommandBuffer {
+        let active = self.buffers.pop_front().unwrap().take_when_signaled(fences);
 
         unsafe {
             self.context
@@ -85,13 +96,13 @@ impl CommandBufferSet {
                 .unwrap();
         }
 
-        let cmd = active.cmd;
-        self.active = Some(active);
-        cmd
+        ScopedCommandBuffer {
+            buffer: active,
+            set: self,
+        }
     }
 
-    pub(crate) fn submit(&mut self, fences: &mut FenceSet) -> FenceId {
-        let active = self.active.take().unwrap();
+    fn submit(&mut self, active: CommandBuffer, fences: &mut FenceSet) -> FenceId {
         unsafe { self.context.device.end_command_buffer(active.cmd) }.unwrap();
 
         let (fence_id, fence) = fences.next_unsignaled();

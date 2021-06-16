@@ -18,33 +18,33 @@ impl<K: Key> BlockListNode<K> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Range {
-    begin: usize,
-    end: usize,
+pub(crate) struct HeapRange {
+    pub(crate) begin: usize,
+    pub(crate) end: usize,
 }
 
-impl Range {
-    fn new(size: usize) -> Self {
+impl HeapRange {
+    fn from_size(size: usize) -> Self {
         Self {
             begin: 0,
             end: size,
         }
     }
 
-    fn size(&self) -> usize {
+    pub(crate) fn size(&self) -> usize {
         self.end - self.begin
     }
 
-    fn truncate(&mut self, new_size: usize) -> Range {
+    fn truncate(&mut self, new_size: usize) -> HeapRange {
         assert!(new_size > 0);
         let begin = self.begin + new_size;
         let end = self.end;
         assert!(begin < end);
         self.end = begin;
-        Range { begin, end }
+        HeapRange { begin, end }
     }
 
-    fn append(&mut self, other: Range) {
+    fn append(&mut self, other: HeapRange) {
         assert_eq!(self.end, other.begin);
         self.end = other.end;
     }
@@ -57,13 +57,13 @@ trait_set! {
 #[derive(Debug, Clone, Copy)]
 struct Block<K: Key, T: Tag> {
     tag: T,
-    range: Range,
+    range: HeapRange,
     tag_node: BlockListNode<K>, // linked list of blocks with this tag
     free_node: Option<BlockListNode<K>>, // linked list of similarly sized free blocks
 }
 
 impl<K: Key, T: Tag> Block<K, T> {
-    fn new(id: K, tag: T, range: Range) -> Self {
+    fn new(id: K, tag: T, range: HeapRange) -> Self {
         Self {
             tag,
             range,
@@ -77,8 +77,8 @@ impl<K: Key, T: Tag> Block<K, T> {
         self.range.end == other.range.begin
     }
 
-    fn tag(&self) -> (T, usize) {
-        (self.tag, self.range.begin)
+    fn info(&self) -> (T, HeapRange) {
+        (self.tag, self.range)
     }
 }
 
@@ -113,7 +113,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
 
         let id = self
             .blocks
-            .insert_with_key(|key| Block::new(key, tag, Range::new(size)));
+            .insert_with_key(|key| Block::new(key, tag, HeapRange::from_size(size)));
         Self::register_free_block(&mut self.blocks, self.free_lists.as_mut_slice(), id);
     }
 
@@ -280,8 +280,8 @@ impl<K: Key, T: Tag> Heap<K, T> {
         None
     }
 
-    pub(crate) fn tag(&self, id: K) -> (T, usize) {
-        self.blocks[id].tag()
+    pub(crate) fn info(&self, id: K) -> (T, HeapRange) {
+        self.blocks[id].info()
     }
 
     pub(crate) fn free(&mut self, id: K) {

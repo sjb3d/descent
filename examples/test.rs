@@ -81,6 +81,11 @@ fn main() {
     let w_var = env.variable([28 * 28, 10], "w");
     let b_var = env.variable([10], "b");
 
+    env.write(&b_var, |w| {
+        let zeros = [0f32; 10];
+        w.write_all(bytemuck::cast_slice(&zeros)).unwrap();
+    });
+
     let w = g.input(&w_var);
     let b = g.input(&b_var);
     let z = x.matmul(w) + b;

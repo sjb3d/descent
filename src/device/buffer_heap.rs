@@ -19,6 +19,12 @@ pub(crate) struct BufferHeap {
     heap: Heap<BufferId, ChunkIndex>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BufferInfo {
+    pub(crate) buffer: vk::Buffer,
+    pub(crate) range: HeapRange,
+}
+
 impl BufferHeap {
     const CHUNK_SIZE: usize = 256 * 1024 * 1024;
 
@@ -36,7 +42,7 @@ impl BufferHeap {
         let buffer = {
             let buffer_create_info = vk::BufferCreateInfo {
                 size: chunk_size as vk::DeviceSize,
-                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 ..Default::default()
             };
             unsafe { device.create_buffer(&buffer_create_info, None) }.unwrap()
@@ -85,6 +91,14 @@ impl BufferHeap {
 
     pub(crate) fn free(&mut self, id: BufferId) {
         self.heap.free(id);
+    }
+
+    pub(crate) fn info(&self, id: BufferId) -> BufferInfo {
+        let (chunk_index, range) = self.heap.info(id);
+        BufferInfo {
+            buffer: self.chunks[chunk_index.0].buffer,
+            range,
+        }
     }
 }
 

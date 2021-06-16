@@ -18,3 +18,4 @@ trait-set = "0.2"
 
 [dev-dependencies]
 rand_chacha = "0.3"
+bytemuck = "1.5"

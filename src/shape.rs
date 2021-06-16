@@ -137,6 +137,10 @@ impl Shape {
             .collect();
         Shape(v.iter().copied().rev().collect())
     }
+
+    pub(crate) fn dim_product(&self) -> usize {
+        self.0.iter().copied().product::<isize>() as usize
+    }
 }
 
 impl ops::Deref for Shape {

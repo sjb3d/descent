@@ -1,6 +1,6 @@
 use crate::{device::common::*, prelude::*};
 use slotmap::SlotMap;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, io, mem, rc::Rc};
 
 slotmap::new_key_type! {
     pub struct VariableId;
@@ -15,11 +15,23 @@ pub struct Variable {
 
 impl Variable {
     pub(crate) fn name(&self) -> String {
-        self.variables.borrow().get(self.id).unwrap().name.clone()
+        self.variables
+            .as_ref()
+            .borrow()
+            .get(self.id)
+            .unwrap()
+            .name
+            .clone()
     }
 
     pub(crate) fn shape(&self) -> Shape {
-        self.variables.borrow().get(self.id).unwrap().shape.clone()
+        self.variables
+            .as_ref()
+            .borrow()
+            .get(self.id)
+            .unwrap()
+            .shape
+            .clone()
     }
 }
 
@@ -34,6 +46,7 @@ pub struct Environment {
     fences: FenceSet,
     command_buffers: CommandBufferSet,
     buffer_heap: BufferHeap,
+    staging_buffer: StagingBuffer,
     variables: SharedVariables,
 }
 
@@ -43,11 +56,13 @@ impl Environment {
         let fences = FenceSet::new(&context);
         let command_buffers = CommandBufferSet::new(&context, &fences);
         let buffer_heap = BufferHeap::new(&context);
+        let staging_buffer = StagingBuffer::new(&context, &fences);
         Self {
             context,
             fences,
             command_buffers,
             buffer_heap,
+            staging_buffer,
             variables: Rc::new(RefCell::new(SlotMap::with_key())),
         }
     }
@@ -66,10 +81,30 @@ impl Environment {
         }
     }
 
+    pub fn write(&mut self, var: &Variable, writer: impl FnMut(&mut dyn io::Write)) {
+        let mut variables = self.variables.borrow_mut();
+        let variable_data = &mut variables[var.id];
+        if let Some(buffer_id) = variable_data.buffer_id.take() {
+            self.buffer_heap.free(buffer_id);
+        }
+        let buffer_id = self
+            .buffer_heap
+            .alloc(variable_data.shape.dim_product() * mem::size_of::<f32>())
+            .unwrap();
+        let buffer_info = self.buffer_heap.info(buffer_id);
+        self.staging_buffer.write_buffer(
+            buffer_info,
+            writer,
+            &mut self.command_buffers,
+            &mut self.fences,
+        );
+        variable_data.buffer_id = Some(buffer_id);
+    }
+
     pub fn test(&mut self) {
         for _ in 0..4 {
-            let _cmd = self.command_buffers.acquire(&self.fences);
-            self.command_buffers.submit(&mut self.fences);
+            let cmd = self.command_buffers.acquire(&self.fences);
+            cmd.submit(&mut self.fences);
         }
 
         let a = self.buffer_heap.alloc(64 * 1024 * 1024).unwrap();
