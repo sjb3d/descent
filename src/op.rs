@@ -1,6 +1,5 @@
 use crate::common::*;
 use petgraph::prelude::*;
-use slotmap::Key;
 
 pub(crate) type OpGraph = StableDiGraph<OpNode, OpEdge, usize>;
 pub(crate) type OpNodeIndex = NodeIndex<usize>;
@@ -30,8 +29,8 @@ pub(crate) enum UnaryOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Op {
-    Input { variable_id: VariableId },
-    Output { variable_id: VariableId },
+    Input { variable: Variable },
+    Output { variable: Variable },
     Literal(f32),
     View(View),
     Unary(UnaryOp),
@@ -43,23 +42,10 @@ pub(crate) enum Op {
 
 #[derive(Debug, Clone)]
 pub(crate) struct OpNode {
-    pub(crate) name: Option<String>,
     pub(crate) colour: usize,
     pub(crate) shape: Shape,
     pub(crate) op: Op,
     pub(crate) cluster_id: ClusterId,
-}
-
-impl OpNode {
-    pub(crate) fn new(colour: usize, shape: Shape, op: Op) -> Self {
-        Self {
-            name: None,
-            colour,
-            shape,
-            op,
-            cluster_id: ClusterId::null(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

@@ -72,9 +72,9 @@ fn main() {
     let x_var = env.variable([m, 28 * 28], "x");
     let y_var = env.variable([m, 1], "y");
 
-    let g = GraphBuilder::new();
-    let x = g.input(&x_var);
-    let y = g.input(&y_var);
+    let g = env.builder();
+    let x = g.input(x_var);
+    let y = g.input(y_var);
 
     // linear layer (no activation)
     g.next_colour();
@@ -82,19 +82,19 @@ fn main() {
     let b_var = env.variable([10], "b");
 
     let b_write: [f32; 10] = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-    env.writer(&b_var)
+    env.writer(b_var)
         .write_all(bytemuck::cast_slice(&b_write))
         .unwrap();
 
     let mut b_read = [0f32; 10];
-    env.reader(&b_var)
+    env.reader(b_var)
         .read_exact(bytemuck::cast_slice_mut(&mut b_read))
         .unwrap();
 
     assert_eq!(b_write, b_read);
 
-    let w = g.input(&w_var);
-    let b = g.input(&b_var);
+    let w = g.input(w_var);
+    let b = g.input(b_var);
     let z = x.matmul(w) + b;
 
     // loss function
@@ -103,13 +103,13 @@ fn main() {
 
     // keep track of mean loss
     let mean_loss_var = env.variable([1], "loss");
-    g.output(&mean_loss_var, loss.reduce_sum(0) / (m as f32));
+    g.output(mean_loss_var, loss.reduce_sum(0) / (m as f32));
 
     // gradient descent step
     g.next_colour();
     let alpha = 0.1 / (m as f32);
-    g.output(&w_var, w.value() - alpha * w.grad());
-    g.output(&b_var, b.value() - alpha * b.grad());
+    g.output(w_var, w.value() - alpha * w.grad());
+    g.output(b_var, b.value() - alpha * b.grad());
 
     // build a graph that will write the outputs
     let graph = g.build();

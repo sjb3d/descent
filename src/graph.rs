@@ -35,22 +35,19 @@ slotmap::new_key_type! {
 }
 
 pub struct Graph {
-    ops: OpGraph,
-    roots: Vec<OpNodeIndex>,
-    ordering: Vec<OpNodeIndex>,
-    clusters: SlotMap<ClusterId, Cluster>,
+    pub(crate) variables: SharedVariables,
+    pub(crate) ops: OpGraph,
+    pub(crate) outputs: Vec<OpNodeIndex>,
+    pub(crate) ordering: Vec<OpNodeIndex>,
+    pub(crate) clusters: SlotMap<ClusterId, Cluster>,
 }
 
 impl Graph {
-    pub(crate) fn new(ops: OpGraph) -> Self {
-        let roots = ops
-            .node_indices()
-            .filter(|&node_index| matches!(ops[node_index].op, Op::Output { .. }))
-            .collect();
-
+    pub(crate) fn new(variables: SharedVariables, ops: OpGraph, outputs: Vec<OpNodeIndex>) -> Self {
         let mut graph = Self {
+            variables,
             ops,
-            roots,
+            outputs,
             ordering: Vec::new(),
             clusters: SlotMap::with_key(),
         };
@@ -80,7 +77,7 @@ impl Graph {
 
     fn eliminate_dead_code(&mut self) {
         let mut live = self.ops.visit_map();
-        for index in self.roots.iter().copied() {
+        for index in self.outputs.iter().copied() {
             live.visit(index);
         }
         for index in self.ordering.iter().rev().copied() {
@@ -119,10 +116,7 @@ impl Graph {
         for node_index in self.ordering.iter().copied() {
             if let Op::View(view) = &self.ops[node_index].op {
                 let view = view.clone();
-                assert_eq!(
-                    self.ops.neighbors_directed(node_index, Incoming).count(),
-                    1
-                );
+                assert_eq!(self.ops.neighbors_directed(node_index, Incoming).count(), 1);
                 let mut in_edges = self.ops.neighbors_directed(node_index, Incoming).detach();
                 let (in_edge_index, in_node_index) = in_edges.next(&self.ops).unwrap();
                 let mut out_edges = self.ops.neighbors_directed(node_index, Outgoing).detach();
@@ -258,9 +252,10 @@ impl Graph {
                         // check uses of this node don't re-enter this cluster
                         if self.any_successor(&[other_node_index], |node_index| {
                             self.ops[node_index].cluster_id.is_null()
-                                && self.ops.neighbors_directed(node_index, Outgoing).any(
-                                    |node_index| self.ops[node_index].cluster_id == cluster_id,
-                                )
+                                && self
+                                    .ops
+                                    .neighbors_directed(node_index, Outgoing)
+                                    .any(|node_index| self.ops[node_index].cluster_id == cluster_id)
                         }) {
                             continue 'inner;
                         }
@@ -268,9 +263,10 @@ impl Graph {
                         // check inputs of this node don't re-enter this cluster
                         if self.any_predecessor(&[other_node_index], |node_index| {
                             self.ops[node_index].cluster_id.is_null()
-                                && self.ops.neighbors_directed(node_index, Incoming).any(
-                                    |node_index| self.ops[node_index].cluster_id == cluster_id,
-                                )
+                                && self
+                                    .ops
+                                    .neighbors_directed(node_index, Incoming)
+                                    .any(|node_index| self.ops[node_index].cluster_id == cluster_id)
                         }) {
                             continue 'inner;
                         }
@@ -477,8 +473,12 @@ impl Graph {
                     col,
                     node.op
                 )?;
-                if let Some(s) = node.name.as_ref() {
-                    write!(w, "{}", s)?;
+                if let Op::Input { variable } | Op::Output { variable } = node.op {
+                    write!(
+                        w,
+                        "{}",
+                        self.variables.as_ref().borrow().get(variable).unwrap().name
+                    )?;
                 }
                 writeln!(w, "{}\"];", node.shape)?;
             }
