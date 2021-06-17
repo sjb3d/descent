@@ -357,7 +357,7 @@ impl GraphBuilder {
         })
     }
 
-    pub fn build(&self) -> Schedule {
-        self.with_state(|state| Schedule::new(state.ops.clone()))
+    pub fn build(&self) -> Graph {
+        self.with_state(|state| Graph::new(state.ops.clone()))
     }
 }

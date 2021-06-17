@@ -34,14 +34,14 @@ slotmap::new_key_type! {
     pub(crate) struct ClusterId;
 }
 
-pub struct Schedule {
+pub struct Graph {
     ops: OpGraph,
     roots: Vec<OpNodeIndex>,
     ordering: Vec<OpNodeIndex>,
     clusters: SlotMap<ClusterId, Cluster>,
 }
 
-impl Schedule {
+impl Graph {
     pub(crate) fn new(ops: OpGraph) -> Self {
         let roots = ops
             .node_indices()

@@ -111,13 +111,13 @@ fn main() {
     g.output(&w_var, w.value() - alpha * w.grad());
     g.output(&b_var, b.value() - alpha * b.grad());
 
-    // make a schedule to compute the outputs
-    let schedule = g.build();
+    // build a graph that will write the outputs
+    let graph = g.build();
 
     let mut f = BufWriter::new(File::create("debug.dot").unwrap());
-    schedule.write_dot(&mut f).unwrap();
+    graph.write_dot(&mut f).unwrap();
 
-    schedule.compile_kernel_source(0);
+    graph.compile_kernel_source(0);
 
     if env::args().len() > 1 {
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
