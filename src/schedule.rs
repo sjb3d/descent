@@ -12,9 +12,9 @@ use std::{
     io, iter,
 };
 
-fn get_arg_edges<const N: usize>(graph: &OpGraph, node_index: OpNodeIndex) -> [OpEdgeIndex; N] {
+fn get_arg_edges<const N: usize>(ops: &OpGraph, node_index: OpNodeIndex) -> [OpEdgeIndex; N] {
     let mut edge_indices = [OpEdgeIndex::end(); N];
-    for edge_ref in graph.edges_directed(node_index, Incoming) {
+    for edge_ref in ops.edges_directed(node_index, Incoming) {
         let edge = edge_ref.weight();
         assert_eq!(edge_indices[edge.arg], OpEdgeIndex::end());
         edge_indices[edge.arg] = edge_ref.id();
@@ -35,21 +35,21 @@ slotmap::new_key_type! {
 }
 
 pub struct Schedule {
-    graph: OpGraph,
+    ops: OpGraph,
     roots: Vec<OpNodeIndex>,
     ordering: Vec<OpNodeIndex>,
     clusters: SlotMap<ClusterId, Cluster>,
 }
 
 impl Schedule {
-    pub(crate) fn new(graph: OpGraph) -> Self {
-        let roots = graph
+    pub(crate) fn new(ops: OpGraph) -> Self {
+        let roots = ops
             .node_indices()
-            .filter(|&node_index| matches!(graph[node_index].op, Op::Output { .. }))
+            .filter(|&node_index| matches!(ops[node_index].op, Op::Output { .. }))
             .collect();
 
         let mut graph = Self {
-            graph,
+            ops,
             roots,
             ordering: Vec::new(),
             clusters: SlotMap::with_key(),
@@ -72,71 +72,71 @@ impl Schedule {
 
     fn rebuild_ordering(&mut self) {
         self.ordering.clear();
-        let mut topo = petgraph::visit::Topo::new(&self.graph);
-        while let Some(node_index) = topo.next(&self.graph) {
+        let mut topo = petgraph::visit::Topo::new(&self.ops);
+        while let Some(node_index) = topo.next(&self.ops) {
             self.ordering.push(node_index);
         }
     }
 
     fn eliminate_dead_code(&mut self) {
-        let mut live = self.graph.visit_map();
+        let mut live = self.ops.visit_map();
         for index in self.roots.iter().copied() {
             live.visit(index);
         }
         for index in self.ordering.iter().rev().copied() {
             if live.is_visited(&index) {
-                for input_index in self.graph.neighbors_directed(index, Incoming) {
+                for input_index in self.ops.neighbors_directed(index, Incoming) {
                     live.visit(input_index);
                 }
             }
         }
-        self.graph.retain_nodes(|_, index| live.is_visited(&index));
+        self.ops.retain_nodes(|_, index| live.is_visited(&index));
     }
 
     fn eliminate_accumulate_nodes(&mut self) {
         for node_index in self.ordering.iter().copied() {
-            if matches!(self.graph[node_index].op, Op::Accumulate) {
-                assert_eq!(self.graph.edges_directed(node_index, Incoming).count(), 1); // TODO: generate adds
-                let mut in_edges = self.graph.neighbors_directed(node_index, Incoming).detach();
-                let (in_edge_index, in_node_index) = in_edges.next(&self.graph).unwrap();
-                let mut out_edges = self.graph.neighbors_directed(node_index, Outgoing).detach();
-                while let Some((out_edge_index, out_node_index)) = out_edges.next(&self.graph) {
-                    let in_edge = &self.graph[in_edge_index];
-                    let out_edge = &self.graph[out_edge_index];
+            if matches!(self.ops[node_index].op, Op::Accumulate) {
+                assert_eq!(self.ops.edges_directed(node_index, Incoming).count(), 1); // TODO: generate adds
+                let mut in_edges = self.ops.neighbors_directed(node_index, Incoming).detach();
+                let (in_edge_index, in_node_index) = in_edges.next(&self.ops).unwrap();
+                let mut out_edges = self.ops.neighbors_directed(node_index, Outgoing).detach();
+                while let Some((out_edge_index, out_node_index)) = out_edges.next(&self.ops) {
+                    let in_edge = &self.ops[in_edge_index];
+                    let out_edge = &self.ops[out_edge_index];
                     assert_eq!(in_edge.arg, 0);
                     let new_edge = OpEdge {
                         arg: out_edge.arg,
                         view: in_edge.view.through(&out_edge.view),
                     };
-                    self.graph.add_edge(in_node_index, out_node_index, new_edge);
+                    self.ops.add_edge(in_node_index, out_node_index, new_edge);
                 }
-                self.graph.remove_node(node_index);
+                self.ops.remove_node(node_index);
             }
         }
     }
 
     fn eliminate_view_nodes(&mut self) {
         for node_index in self.ordering.iter().copied() {
-            if let Op::View(view) = &self.graph[node_index].op {
+            if let Op::View(view) = &self.ops[node_index].op {
                 let view = view.clone();
                 assert_eq!(
-                    self.graph.neighbors_directed(node_index, Incoming).count(),
+                    self.ops.neighbors_directed(node_index, Incoming).count(),
                     1
                 );
-                let mut in_edges = self.graph.neighbors_directed(node_index, Incoming).detach();
-                let (in_edge_index, in_node_index) = in_edges.next(&self.graph).unwrap();
-                let mut out_edges = self.graph.neighbors_directed(node_index, Outgoing).detach();
-                while let Some((out_edge_index, out_node_index)) = out_edges.next(&self.graph) {
-                    let in_edge = &self.graph[in_edge_index];
-                    let out_edge = &self.graph[out_edge_index];
+                let mut in_edges = self.ops.neighbors_directed(node_index, Incoming).detach();
+                let (in_edge_index, in_node_index) = in_edges.next(&self.ops).unwrap();
+                let mut out_edges = self.ops.neighbors_directed(node_index, Outgoing).detach();
+                while let Some((out_edge_index, out_node_index)) = out_edges.next(&self.ops) {
+                    let in_edge = &self.ops[in_edge_index];
+                    let out_edge = &self.ops[out_edge_index];
                     assert_eq!(in_edge.arg, 0);
                     let new_edge = OpEdge {
                         arg: out_edge.arg,
                         view: in_edge.view.through(&view).through(&out_edge.view),
                     };
-                    self.graph.add_edge(in_node_index, out_node_index, new_edge);
+                    self.ops.add_edge(in_node_index, out_node_index, new_edge);
                 }
-                self.graph.remove_node(node_index);
+                self.ops.remove_node(node_index);
             }
         }
     }
@@ -146,13 +146,13 @@ impl Schedule {
         roots: &[OpNodeIndex],
         mut f: impl FnMut(OpNodeIndex) -> bool,
     ) -> bool {
-        let mut markers = self.graph.visit_map();
+        let mut markers = self.ops.visit_map();
         for &node_index in roots {
             markers.visit(node_index);
         }
         for node_index in self.ordering.iter().copied().rev() {
             if self
-                .graph
+                .ops
                 .neighbors_directed(node_index, Outgoing)
                 .any(|output_node_index| markers.is_visited(&output_node_index))
             {
@@ -166,13 +166,13 @@ impl Schedule {
     }
 
     fn any_successor(&self, roots: &[OpNodeIndex], mut f: impl FnMut(OpNodeIndex) -> bool) -> bool {
-        let mut markers = self.graph.visit_map();
+        let mut markers = self.ops.visit_map();
         for &node_index in roots {
             markers.visit(node_index);
         }
         for node_index in self.ordering.iter().copied().rev() {
             if self
-                .graph
+                .ops
                 .neighbors_directed(node_index, Incoming)
                 .any(|input_node_index| markers.is_visited(&input_node_index))
             {
@@ -188,7 +188,7 @@ impl Schedule {
     fn build_kernels(&mut self) {
         // first gather per-element nodes into kernels
         for first_node_index in self.ordering.iter().copied() {
-            let first_node = &self.graph[first_node_index];
+            let first_node = &self.ops[first_node_index];
             if !first_node.cluster_id.is_null() {
                 continue;
             }
@@ -206,11 +206,11 @@ impl Schedule {
                     members: Vec::new(),
                     outputs: Vec::new(),
                 });
-                self.graph[first_node_index].cluster_id = cluster_id;
+                self.ops[first_node_index].cluster_id = cluster_id;
 
                 'outer: loop {
                     'inner: for other_node_index in self.ordering.iter().copied() {
-                        let other_node = &self.graph[other_node_index];
+                        let other_node = &self.ops[other_node_index];
 
                         // check this node has no cluster and matches shape
                         let can_include = other_node.cluster_id.is_null()
@@ -225,11 +225,11 @@ impl Schedule {
                         // skip this node if any edges with cluster nodes have non-identity views
                         let mut has_kernel_neighbor = false;
                         if self
-                            .graph
+                            .ops
                             .edges_directed(other_node_index, Incoming)
                             .filter(|edge_ref| {
                                 assert_eq!(edge_ref.target(), other_node_index);
-                                self.graph[edge_ref.source()].cluster_id == cluster_id
+                                self.ops[edge_ref.source()].cluster_id == cluster_id
                             })
                             .inspect(|_| has_kernel_neighbor = true)
                             .any(|edge_ref| !edge_ref.weight().view.is_identity())
@@ -237,11 +237,11 @@ impl Schedule {
                             continue 'inner;
                         }
                         if self
-                            .graph
+                            .ops
                             .edges_directed(other_node_index, Outgoing)
                             .filter(|edge_ref| {
                                 assert_eq!(edge_ref.source(), other_node_index);
-                                self.graph[edge_ref.target()].cluster_id == cluster_id
+                                self.ops[edge_ref.target()].cluster_id == cluster_id
                             })
                             .inspect(|_| has_kernel_neighbor = true)
                             .any(|edge_ref| !edge_ref.weight().view.is_identity())
@@ -257,9 +257,9 @@ impl Schedule {
 
                         // check uses of this node don't re-enter this cluster
                         if self.any_successor(&[other_node_index], |node_index| {
-                            self.graph[node_index].cluster_id.is_null()
-                                && self.graph.neighbors_directed(node_index, Outgoing).any(
-                                    |node_index| self.graph[node_index].cluster_id == cluster_id,
+                            self.ops[node_index].cluster_id.is_null()
+                                && self.ops.neighbors_directed(node_index, Outgoing).any(
+                                    |node_index| self.ops[node_index].cluster_id == cluster_id,
                                 )
                         }) {
                             continue 'inner;
@@ -267,16 +267,16 @@ impl Schedule {
 
                         // check inputs of this node don't re-enter this cluster
                         if self.any_predecessor(&[other_node_index], |node_index| {
-                            self.graph[node_index].cluster_id.is_null()
-                                && self.graph.neighbors_directed(node_index, Incoming).any(
-                                    |node_index| self.graph[node_index].cluster_id == cluster_id,
+                            self.ops[node_index].cluster_id.is_null()
+                                && self.ops.neighbors_directed(node_index, Incoming).any(
+                                    |node_index| self.ops[node_index].cluster_id == cluster_id,
                                 )
                         }) {
                             continue 'inner;
                         }
 
                         // ok to merge, restart search with new cluster
-                        self.graph[other_node_index].cluster_id = cluster_id;
+                        self.ops[other_node_index].cluster_id = cluster_id;
                         continue 'outer;
                     }
                     break 'outer;
@@ -286,7 +286,7 @@ impl Schedule {
 
         // build per-element cluster members in usage order
         for node_index in self.ordering.iter().copied() {
-            if let Some(cluster) = self.clusters.get_mut(self.graph[node_index].cluster_id) {
+            if let Some(cluster) = self.clusters.get_mut(self.ops[node_index].cluster_id) {
                 cluster.members.push(node_index);
             }
         }
@@ -303,7 +303,7 @@ impl Schedule {
 
             let mut node_op_index = HashMap::new();
 
-            let graph = &self.graph;
+            let graph = &self.ops;
             for node_index in members.iter().copied() {
                 // gather the arguments (loading as necessary)
                 let mut args = [None, None];
@@ -361,18 +361,18 @@ impl Schedule {
 
         // add reduction and matrix multiply kernels
         for node_index in self.ordering.iter().copied() {
-            let node = &self.graph[node_index];
+            let node = &self.ops[node_index];
             if node.cluster_id.is_null() {
                 match node.op {
                     Op::Reduce { reduce_op, axis } => {
-                        let [edge_index] = get_arg_edges(&self.graph, node_index);
+                        let [edge_index] = get_arg_edges(&self.ops, node_index);
                         let input_node_index = {
-                            assert!(self.graph[edge_index].view.is_identity());
-                            self.graph.edge_endpoints(edge_index).unwrap().0
+                            assert!(self.ops[edge_index].view.is_identity());
+                            self.ops.edge_endpoints(edge_index).unwrap().0
                         };
-                        self.graph[node_index].cluster_id = self.clusters.insert(Cluster {
+                        self.ops[node_index].cluster_id = self.clusters.insert(Cluster {
                             kernel: Kernel::Reduce(ReduceKernel {
-                                input_shape: self.graph[input_node_index].shape.clone(),
+                                input_shape: self.ops[input_node_index].shape.clone(),
                                 reduce_op,
                                 axis,
                             }),
@@ -382,10 +382,10 @@ impl Schedule {
                         });
                     }
                     Op::MatMul => {
-                        let edge_indices: [_; 2] = get_arg_edges(&self.graph, node_index);
+                        let edge_indices: [_; 2] = get_arg_edges(&self.ops, node_index);
                         let input_node_indices = edge_indices
                             .iter()
-                            .map(|&edge_index| self.graph.edge_endpoints(edge_index).unwrap().0)
+                            .map(|&edge_index| self.ops.edge_endpoints(edge_index).unwrap().0)
                             .collect::<ArrayVec<_, 2>>()
                             .into_inner()
                             .unwrap();
@@ -393,13 +393,13 @@ impl Schedule {
                             .iter()
                             .zip(input_node_indices.iter())
                             .map(|(&edge_index, &node_index)| KernelInput {
-                                view: self.graph[edge_index].view.clone(),
-                                shape: self.graph[node_index].shape.clone(),
+                                view: self.ops[edge_index].view.clone(),
+                                shape: self.ops[node_index].shape.clone(),
                             })
                             .collect::<ArrayVec<_, 2>>()
                             .into_inner()
                             .unwrap();
-                        self.graph[node_index].cluster_id = self.clusters.insert(Cluster {
+                        self.ops[node_index].cluster_id = self.clusters.insert(Cluster {
                             kernel: Kernel::MatMul(MatMulKernel {
                                 inputs: kernel_inputs,
                             }),
@@ -462,7 +462,7 @@ impl Schedule {
                 writeln!(w, "subgraph cluster{} {{ style=filled;", index)?;
             }
             for node_ref in self
-                .graph
+                .ops
                 .node_references()
                 .filter(|node_ref| node_ref.weight().cluster_id == cluster_id)
             {
@@ -486,7 +486,7 @@ impl Schedule {
                 writeln!(w, "}}")?;
             }
         }
-        for edge_ref in self.graph.edge_references() {
+        for edge_ref in self.ops.edge_references() {
             write!(
                 w,
                 "n{} -> n{}",

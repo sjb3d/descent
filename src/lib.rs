@@ -6,9 +6,9 @@ pub mod prelude {
     pub use crate::{builder::*, environment::*, schedule::*, shape::*};
 }
 mod common {
-    pub(crate) use crate::{graph::*, kernel::*, prelude::*};
+    pub(crate) use crate::{op::*, kernel::*, prelude::*};
 }
-mod graph;
+mod op;
 mod kernel;
 pub mod schedule;
 pub mod shape;

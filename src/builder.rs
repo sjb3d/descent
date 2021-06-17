@@ -17,32 +17,32 @@ pub struct Tensor<'builder> {
 
 impl<'builder> Array<'builder> {
     pub fn with_name(self, name: impl Into<String>) -> Self {
-        self.builder.with_data(|data| {
-            data.graph[self.index].name = Some(name.into());
+        self.builder.with_state(|state| {
+            state.ops[self.index].name = Some(name.into());
         });
         self
     }
 
     fn unary_op(self, op: UnaryOp) -> Self {
-        self.builder.with_data(|data| {
-            let shape = data.graph[self.index].shape.clone();
+        self.builder.with_state(|state| {
+            let shape = state.ops[self.index].shape.clone();
             Array {
-                index: data.new_node(shape, Op::Unary(op), &[self.index]),
+                index: state.new_node(shape, Op::Unary(op), &[self.index]),
                 builder: self.builder,
             }
         })
     }
 
     fn binary_op(self, rhs: Array, op: BinaryOp) -> Self {
-        self.builder.with_data(|data| {
-            let lhs_shape = data.graph[self.index].shape.clone();
-            let rhs_shape = data.graph[rhs.index].shape.clone();
+        self.builder.with_state(|state| {
+            let lhs_shape = state.ops[self.index].shape.clone();
+            let rhs_shape = state.ops[rhs.index].shape.clone();
             let op_shape = lhs_shape.match_with_broadcast(&rhs_shape);
 
             let lhs = if op_shape == lhs_shape {
                 self.index
             } else {
-                data.new_node(
+                state.new_node(
                     op_shape.clone(),
                     Op::View(View::broadcast(&lhs_shape, &op_shape)),
                     &[self.index],
@@ -51,7 +51,7 @@ impl<'builder> Array<'builder> {
             let rhs = if op_shape == rhs_shape {
                 rhs.index
             } else {
-                data.new_node(
+                state.new_node(
                     op_shape.clone(),
                     Op::View(View::broadcast(&rhs_shape, &op_shape)),
                     &[rhs.index],
@@ -59,27 +59,27 @@ impl<'builder> Array<'builder> {
             };
 
             Array {
-                index: data.new_node(op_shape, Op::Binary(op), &[lhs, rhs]),
+                index: state.new_node(op_shape, Op::Binary(op), &[lhs, rhs]),
                 builder: self.builder,
             }
         })
     }
 
     fn reduce_op(self, reduce_op: ReduceOp, axis: isize) -> Self {
-        self.builder.with_data(|data| {
-            let shape = data.graph[self.index].shape.reduce(axis);
+        self.builder.with_state(|state| {
+            let shape = state.ops[self.index].shape.reduce(axis);
             Array {
-                index: data.new_node(shape, Op::Reduce { reduce_op, axis }, &[self.index]),
+                index: state.new_node(shape, Op::Reduce { reduce_op, axis }, &[self.index]),
                 builder: self.builder,
             }
         })
     }
 
     pub fn one_hot(self, count: isize) -> Self {
-        self.builder.with_data(|data| {
-            let shape = data.graph[self.index].shape.one_hot(count);
+        self.builder.with_state(|state| {
+            let shape = state.ops[self.index].shape.one_hot(count);
             Array {
-                index: data.new_node(shape, Op::Unary(UnaryOp::OneHot), &[self.index]),
+                index: state.new_node(shape, Op::Unary(UnaryOp::OneHot), &[self.index]),
                 builder: self.builder,
             }
         })
@@ -108,24 +108,24 @@ impl<'builder> Array<'builder> {
     }
 
     pub fn matmul(self, rhs: Array) -> Self {
-        self.builder.with_data(|data| {
-            let shape = data.graph[self.index]
+        self.builder.with_state(|state| {
+            let shape = state.ops[self.index]
                 .shape
-                .matrix_multiply(&data.graph[rhs.index].shape);
+                .matrix_multiply(&state.ops[rhs.index].shape);
             Array {
-                index: data.new_node(shape, Op::MatMul, &[self.index, rhs.index]),
+                index: state.new_node(shape, Op::MatMul, &[self.index, rhs.index]),
                 builder: self.builder,
             }
         })
     }
 
     pub fn transpose(self) -> Self {
-        self.builder.with_data(|data| {
-            let input_shape = &data.graph[self.index].shape;
+        self.builder.with_state(|state| {
+            let input_shape = &state.ops[self.index].shape;
             let view = input_shape.identity_view().transposed();
             let output_shape = input_shape.transposed();
             Array {
-                index: data.new_node(output_shape, Op::View(view), &[self.index]),
+                index: state.new_node(output_shape, Op::View(view), &[self.index]),
                 builder: self.builder,
             }
         })
@@ -133,20 +133,20 @@ impl<'builder> Array<'builder> {
 
     pub fn shape(&self) -> Shape {
         self.builder
-            .with_data(|data| data.graph[self.index].shape.clone())
+            .with_state(|stste| stste.ops[self.index].shape.clone())
     }
 
     pub fn accumulate(&self, src: Array) {
-        self.builder.with_data(|data| {
-            assert_eq!(data.graph[self.index].op, Op::Accumulate);
-            assert_eq!(data.graph[self.index].shape, data.graph[src.index].shape);
-            let arg = data.graph.edges_directed(self.index, Incoming).count();
-            data.graph.add_edge(
+        self.builder.with_state(|state| {
+            assert_eq!(state.ops[self.index].op, Op::Accumulate);
+            assert_eq!(state.ops[self.index].shape, state.ops[src.index].shape);
+            let arg = state.ops.edges_directed(self.index, Incoming).count();
+            state.ops.add_edge(
                 src.index,
                 self.index,
                 OpEdge {
                     arg,
-                    view: data.graph[src.index].shape.identity_view(),
+                    view: state.ops[src.index].shape.identity_view(),
                 },
             );
         })
@@ -256,22 +256,22 @@ impl<'builder> ops::Add for Tensor<'builder> {
     }
 }
 
-struct GraphBuilderData {
-    graph: OpGraph,
+struct GraphBuilderState {
+    ops: OpGraph,
     colour: usize,
 }
 
-impl GraphBuilderData {
+impl GraphBuilderState {
     fn new_node(&mut self, shape: impl Into<Shape>, op: Op, inputs: &[OpNodeIndex]) -> OpNodeIndex {
         let shape = shape.into();
-        let node_index = self.graph.add_node(OpNode::new(self.colour, shape, op));
+        let node_index = self.ops.add_node(OpNode::new(self.colour, shape, op));
         for (index, input) in inputs.iter().copied().enumerate() {
-            self.graph.add_edge(
+            self.ops.add_edge(
                 input,
                 node_index,
                 OpEdge {
                     arg: index,
-                    view: self.graph[input].shape.identity_view(),
+                    view: self.ops[input].shape.identity_view(),
                 },
             );
         }
@@ -280,30 +280,30 @@ impl GraphBuilderData {
 }
 
 pub struct GraphBuilder {
-    data: RefCell<GraphBuilderData>,
+    state: RefCell<GraphBuilderState>,
 }
 
 impl GraphBuilder {
     pub fn new() -> Self {
         Self {
-            data: RefCell::new(GraphBuilderData {
-                graph: Default::default(),
+            state: RefCell::new(GraphBuilderState {
+                ops: Default::default(),
                 colour: 0,
             }),
         }
     }
 
-    fn with_data<F, T>(&self, f: F) -> T
+    fn with_state<F, T>(&self, f: F) -> T
     where
-        F: FnOnce(&mut GraphBuilderData) -> T,
+        F: FnOnce(&mut GraphBuilderState) -> T,
     {
-        let mut data = self.data.borrow_mut();
+        let mut data = self.state.borrow_mut();
         f(&mut data)
     }
 
     fn literal(&self, value: f32) -> Array {
-        self.with_data(|data| Array {
-            index: data.new_node([1], Op::Literal(value), &[]),
+        self.with_state(|state| Array {
+            index: state.new_node([1], Op::Literal(value), &[]),
             builder: self,
         })
     }
@@ -311,8 +311,8 @@ impl GraphBuilder {
     pub fn input(&self, variable: &Variable) -> Tensor {
         let shape = variable.shape();
         let value = self
-            .with_data(|data| Array {
-                index: data.new_node(
+            .with_state(|state| Array {
+                index: state.new_node(
                     shape.clone(),
                     Op::Input {
                         variable_id: variable.id,
@@ -331,10 +331,10 @@ impl GraphBuilder {
     }
 
     pub fn output(&self, variable: &Variable, rhs: Array) {
-        self.with_data(|data| {
-            let shape = data.graph[rhs.index].shape.clone();
+        self.with_state(|state| {
+            let shape = state.ops[rhs.index].shape.clone();
             assert_eq!(variable.shape(), shape);
-            data.new_node(
+            state.new_node(
                 shape,
                 Op::Output {
                     variable_id: variable.id,
@@ -345,19 +345,19 @@ impl GraphBuilder {
     }
 
     pub fn accumulator(&self, shape: impl Into<Shape>) -> Array {
-        self.with_data(|data| Array {
-            index: data.new_node(shape, Op::Accumulate, &[]),
+        self.with_state(|state| Array {
+            index: state.new_node(shape, Op::Accumulate, &[]),
             builder: self,
         })
     }
 
     pub fn next_colour(&self) {
-        self.with_data(|data| {
-            data.colour += 1;
+        self.with_state(|state| {
+            state.colour += 1;
         })
     }
 
     pub fn build(&self) -> Schedule {
-        self.with_data(|data| Schedule::new(data.graph.clone()))
+        self.with_state(|state| Schedule::new(state.ops.clone()))
     }
 }
