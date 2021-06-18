@@ -212,44 +212,39 @@ impl Graph {
                         let other_node = &self.ops[other_node_index];
 
                         // check this node has no cluster and matches shape
-                        let can_include = other_node.cluster_id.is_none()
-                            && match other_node.op {
-                                Op::Unary(_) | Op::Binary(_) => other_node.shape == shape,
-                                _ => false,
-                            };
+                        let is_matching_shape =
+                            matches!(other_node.op, Op::Unary(_) | Op::Binary(_))
+                                && other_node.shape == shape;
+                        let is_literal = matches!(other_node.op, Op::Literal(_));
+                        let can_include =
+                            other_node.cluster_id.is_none() && (is_matching_shape || is_literal);
                         if !can_include {
                             continue 'inner;
                         }
 
                         // skip this node if any edges with cluster nodes have non-identity views
                         let mut has_kernel_neighbor = false;
-                        if self
+                        for edge_ref in self
                             .ops
                             .edges_directed(other_node_index, Incoming)
                             .filter(|edge_ref| {
                                 assert_eq!(edge_ref.target(), other_node_index);
                                 self.ops[edge_ref.source()].cluster_id == cluster_id
                             })
-                            .inspect(|_| has_kernel_neighbor = true)
-                            .any(|edge_ref| !edge_ref.weight().view.is_identity())
+                            .chain(self.ops.edges_directed(other_node_index, Outgoing).filter(
+                                |edge_ref| {
+                                    assert_eq!(edge_ref.source(), other_node_index);
+                                    self.ops[edge_ref.target()].cluster_id == cluster_id
+                                },
+                            ))
                         {
-                            continue 'inner;
-                        }
-                        if self
-                            .ops
-                            .edges_directed(other_node_index, Outgoing)
-                            .filter(|edge_ref| {
-                                assert_eq!(edge_ref.source(), other_node_index);
-                                self.ops[edge_ref.target()].cluster_id == cluster_id
-                            })
-                            .inspect(|_| has_kernel_neighbor = true)
-                            .any(|edge_ref| !edge_ref.weight().view.is_identity())
-                        {
-                            continue 'inner;
+                            has_kernel_neighbor = true;
+                            if !is_literal && !edge_ref.weight().view.is_identity() {
+                                continue 'inner;
+                            }
                         }
 
                         // placing this node in the cluster needs to save a load
-                        // TODO: also check for sibling nodes?
                         if !has_kernel_neighbor {
                             continue 'inner;
                         }
@@ -315,21 +310,15 @@ impl Graph {
                         Some(*node_op_index.entry(source_node_index).or_insert_with(|| {
                             let source_node = &graph[source_node_index];
                             assert_ne!(source_node.cluster_id, Some(cluster_id));
-                            if let Op::Literal(value) = source_node.op {
-                                let op_index = kernel.ops.len();
-                                kernel.ops.push(PerElementKernelOp::Literal(value));
-                                op_index
-                            } else {
-                                let input_index = kernel.inputs.len();
-                                kernel.inputs.push(KernelInput {
-                                    shape: source_node.shape.clone(),
-                                    view: edge.view.clone(),
-                                });
-                                inputs.push(source_node_index);
-                                let op_index = kernel.ops.len();
-                                kernel.ops.push(PerElementKernelOp::Load { input_index });
-                                op_index
-                            }
+                            let input_index = kernel.inputs.len();
+                            kernel.inputs.push(KernelInput {
+                                shape: source_node.shape.clone(),
+                                view: edge.view.clone(),
+                            });
+                            inputs.push(source_node_index);
+                            let op_index = kernel.ops.len();
+                            kernel.ops.push(PerElementKernelOp::Load { input_index });
+                            op_index
                         }));
                 }
 
@@ -345,6 +334,7 @@ impl Graph {
                         arg0_index: args[0].unwrap(),
                         arg1_index: args[1].unwrap(),
                     },
+                    Op::Literal(value) => PerElementKernelOp::Literal(value),
                     _ => panic!("unexpected op type"),
                 });
                 node_op_index.insert(node_index, op_index);

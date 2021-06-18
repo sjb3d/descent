@@ -216,11 +216,8 @@ impl Environment {
                 let node_state = &mut node_states[node_index.index()];
                 node_state.usage_count -= 1;
                 if node_state.usage_count == 0 {
-                    // TODO: move literals into cluster, remove this check
-                    if !matches!(graph.ops[node_index].op, Op::Literal(_)) {
-                        println!("free {:?}", node_index);
-                        self.buffer_heap.free(node_state.buffer_id.take().unwrap());
-                    }
+                    println!("free {:?}", node_index);
+                    self.buffer_heap.free(node_state.buffer_id.take().unwrap());
                 }
             }
         }
