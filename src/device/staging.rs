@@ -170,7 +170,8 @@ impl<'a> StagingWriter<'a> {
                 if self.buffer.is_finished() {
                     let buffer_memory_barrier = vk::BufferMemoryBarrier {
                         src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-                        dst_access_mask: vk::AccessFlags::SHADER_READ,
+                        dst_access_mask: vk::AccessFlags::SHADER_READ
+                            | vk::AccessFlags::SHADER_WRITE,
                         src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                         dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                         buffer: Some(self.buffer.info.buffer),
@@ -280,7 +281,7 @@ impl<'a> StagingReader<'a> {
 
             if self.buffer.is_starting() {
                 let buffer_memory_barrier = vk::BufferMemoryBarrier {
-                    src_access_mask: vk::AccessFlags::SHADER_READ,
+                    src_access_mask: vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
                     dst_access_mask: vk::AccessFlags::TRANSFER_READ,
                     src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                     dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,

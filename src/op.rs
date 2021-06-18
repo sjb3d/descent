@@ -1,17 +1,18 @@
 use crate::common::*;
+use ordered_float::NotNan;
 use petgraph::prelude::*;
 
 pub(crate) type OpGraph = StableDiGraph<OpNode, OpEdge, usize>;
 pub(crate) type OpNodeId = NodeIndex<usize>;
 pub(crate) type OpEdgeId = EdgeIndex<usize>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ReduceOp {
     Max,
     Sum,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BinaryOp {
     Add,
     Sub,
@@ -19,7 +20,7 @@ pub(crate) enum BinaryOp {
     Div,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum UnaryOp {
     Neg,
     Exp,
@@ -31,7 +32,7 @@ pub(crate) enum UnaryOp {
 pub(crate) enum Op {
     Input { variable_id: VariableId },
     Output { variable_id: VariableId },
-    Literal(f32),
+    Literal(NotNan<f32>),
     View(View),
     Unary(UnaryOp),
     Binary(BinaryOp),

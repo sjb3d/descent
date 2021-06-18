@@ -1,7 +1,6 @@
-use crate::{device::common::*, op::*, prelude::*};
+use crate::{common::*, device::common::*};
 use petgraph::visit::{IntoNodeReferences, NodeIndexable, NodeRef};
 use slotmap::SlotMap;
-use spark::vk;
 use std::{cell::RefCell, collections::HashSet, io, rc::Rc};
 
 slotmap::new_key_type! {
@@ -37,18 +36,6 @@ pub(crate) struct Variable {
     pub(crate) buffer_id: Option<BufferId>,
 }
 
-struct Kernel {
-    shader_module: vk::ShaderModule,
-    descriptor_set_layout: vk::DescriptorSetLayout,
-    descriptor_set: vk::DescriptorSet,
-    pipeline_layout: vk::PipelineLayout,
-    pipeline: vk::Pipeline,
-}
-
-struct KernelCache {
-    context: SharedContext,
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 struct OpNodeStorage {
     usage_count: usize,
@@ -62,6 +49,7 @@ pub struct Environment {
     buffer_heap: BufferHeap,
     staging_buffer: StagingBuffer,
     variables: SharedVariables,
+    kernel_cache: KernelCache,
 }
 
 impl Environment {
@@ -71,6 +59,7 @@ impl Environment {
         let command_buffers = CommandBufferSet::new(&context, &fences);
         let buffer_heap = BufferHeap::new(&context);
         let staging_buffer = StagingBuffer::new(&context, &fences);
+        let kernel_cache = KernelCache::new(&context);
         Self {
             context,
             fences,
@@ -78,6 +67,7 @@ impl Environment {
             buffer_heap,
             staging_buffer,
             variables: Rc::new(RefCell::new(SlotMap::with_key())),
+            kernel_cache,
         }
     }
 
@@ -211,6 +201,7 @@ impl Environment {
                         .unwrap(),
                 );
             }
+            let _module = self.kernel_cache.module(&cluster.kernel);
             // TODO: run kernel
             for node_id in cluster.inputs.iter().copied() {
                 let node_state = &mut node_storage[node_id.index()];

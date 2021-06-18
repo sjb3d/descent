@@ -4,7 +4,7 @@ use std::{fmt, iter, mem, ops};
 pub(crate) const MAX_DIM: usize = 4;
 pub(crate) type ShapeVec = ArrayVec<isize, MAX_DIM>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Axis(u8);
 
 impl Axis {
@@ -18,7 +18,7 @@ impl Axis {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Shape(ShapeVec);
 
 impl Shape {
@@ -161,7 +161,7 @@ impl<const N: usize> From<[isize; N]> for Shape {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct AxisRemap {
     axis: Axis,
     offset: isize,
@@ -187,7 +187,7 @@ impl AxisRemap {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct View(ArrayVec<AxisRemap, MAX_DIM>);
 
 impl View {

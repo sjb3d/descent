@@ -122,8 +122,6 @@ fn main() {
     env.writer(w_var);
     env.run(&graph);
 
-    graph.compile_kernel_source(0);
-
     if env::args().len() > 1 {
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
 

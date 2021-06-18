@@ -1,4 +1,5 @@
 use crate::common::*;
+use ordered_float::NotNan;
 use petgraph::Incoming;
 use slotmap::SparseSecondaryMap;
 use std::{cell::RefCell, ops};
@@ -329,7 +330,9 @@ impl GraphBuilder {
 
     fn literal(&self, value: f32) -> Array {
         self.with_state(|state| Array {
-            node_id: state.ops.new_node([1], Op::Literal(value), &[]),
+            node_id: state
+                .ops
+                .new_node([1], Op::Literal(NotNan::new(value).unwrap()), &[]),
             builder: self,
         })
     }

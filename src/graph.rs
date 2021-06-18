@@ -7,7 +7,6 @@ use petgraph::{
 use slotmap::{SecondaryMap, SlotMap};
 use std::{
     collections::{hash_map::DefaultHasher, HashMap},
-    fmt,
     hash::{Hash, Hasher},
     io, iter,
 };
@@ -73,6 +72,7 @@ impl Graph {
         while let Some(node_id) = topo.next(&self.ops) {
             self.ops_sorted.push(node_id);
         }
+        assert_eq!(self.ops.node_count(), self.ops_sorted.len());
     }
 
     fn eliminate_dead_code(&mut self) {
@@ -421,43 +421,6 @@ impl Graph {
             self.clusters_sorted.push(cluster_graph[cluster_node_id]);
         }
         assert_eq!(self.clusters_sorted.len(), self.clusters.len());
-    }
-
-    fn generate_kernel_source(&self, cluster_index: usize) -> Result<String, fmt::Error> {
-        self.clusters
-            .iter()
-            .nth(cluster_index)
-            .unwrap()
-            .1
-            .kernel
-            .generate_source()
-    }
-
-    pub fn compile_kernel_source(&self, cluster_index: usize) -> Option<String> {
-        let source = self.generate_kernel_source(cluster_index).unwrap();
-        println!("{}", source);
-
-        let mut compiler = shaderc::Compiler::new().unwrap();
-        match compiler.compile_into_spirv_assembly(
-            &source,
-            shaderc::ShaderKind::Compute,
-            "kernel",
-            "main",
-            None,
-        ) {
-            Ok(artifact) => {
-                if artifact.get_num_warnings() != 0 {
-                    println!("{}", artifact.get_warning_messages());
-                }
-                let text = artifact.as_text();
-                println!("{}", text);
-                Some(text)
-            }
-            Err(err) => {
-                println!("{}", err);
-                None
-            }
-        }
     }
 
     pub fn write_dot(&self, w: &mut impl io::Write) -> io::Result<()> {
