@@ -12,25 +12,22 @@ use std::{
     io, iter,
 };
 
-pub(crate) fn get_arg_edges<const N: usize>(
-    ops: &OpGraph,
-    node_index: OpNodeIndex,
-) -> [OpEdgeIndex; N] {
-    let mut edge_indices = [OpEdgeIndex::end(); N];
-    for edge_ref in ops.edges_directed(node_index, Incoming) {
+pub(crate) fn get_arg_edge_ids<const N: usize>(ops: &OpGraph, node_id: OpNodeId) -> [OpEdgeId; N] {
+    let mut edge_ids = [OpEdgeId::end(); N];
+    for edge_ref in ops.edges_directed(node_id, Incoming) {
         let edge = edge_ref.weight();
-        assert_eq!(edge_indices[edge.arg], OpEdgeIndex::end());
-        edge_indices[edge.arg] = edge_ref.id();
+        assert_eq!(edge_ids[edge.arg], OpEdgeId::end());
+        edge_ids[edge.arg] = edge_ref.id();
     }
-    edge_indices
+    edge_ids
 }
 
 #[derive(Debug)]
 pub(crate) struct Cluster {
     pub(crate) kernel: Kernel,
-    pub(crate) inputs: Vec<OpNodeIndex>,
-    pub(crate) members: Vec<OpNodeIndex>,
-    pub(crate) outputs: Vec<OpNodeIndex>,
+    pub(crate) inputs: Vec<OpNodeId>,
+    pub(crate) members: Vec<OpNodeId>,
+    pub(crate) outputs: Vec<OpNodeId>,
 }
 
 slotmap::new_key_type! {
@@ -40,7 +37,7 @@ slotmap::new_key_type! {
 pub struct Graph {
     pub(crate) variables: SharedVariables,
     pub(crate) ops: OpGraph,
-    pub(crate) ops_sorted: Vec<OpNodeIndex>,
+    pub(crate) ops_sorted: Vec<OpNodeId>,
     pub(crate) clusters: SlotMap<ClusterId, Cluster>,
     pub(crate) clusters_sorted: Vec<ClusterId>,
 }
@@ -73,8 +70,8 @@ impl Graph {
     fn rebuild_ordering(&mut self) {
         self.ops_sorted.clear();
         let mut topo = Topo::new(&self.ops);
-        while let Some(node_index) = topo.next(&self.ops) {
-            self.ops_sorted.push(node_index);
+        while let Some(node_id) = topo.next(&self.ops) {
+            self.ops_sorted.push(node_id);
         }
     }
 
@@ -96,67 +93,63 @@ impl Graph {
     }
 
     fn eliminate_accumulate_nodes(&mut self) {
-        for node_index in self.ops_sorted.iter().copied() {
-            if matches!(self.ops[node_index].op, Op::Accumulate) {
-                assert_eq!(self.ops.edges_directed(node_index, Incoming).count(), 1); // TODO: generate adds
-                let mut in_edges = self.ops.neighbors_directed(node_index, Incoming).detach();
-                let (in_edge_index, in_node_index) = in_edges.next(&self.ops).unwrap();
-                let mut out_edges = self.ops.neighbors_directed(node_index, Outgoing).detach();
-                while let Some((out_edge_index, out_node_index)) = out_edges.next(&self.ops) {
-                    let in_edge = &self.ops[in_edge_index];
-                    let out_edge = &self.ops[out_edge_index];
+        for node_id in self.ops_sorted.iter().copied() {
+            if matches!(self.ops[node_id].op, Op::Accumulate) {
+                assert_eq!(self.ops.edges_directed(node_id, Incoming).count(), 1); // TODO: generate adds
+                let mut in_edges = self.ops.neighbors_directed(node_id, Incoming).detach();
+                let (in_edge_id, in_node_id) = in_edges.next(&self.ops).unwrap();
+                let mut out_edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
+                while let Some((out_edge_id, out_node_id)) = out_edges.next(&self.ops) {
+                    let in_edge = &self.ops[in_edge_id];
+                    let out_edge = &self.ops[out_edge_id];
                     assert_eq!(in_edge.arg, 0);
                     let new_edge = OpEdge {
                         arg: out_edge.arg,
                         view: in_edge.view.through(&out_edge.view),
                     };
-                    self.ops.add_edge(in_node_index, out_node_index, new_edge);
+                    self.ops.add_edge(in_node_id, out_node_id, new_edge);
                 }
-                self.ops.remove_node(node_index);
+                self.ops.remove_node(node_id);
             }
         }
     }
 
     fn eliminate_view_nodes(&mut self) {
-        for node_index in self.ops_sorted.iter().copied() {
-            if let Op::View(view) = &self.ops[node_index].op {
+        for node_id in self.ops_sorted.iter().copied() {
+            if let Op::View(view) = &self.ops[node_id].op {
                 let view = view.clone();
-                assert_eq!(self.ops.neighbors_directed(node_index, Incoming).count(), 1);
-                let mut in_edges = self.ops.neighbors_directed(node_index, Incoming).detach();
-                let (in_edge_index, in_node_index) = in_edges.next(&self.ops).unwrap();
-                let mut out_edges = self.ops.neighbors_directed(node_index, Outgoing).detach();
-                while let Some((out_edge_index, out_node_index)) = out_edges.next(&self.ops) {
-                    let in_edge = &self.ops[in_edge_index];
-                    let out_edge = &self.ops[out_edge_index];
+                assert_eq!(self.ops.neighbors_directed(node_id, Incoming).count(), 1);
+                let mut in_edges = self.ops.neighbors_directed(node_id, Incoming).detach();
+                let (in_edge_id, in_node_id) = in_edges.next(&self.ops).unwrap();
+                let mut out_edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
+                while let Some((out_edge_id, out_node_id)) = out_edges.next(&self.ops) {
+                    let in_edge = &self.ops[in_edge_id];
+                    let out_edge = &self.ops[out_edge_id];
                     assert_eq!(in_edge.arg, 0);
                     let new_edge = OpEdge {
                         arg: out_edge.arg,
                         view: in_edge.view.through(&view).through(&out_edge.view),
                     };
-                    self.ops.add_edge(in_node_index, out_node_index, new_edge);
+                    self.ops.add_edge(in_node_id, out_node_id, new_edge);
                 }
-                self.ops.remove_node(node_index);
+                self.ops.remove_node(node_id);
             }
         }
     }
 
-    fn any_predecessor(
-        &self,
-        roots: &[OpNodeIndex],
-        mut f: impl FnMut(OpNodeIndex) -> bool,
-    ) -> bool {
+    fn any_predecessor(&self, roots: &[OpNodeId], mut f: impl FnMut(OpNodeId) -> bool) -> bool {
         let mut markers = self.ops.visit_map();
-        for &node_index in roots {
-            markers.visit(node_index);
+        for &node_id in roots {
+            markers.visit(node_id);
         }
-        for node_index in self.ops_sorted.iter().copied().rev() {
+        for node_id in self.ops_sorted.iter().copied().rev() {
             if self
                 .ops
-                .neighbors_directed(node_index, Outgoing)
-                .any(|output_node_index| markers.is_visited(&output_node_index))
+                .neighbors_directed(node_id, Outgoing)
+                .any(|output_node_id| markers.is_visited(&output_node_id))
             {
-                markers.visit(node_index);
-                if f(node_index) {
+                markers.visit(node_id);
+                if f(node_id) {
                     return true;
                 }
             }
@@ -164,19 +157,19 @@ impl Graph {
         return false;
     }
 
-    fn any_successor(&self, roots: &[OpNodeIndex], mut f: impl FnMut(OpNodeIndex) -> bool) -> bool {
+    fn any_successor(&self, roots: &[OpNodeId], mut f: impl FnMut(OpNodeId) -> bool) -> bool {
         let mut markers = self.ops.visit_map();
-        for &node_index in roots {
-            markers.visit(node_index);
+        for &node_id in roots {
+            markers.visit(node_id);
         }
-        for node_index in self.ops_sorted.iter().copied().rev() {
+        for node_id in self.ops_sorted.iter().copied().rev() {
             if self
                 .ops
-                .neighbors_directed(node_index, Incoming)
-                .any(|input_node_index| markers.is_visited(&input_node_index))
+                .neighbors_directed(node_id, Incoming)
+                .any(|input_node_id| markers.is_visited(&input_node_id))
             {
-                markers.visit(node_index);
-                if f(node_index) {
+                markers.visit(node_id);
+                if f(node_id) {
                     return true;
                 }
             }
@@ -186,8 +179,8 @@ impl Graph {
 
     fn build_clusters(&mut self) {
         // first gather per-element nodes into kernels
-        for first_node_index in self.ops_sorted.iter().copied() {
-            let first_node = &self.ops[first_node_index];
+        for first_node_id in self.ops_sorted.iter().copied() {
+            let first_node = &self.ops[first_node_id];
             if !first_node.cluster_id.is_none() {
                 continue;
             }
@@ -205,11 +198,11 @@ impl Graph {
                     members: Vec::new(),
                     outputs: Vec::new(),
                 }));
-                self.ops[first_node_index].cluster_id = cluster_id;
+                self.ops[first_node_id].cluster_id = cluster_id;
 
                 'outer: loop {
-                    'inner: for other_node_index in self.ops_sorted.iter().copied() {
-                        let other_node = &self.ops[other_node_index];
+                    'inner: for other_node_id in self.ops_sorted.iter().copied() {
+                        let other_node = &self.ops[other_node_id];
 
                         // check this node has no cluster and matches shape
                         let is_matching_shape =
@@ -226,14 +219,14 @@ impl Graph {
                         let mut has_kernel_neighbor = false;
                         for edge_ref in self
                             .ops
-                            .edges_directed(other_node_index, Incoming)
+                            .edges_directed(other_node_id, Incoming)
                             .filter(|edge_ref| {
-                                assert_eq!(edge_ref.target(), other_node_index);
+                                assert_eq!(edge_ref.target(), other_node_id);
                                 self.ops[edge_ref.source()].cluster_id == cluster_id
                             })
-                            .chain(self.ops.edges_directed(other_node_index, Outgoing).filter(
+                            .chain(self.ops.edges_directed(other_node_id, Outgoing).filter(
                                 |edge_ref| {
-                                    assert_eq!(edge_ref.source(), other_node_index);
+                                    assert_eq!(edge_ref.source(), other_node_id);
                                     self.ops[edge_ref.target()].cluster_id == cluster_id
                                 },
                             ))
@@ -250,29 +243,29 @@ impl Graph {
                         }
 
                         // check uses of this node don't re-enter this cluster
-                        if self.any_successor(&[other_node_index], |node_index| {
-                            self.ops[node_index].cluster_id.is_none()
+                        if self.any_successor(&[other_node_id], |node_id| {
+                            self.ops[node_id].cluster_id.is_none()
                                 && self
                                     .ops
-                                    .neighbors_directed(node_index, Outgoing)
-                                    .any(|node_index| self.ops[node_index].cluster_id == cluster_id)
+                                    .neighbors_directed(node_id, Outgoing)
+                                    .any(|node_id| self.ops[node_id].cluster_id == cluster_id)
                         }) {
                             continue 'inner;
                         }
 
                         // check inputs of this node don't re-enter this cluster
-                        if self.any_predecessor(&[other_node_index], |node_index| {
-                            self.ops[node_index].cluster_id.is_none()
+                        if self.any_predecessor(&[other_node_id], |node_id| {
+                            self.ops[node_id].cluster_id.is_none()
                                 && self
                                     .ops
-                                    .neighbors_directed(node_index, Incoming)
-                                    .any(|node_index| self.ops[node_index].cluster_id == cluster_id)
+                                    .neighbors_directed(node_id, Incoming)
+                                    .any(|node_id| self.ops[node_id].cluster_id == cluster_id)
                         }) {
                             continue 'inner;
                         }
 
                         // ok to merge, restart search with new cluster
-                        self.ops[other_node_index].cluster_id = cluster_id;
+                        self.ops[other_node_id].cluster_id = cluster_id;
                         continue 'outer;
                     }
                     break 'outer;
@@ -281,9 +274,9 @@ impl Graph {
         }
 
         // build per-element cluster members in usage order
-        for node_index in self.ops_sorted.iter().copied() {
-            if let Some(cluster_id) = self.ops[node_index].cluster_id {
-                self.clusters[cluster_id].members.push(node_index);
+        for node_id in self.ops_sorted.iter().copied() {
+            if let Some(cluster_id) = self.ops[node_id].cluster_id {
+                self.clusters[cluster_id].members.push(node_id);
             }
         }
 
@@ -300,22 +293,22 @@ impl Graph {
             let mut node_op_index = HashMap::new();
 
             let graph = &self.ops;
-            for node_index in members.iter().copied() {
+            for node_id in members.iter().copied() {
                 // gather the arguments (loading as necessary)
                 let mut args = [None, None];
-                for edge_ref in graph.edges_directed(node_index, Incoming) {
-                    let source_node_index = edge_ref.source();
+                for edge_ref in graph.edges_directed(node_id, Incoming) {
+                    let source_node_id = edge_ref.source();
                     let edge = edge_ref.weight();
                     args[edge.arg] =
-                        Some(*node_op_index.entry(source_node_index).or_insert_with(|| {
-                            let source_node = &graph[source_node_index];
+                        Some(*node_op_index.entry(source_node_id).or_insert_with(|| {
+                            let source_node = &graph[source_node_id];
                             assert_ne!(source_node.cluster_id, Some(cluster_id));
                             let input_index = kernel.inputs.len();
                             kernel.inputs.push(KernelInput {
                                 shape: source_node.shape.clone(),
                                 view: edge.view.clone(),
                             });
-                            inputs.push(source_node_index);
+                            inputs.push(source_node_id);
                             let op_index = kernel.ops.len();
                             kernel.ops.push(PerElementKernelOp::Load { input_index });
                             op_index
@@ -324,7 +317,7 @@ impl Graph {
 
                 // emit the op
                 let op_index = kernel.ops.len();
-                kernel.ops.push(match graph[node_index].op {
+                kernel.ops.push(match graph[node_id].op {
                     Op::Unary(op) => PerElementKernelOp::Unary {
                         op,
                         arg0_index: args[0].unwrap(),
@@ -337,66 +330,66 @@ impl Graph {
                     Op::Literal(value) => PerElementKernelOp::Literal(value),
                     _ => panic!("unexpected op type"),
                 });
-                node_op_index.insert(node_index, op_index);
+                node_op_index.insert(node_id, op_index);
 
                 // store the result if necessary
                 if graph
-                    .neighbors_directed(node_index, Outgoing)
-                    .any(|other_index| graph[other_index].cluster_id != Some(cluster_id))
+                    .neighbors_directed(node_id, Outgoing)
+                    .any(|other_id| graph[other_id].cluster_id != Some(cluster_id))
                 {
                     kernel.outputs.push(op_index);
-                    outputs.push(node_index);
+                    outputs.push(node_id);
                 }
             }
         }
 
         // add reduction and matrix multiply kernels
-        for node_index in self.ops_sorted.iter().copied() {
-            let node = &self.ops[node_index];
+        for node_id in self.ops_sorted.iter().copied() {
+            let node = &self.ops[node_id];
             if node.cluster_id.is_none() {
                 match node.op {
                     Op::Reduce { reduce_op, axis } => {
-                        let [edge_index] = get_arg_edges(&self.ops, node_index);
-                        let input_node_index = {
-                            assert!(self.ops[edge_index].view.is_identity());
-                            self.ops.edge_endpoints(edge_index).unwrap().0
+                        let [edge_id] = get_arg_edge_ids(&self.ops, node_id);
+                        let input_node_id = {
+                            assert!(self.ops[edge_id].view.is_identity());
+                            self.ops.edge_endpoints(edge_id).unwrap().0
                         };
-                        self.ops[node_index].cluster_id = Some(self.clusters.insert(Cluster {
+                        self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: Kernel::Reduce(ReduceKernel {
-                                input_shape: self.ops[input_node_index].shape.clone(),
+                                input_shape: self.ops[input_node_id].shape.clone(),
                                 reduce_op,
                                 axis,
                             }),
-                            inputs: vec![input_node_index],
-                            members: vec![node_index],
-                            outputs: vec![node_index],
+                            inputs: vec![input_node_id],
+                            members: vec![node_id],
+                            outputs: vec![node_id],
                         }));
                     }
                     Op::MatMul => {
-                        let edge_indices: [_; 2] = get_arg_edges(&self.ops, node_index);
+                        let edge_indices: [_; 2] = get_arg_edge_ids(&self.ops, node_id);
                         let input_node_indices = edge_indices
                             .iter()
-                            .map(|&edge_index| self.ops.edge_endpoints(edge_index).unwrap().0)
+                            .map(|&edge_id| self.ops.edge_endpoints(edge_id).unwrap().0)
                             .collect::<ArrayVec<_, 2>>()
                             .into_inner()
                             .unwrap();
                         let kernel_inputs = edge_indices
                             .iter()
                             .zip(input_node_indices.iter())
-                            .map(|(&edge_index, &node_index)| KernelInput {
-                                view: self.ops[edge_index].view.clone(),
-                                shape: self.ops[node_index].shape.clone(),
+                            .map(|(&edge_id, &node_id)| KernelInput {
+                                view: self.ops[edge_id].view.clone(),
+                                shape: self.ops[node_id].shape.clone(),
                             })
                             .collect::<ArrayVec<_, 2>>()
                             .into_inner()
                             .unwrap();
-                        self.ops[node_index].cluster_id = Some(self.clusters.insert(Cluster {
+                        self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: Kernel::MatMul(MatMulKernel {
                                 inputs: kernel_inputs,
                             }),
                             inputs: input_node_indices.iter().copied().collect(),
-                            members: vec![node_index],
-                            outputs: vec![node_index],
+                            members: vec![node_id],
+                            outputs: vec![node_id],
                         }));
                     }
                     Op::Input { .. } | Op::Output { .. } | Op::Literal(_) => {}
@@ -407,9 +400,9 @@ impl Graph {
 
         // make cluster ordering
         let mut cluster_graph = StableDiGraph::<ClusterId, (), usize>::default();
-        let mut cluster_node_indices = SecondaryMap::new();
+        let mut cluster_node_ids = SecondaryMap::new();
         for cluster_id in self.clusters.keys() {
-            cluster_node_indices.insert(cluster_id, cluster_graph.add_node(cluster_id));
+            cluster_node_ids.insert(cluster_id, cluster_graph.add_node(cluster_id));
         }
         for (source_id, target_id) in self.ops.edge_references().filter_map(|edge_ref| {
             let source_id = self.ops[edge_ref.source()].cluster_id?;
@@ -420,21 +413,12 @@ impl Graph {
                 None
             }
         }) {
-            cluster_graph.add_edge(
-                cluster_node_indices[source_id],
-                cluster_node_indices[target_id],
-                (),
-            );
+            cluster_graph.add_edge(cluster_node_ids[source_id], cluster_node_ids[target_id], ());
         }
-        println!(
-            "{}, {}",
-            cluster_graph.node_indices().count(),
-            cluster_graph.edge_indices().count()
-        );
         self.clusters_sorted.clear();
         let mut topo = Topo::new(&cluster_graph);
-        while let Some(index) = topo.next(&cluster_graph) {
-            self.clusters_sorted.push(cluster_graph[index]);
+        while let Some(cluster_node_id) = topo.next(&cluster_graph) {
+            self.clusters_sorted.push(cluster_graph[cluster_node_id]);
         }
         assert_eq!(self.clusters_sorted.len(), self.clusters.len());
     }
@@ -501,11 +485,16 @@ impl Graph {
                     col,
                     node.op
                 )?;
-                if let Op::Input { variable } | Op::Output { variable } = node.op {
+                if let Op::Input { variable_id } | Op::Output { variable_id } = node.op {
                     write!(
                         w,
                         "{}",
-                        self.variables.as_ref().borrow().get(variable).unwrap().name
+                        self.variables
+                            .as_ref()
+                            .borrow()
+                            .get(variable_id)
+                            .unwrap()
+                            .name
                     )?;
                 }
                 writeln!(w, "{}\"];", node.shape)?;

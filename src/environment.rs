@@ -5,10 +5,10 @@ use spark::vk;
 use std::{cell::RefCell, collections::HashSet, io, rc::Rc};
 
 slotmap::new_key_type! {
-    pub struct Variable;
+    pub struct VariableId;
 }
 
-pub(crate) type SharedVariables = Rc<RefCell<SlotMap<Variable, VariableState>>>;
+pub(crate) type SharedVariables = Rc<RefCell<SlotMap<VariableId, Variable>>>;
 
 pub struct VariableWriter<'a>(StagingWriter<'a>);
 
@@ -31,7 +31,7 @@ impl<'a> io::Read for VariableReader<'a> {
     }
 }
 
-pub(crate) struct VariableState {
+pub(crate) struct Variable {
     pub(crate) shape: Shape,
     pub(crate) name: String,
     pub(crate) buffer_id: Option<BufferId>,
@@ -50,7 +50,7 @@ struct KernelCache {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-struct OpNodeRunState {
+struct OpNodeStorage {
     usage_count: usize,
     buffer_id: Option<BufferId>,
 }
@@ -81,25 +81,25 @@ impl Environment {
         }
     }
 
-    pub fn variable(&mut self, shape: impl Into<Shape>, name: impl Into<String>) -> Variable {
+    pub fn variable(&mut self, shape: impl Into<Shape>, name: impl Into<String>) -> VariableId {
         let shape = shape.into();
         let name = name.into();
-        let id = self.variables.borrow_mut().insert(VariableState {
+        let variable_id = self.variables.borrow_mut().insert(Variable {
             shape: shape.clone(),
             name,
             buffer_id: None,
         });
-        id
+        variable_id
     }
 
-    pub fn writer(&mut self, var: Variable) -> VariableWriter {
+    pub fn writer(&mut self, variable_id: VariableId) -> VariableWriter {
         let mut variables = self.variables.borrow_mut();
-        let state = &mut variables[var];
-        if let Some(buffer_id) = state.buffer_id.take() {
+        let var = &mut variables[variable_id];
+        if let Some(buffer_id) = var.buffer_id.take() {
             self.buffer_heap.free(buffer_id);
         }
-        let buffer_id = self.buffer_heap.alloc(state.shape.buffer_size()).unwrap();
-        state.buffer_id = Some(buffer_id);
+        let buffer_id = self.buffer_heap.alloc(var.shape.buffer_size()).unwrap();
+        var.buffer_id = Some(buffer_id);
         VariableWriter(StagingWriter::new(
             &mut self.staging_buffer,
             &mut self.command_buffers,
@@ -108,10 +108,10 @@ impl Environment {
         ))
     }
 
-    pub fn reader(&mut self, var: Variable) -> VariableReader {
+    pub fn reader(&mut self, variable_id: VariableId) -> VariableReader {
         let variables = self.variables.borrow();
-        let state = &variables[var];
-        let buffer_id = state.buffer_id.unwrap();
+        let var = &variables[variable_id];
+        let buffer_id = var.buffer_id.unwrap();
         VariableReader(StagingReader::new(
             &mut self.staging_buffer,
             &mut self.command_buffers,
@@ -150,48 +150,48 @@ impl Environment {
                 }
             })
             .collect();
-        let input_variables: HashSet<_> = inputs
+        let input_variable_ids: HashSet<_> = inputs
             .iter()
-            .map(|&node_index| graph.ops[node_index].op.input_variable().unwrap())
+            .map(|&node_id| graph.ops[node_id].op.input_variable_id().unwrap())
             .collect();
-        let output_variables: HashSet<_> = outputs
+        let output_variable_ids: HashSet<_> = outputs
             .iter()
-            .map(|&node_index| graph.ops[node_index].op.output_variable().unwrap())
+            .map(|&node_id| graph.ops[node_id].op.output_variable_id().unwrap())
             .collect();
 
         // count up the number of times each node is used as an argument
-        let mut node_states = vec![OpNodeRunState::default(); graph.ops.node_bound()];
-        for node_index in graph
+        let mut node_storage = vec![OpNodeStorage::default(); graph.ops.node_bound()];
+        for node_id in graph
             .clusters
             .values()
             .flat_map(|cluster| cluster.inputs.iter())
         {
-            node_states[node_index.index()].usage_count += 1;
+            node_storage[node_id.index()].usage_count += 1;
         }
 
         // copy inputs to node, increment usage when variable is not an output, to preserve the buffer
-        for node_index in inputs.iter().copied() {
-            let variable = graph.ops[node_index].op.input_variable().unwrap();
-            let var_state = &mut variables[variable];
-            println!("input {:?}: {}", node_index, var_state.name);
-            assert!(var_state.buffer_id.is_some());
-            let node_state = &mut node_states[node_index.index()];
-            if !output_variables.contains(&variable) {
-                node_state.buffer_id = var_state.buffer_id.clone();
-                node_state.usage_count += 1;
+        for node_id in inputs.iter().copied() {
+            let variable_id = graph.ops[node_id].op.input_variable_id().unwrap();
+            let var = &mut variables[variable_id];
+            println!("input {:?}: {}", node_id, var.name);
+            assert!(var.buffer_id.is_some());
+            let storage = &mut node_storage[node_id.index()];
+            if !output_variable_ids.contains(&variable_id) {
+                storage.buffer_id = var.buffer_id.clone();
+                storage.usage_count += 1;
             } else {
-                node_state.buffer_id = var_state.buffer_id.take();
+                storage.buffer_id = var.buffer_id.take();
             }
         }
 
         println!("{:?}", self.buffer_heap.heap_stats());
 
         // free buffers for variables only used as outputs
-        for node_index in outputs.iter().copied() {
-            let variable = graph.ops[node_index].op.output_variable().unwrap();
-            if !input_variables.contains(&variable) {
-                let var_state = &mut variables[variable];
-                if let Some(buffer_id) = var_state.buffer_id.take() {
+        for node_id in outputs.iter().copied() {
+            let variable_id = graph.ops[node_id].op.output_variable_id().unwrap();
+            if !input_variable_ids.contains(&variable_id) {
+                let var = &mut variables[variable_id];
+                if let Some(buffer_id) = var.buffer_id.take() {
                     self.buffer_heap.free(buffer_id);
                 }
             }
@@ -201,37 +201,37 @@ impl Environment {
         for cluster_id in graph.clusters_sorted.iter().copied() {
             let cluster = &graph.clusters[cluster_id];
             println!("cluster {:?} {:?}", cluster_id, cluster.kernel);
-            for node_index in cluster.outputs.iter().copied() {
-                println!("allocate {:?}", node_index);
-                let node_state = &mut node_states[node_index.index()];
+            for node_id in cluster.outputs.iter().copied() {
+                println!("allocate {:?}", node_id);
+                let node_state = &mut node_storage[node_id.index()];
                 assert!(node_state.buffer_id.is_none());
                 node_state.buffer_id = Some(
                     self.buffer_heap
-                        .alloc(graph.ops[node_index].shape.buffer_size())
+                        .alloc(graph.ops[node_id].shape.buffer_size())
                         .unwrap(),
                 );
             }
             // TODO: run kernel
-            for node_index in cluster.inputs.iter().copied() {
-                let node_state = &mut node_states[node_index.index()];
+            for node_id in cluster.inputs.iter().copied() {
+                let node_state = &mut node_storage[node_id.index()];
                 node_state.usage_count -= 1;
                 if node_state.usage_count == 0 {
-                    println!("free {:?}", node_index);
+                    println!("free {:?}", node_id);
                     self.buffer_heap.free(node_state.buffer_id.take().unwrap());
                 }
             }
         }
 
         // assign buffers to outputs
-        for node_index in outputs.iter().copied() {
-            let variable = graph.ops[node_index].op.output_variable().unwrap();
-            let var_state = &mut variables[variable];
-            let [edge_index] = get_arg_edges(&graph.ops, node_index);
-            let source_node_index = graph.ops.edge_endpoints(edge_index).unwrap().0;
-            println!("output {:?}: {}", source_node_index, var_state.name);
-            let source_node_state = &mut node_states[source_node_index.index()];
-            assert!(source_node_state.buffer_id.is_some());
-            var_state.buffer_id = source_node_state.buffer_id.take();
+        for node_id in outputs.iter().copied() {
+            let variable_id = graph.ops[node_id].op.output_variable_id().unwrap();
+            let var = &mut variables[variable_id];
+            let [edge_id] = get_arg_edge_ids(&graph.ops, node_id);
+            let source_node_id = graph.ops.edge_endpoints(edge_id).unwrap().0;
+            println!("output {:?}: {}", source_node_id, var.name);
+            let source_storage = &mut node_storage[source_node_id.index()];
+            assert!(source_storage.buffer_id.is_some());
+            var.buffer_id = source_storage.buffer_id.take();
         }
 
         println!("{:?}", self.buffer_heap.heap_stats());

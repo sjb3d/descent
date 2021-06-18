@@ -2,8 +2,8 @@ use crate::common::*;
 use petgraph::prelude::*;
 
 pub(crate) type OpGraph = StableDiGraph<OpNode, OpEdge, usize>;
-pub(crate) type OpNodeIndex = NodeIndex<usize>;
-pub(crate) type OpEdgeIndex = EdgeIndex<usize>;
+pub(crate) type OpNodeId = NodeIndex<usize>;
+pub(crate) type OpEdgeId = EdgeIndex<usize>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReduceOp {
@@ -29,8 +29,8 @@ pub(crate) enum UnaryOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Op {
-    Input { variable: Variable },
-    Output { variable: Variable },
+    Input { variable_id: VariableId },
+    Output { variable_id: VariableId },
     Literal(f32),
     View(View),
     Unary(UnaryOp),
@@ -41,16 +41,16 @@ pub(crate) enum Op {
 }
 
 impl Op {
-    pub(crate) fn input_variable(&self) -> Option<Variable> {
+    pub(crate) fn input_variable_id(&self) -> Option<VariableId> {
         match self {
-            Self::Input { variable } => Some(*variable),
+            Self::Input { variable_id } => Some(*variable_id),
             _ => None,
         }
     }
 
-    pub(crate) fn output_variable(&self) -> Option<Variable> {
+    pub(crate) fn output_variable_id(&self) -> Option<VariableId> {
         match self {
-            Self::Output { variable } => Some(*variable),
+            Self::Output { variable_id } => Some(*variable_id),
             _ => None,
         }
     }
