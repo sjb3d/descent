@@ -36,7 +36,7 @@ pub(crate) struct PerElementKernel {
 pub(crate) struct ReduceKernel {
     pub(crate) input_shape: Shape,
     pub(crate) reduce_op: ReduceOp,
-    pub(crate) axis: isize,
+    pub(crate) axis: Axis,
 }
 
 #[derive(Debug)]

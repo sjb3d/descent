@@ -96,19 +96,18 @@ impl Shape {
     }
 
     pub(crate) fn axis(&self, index: isize) -> Axis {
+        // address from end if negative
         Axis::from_index((index as usize).wrapping_add(if index < 0 { self.0.len() } else { 0 }))
     }
 
-    pub(crate) fn reduce(&self, axis: isize) -> Self {
-        // address from end if negative
-        let axis = (axis as usize).wrapping_add(if axis < 0 { self.0.len() } else { 0 });
-
+    pub(crate) fn reduce(&self, axis: Axis) -> Self {
         // strip outermost dimension if reduced, otherwise keep with length 1
-        if axis == 0 {
+        let index = axis.index();
+        if index == 0 {
             Shape::new(self.0.iter().copied().skip(1).collect())
         } else {
             let mut v = self.0.clone();
-            v[axis] = 1;
+            v[index] = 1;
             Shape::new(v)
         }
     }

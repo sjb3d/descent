@@ -36,7 +36,7 @@ pub(crate) enum Op {
     Unary(UnaryOp),
     Binary(BinaryOp),
     MatMul,
-    Reduce { reduce_op: ReduceOp, axis: isize },
+    Reduce { reduce_op: ReduceOp, axis: Axis },
     Accumulate, // accumulates grad from backprop
 }
 

@@ -60,7 +60,9 @@ impl<'builder> Array<'builder> {
 
     fn reduce_op(self, reduce_op: ReduceOp, axis: isize) -> Self {
         self.builder.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape.reduce(axis);
+            let shape = &state.ops.graph[self.node_id].shape;
+            let axis = shape.axis(axis);
+            let shape = shape.reduce(axis);
             Array {
                 node_id: state
                     .ops
