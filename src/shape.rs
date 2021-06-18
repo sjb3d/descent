@@ -1,5 +1,5 @@
 use arrayvec::ArrayVec;
-use std::{fmt, iter, ops};
+use std::{fmt, iter, mem, ops};
 
 pub(crate) const MAX_DIM: usize = 4;
 pub(crate) type ShapeVec = ArrayVec<isize, MAX_DIM>;
@@ -138,8 +138,8 @@ impl Shape {
         Shape(v.iter().copied().rev().collect())
     }
 
-    pub(crate) fn dim_product(&self) -> usize {
-        self.0.iter().copied().product::<isize>() as usize
+    pub(crate) fn buffer_size(&self) -> usize {
+        (self.0.iter().copied().product::<isize>() as usize) * mem::size_of::<f32>()
     }
 }
 

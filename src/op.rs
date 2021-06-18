@@ -40,12 +40,28 @@ pub(crate) enum Op {
     Accumulate, // accumulates grad from backprop
 }
 
+impl Op {
+    pub(crate) fn input_variable(&self) -> Option<Variable> {
+        match self {
+            Self::Input { variable } => Some(*variable),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn output_variable(&self) -> Option<Variable> {
+        match self {
+            Self::Output { variable } => Some(*variable),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct OpNode {
     pub(crate) colour: usize,
     pub(crate) shape: Shape,
     pub(crate) op: Op,
-    pub(crate) cluster_id: ClusterId,
+    pub(crate) cluster_id: Option<ClusterId>,
 }
 
 #[derive(Debug, Clone)]

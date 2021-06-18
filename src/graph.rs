@@ -2,9 +2,9 @@ use crate::common::*;
 use arrayvec::ArrayVec;
 use petgraph::{
     prelude::*,
-    visit::{IntoEdgeReferences, IntoNodeReferences, NodeRef, VisitMap, Visitable},
+    visit::{IntoEdgeReferences, IntoNodeReferences, NodeRef, Topo, VisitMap, Visitable},
 };
-use slotmap::{Key, SlotMap};
+use slotmap::{SecondaryMap, SlotMap};
 use std::{
     collections::{hash_map::DefaultHasher, HashMap},
     fmt,
@@ -12,7 +12,10 @@ use std::{
     io, iter,
 };
 
-fn get_arg_edges<const N: usize>(ops: &OpGraph, node_index: OpNodeIndex) -> [OpEdgeIndex; N] {
+pub(crate) fn get_arg_edges<const N: usize>(
+    ops: &OpGraph,
+    node_index: OpNodeIndex,
+) -> [OpEdgeIndex; N] {
     let mut edge_indices = [OpEdgeIndex::end(); N];
     for edge_ref in ops.edges_directed(node_index, Incoming) {
         let edge = edge_ref.weight();
@@ -24,10 +27,10 @@ fn get_arg_edges<const N: usize>(ops: &OpGraph, node_index: OpNodeIndex) -> [OpE
 
 #[derive(Debug)]
 pub(crate) struct Cluster {
-    kernel: Kernel,
-    inputs: Vec<OpNodeIndex>,
-    members: Vec<OpNodeIndex>,
-    outputs: Vec<OpNodeIndex>,
+    pub(crate) kernel: Kernel,
+    pub(crate) inputs: Vec<OpNodeIndex>,
+    pub(crate) members: Vec<OpNodeIndex>,
+    pub(crate) outputs: Vec<OpNodeIndex>,
 }
 
 slotmap::new_key_type! {
@@ -37,19 +40,19 @@ slotmap::new_key_type! {
 pub struct Graph {
     pub(crate) variables: SharedVariables,
     pub(crate) ops: OpGraph,
-    pub(crate) outputs: Vec<OpNodeIndex>,
-    pub(crate) ordering: Vec<OpNodeIndex>,
+    pub(crate) ops_sorted: Vec<OpNodeIndex>,
     pub(crate) clusters: SlotMap<ClusterId, Cluster>,
+    pub(crate) clusters_sorted: Vec<ClusterId>,
 }
 
 impl Graph {
-    pub(crate) fn new(variables: SharedVariables, ops: OpGraph, outputs: Vec<OpNodeIndex>) -> Self {
+    pub(crate) fn new(variables: SharedVariables, ops: OpGraph) -> Self {
         let mut graph = Self {
             variables,
             ops,
-            outputs,
-            ordering: Vec::new(),
+            ops_sorted: Vec::new(),
             clusters: SlotMap::with_key(),
+            clusters_sorted: Vec::new(),
         };
 
         graph.rebuild_ordering();
@@ -62,25 +65,27 @@ impl Graph {
         graph.eliminate_view_nodes();
 
         graph.rebuild_ordering();
-        graph.build_kernels();
+        graph.build_clusters();
 
         graph
     }
 
     fn rebuild_ordering(&mut self) {
-        self.ordering.clear();
-        let mut topo = petgraph::visit::Topo::new(&self.ops);
+        self.ops_sorted.clear();
+        let mut topo = Topo::new(&self.ops);
         while let Some(node_index) = topo.next(&self.ops) {
-            self.ordering.push(node_index);
+            self.ops_sorted.push(node_index);
         }
     }
 
     fn eliminate_dead_code(&mut self) {
         let mut live = self.ops.visit_map();
-        for index in self.outputs.iter().copied() {
-            live.visit(index);
+        for node_ref in self.ops.node_references() {
+            if matches!(node_ref.weight().op, Op::Output { .. }) {
+                live.visit(node_ref.id());
+            }
         }
-        for index in self.ordering.iter().rev().copied() {
+        for index in self.ops_sorted.iter().rev().copied() {
             if live.is_visited(&index) {
                 for input_index in self.ops.neighbors_directed(index, Incoming) {
                     live.visit(input_index);
@@ -91,7 +96,7 @@ impl Graph {
     }
 
     fn eliminate_accumulate_nodes(&mut self) {
-        for node_index in self.ordering.iter().copied() {
+        for node_index in self.ops_sorted.iter().copied() {
             if matches!(self.ops[node_index].op, Op::Accumulate) {
                 assert_eq!(self.ops.edges_directed(node_index, Incoming).count(), 1); // TODO: generate adds
                 let mut in_edges = self.ops.neighbors_directed(node_index, Incoming).detach();
@@ -113,7 +118,7 @@ impl Graph {
     }
 
     fn eliminate_view_nodes(&mut self) {
-        for node_index in self.ordering.iter().copied() {
+        for node_index in self.ops_sorted.iter().copied() {
             if let Op::View(view) = &self.ops[node_index].op {
                 let view = view.clone();
                 assert_eq!(self.ops.neighbors_directed(node_index, Incoming).count(), 1);
@@ -144,7 +149,7 @@ impl Graph {
         for &node_index in roots {
             markers.visit(node_index);
         }
-        for node_index in self.ordering.iter().copied().rev() {
+        for node_index in self.ops_sorted.iter().copied().rev() {
             if self
                 .ops
                 .neighbors_directed(node_index, Outgoing)
@@ -164,7 +169,7 @@ impl Graph {
         for &node_index in roots {
             markers.visit(node_index);
         }
-        for node_index in self.ordering.iter().copied().rev() {
+        for node_index in self.ops_sorted.iter().copied().rev() {
             if self
                 .ops
                 .neighbors_directed(node_index, Incoming)
@@ -179,17 +184,17 @@ impl Graph {
         return false;
     }
 
-    fn build_kernels(&mut self) {
+    fn build_clusters(&mut self) {
         // first gather per-element nodes into kernels
-        for first_node_index in self.ordering.iter().copied() {
+        for first_node_index in self.ops_sorted.iter().copied() {
             let first_node = &self.ops[first_node_index];
-            if !first_node.cluster_id.is_null() {
+            if !first_node.cluster_id.is_none() {
                 continue;
             }
             if matches!(first_node.op, Op::Unary(_) | Op::Binary(_)) {
                 let shape = first_node.shape.clone();
 
-                let cluster_id = self.clusters.insert(Cluster {
+                let cluster_id = Some(self.clusters.insert(Cluster {
                     kernel: Kernel::PerElement(PerElementKernel {
                         shape: shape.clone(),
                         inputs: Vec::new(),
@@ -199,15 +204,15 @@ impl Graph {
                     inputs: Vec::new(),
                     members: Vec::new(),
                     outputs: Vec::new(),
-                });
+                }));
                 self.ops[first_node_index].cluster_id = cluster_id;
 
                 'outer: loop {
-                    'inner: for other_node_index in self.ordering.iter().copied() {
+                    'inner: for other_node_index in self.ops_sorted.iter().copied() {
                         let other_node = &self.ops[other_node_index];
 
                         // check this node has no cluster and matches shape
-                        let can_include = other_node.cluster_id.is_null()
+                        let can_include = other_node.cluster_id.is_none()
                             && match other_node.op {
                                 Op::Unary(_) | Op::Binary(_) => other_node.shape == shape,
                                 _ => false,
@@ -251,7 +256,7 @@ impl Graph {
 
                         // check uses of this node don't re-enter this cluster
                         if self.any_successor(&[other_node_index], |node_index| {
-                            self.ops[node_index].cluster_id.is_null()
+                            self.ops[node_index].cluster_id.is_none()
                                 && self
                                     .ops
                                     .neighbors_directed(node_index, Outgoing)
@@ -262,7 +267,7 @@ impl Graph {
 
                         // check inputs of this node don't re-enter this cluster
                         if self.any_predecessor(&[other_node_index], |node_index| {
-                            self.ops[node_index].cluster_id.is_null()
+                            self.ops[node_index].cluster_id.is_none()
                                 && self
                                     .ops
                                     .neighbors_directed(node_index, Incoming)
@@ -281,9 +286,9 @@ impl Graph {
         }
 
         // build per-element cluster members in usage order
-        for node_index in self.ordering.iter().copied() {
-            if let Some(cluster) = self.clusters.get_mut(self.ops[node_index].cluster_id) {
-                cluster.members.push(node_index);
+        for node_index in self.ops_sorted.iter().copied() {
+            if let Some(cluster_id) = self.ops[node_index].cluster_id {
+                self.clusters[cluster_id].members.push(node_index);
             }
         }
 
@@ -309,7 +314,7 @@ impl Graph {
                     args[edge.arg] =
                         Some(*node_op_index.entry(source_node_index).or_insert_with(|| {
                             let source_node = &graph[source_node_index];
-                            assert_ne!(source_node.cluster_id, cluster_id);
+                            assert_ne!(source_node.cluster_id, Some(cluster_id));
                             if let Op::Literal(value) = source_node.op {
                                 let op_index = kernel.ops.len();
                                 kernel.ops.push(PerElementKernelOp::Literal(value));
@@ -347,7 +352,7 @@ impl Graph {
                 // store the result if necessary
                 if graph
                     .neighbors_directed(node_index, Outgoing)
-                    .any(|other_index| graph[other_index].cluster_id != cluster_id)
+                    .any(|other_index| graph[other_index].cluster_id != Some(cluster_id))
                 {
                     kernel.outputs.push(op_index);
                     outputs.push(node_index);
@@ -356,9 +361,9 @@ impl Graph {
         }
 
         // add reduction and matrix multiply kernels
-        for node_index in self.ordering.iter().copied() {
+        for node_index in self.ops_sorted.iter().copied() {
             let node = &self.ops[node_index];
-            if node.cluster_id.is_null() {
+            if node.cluster_id.is_none() {
                 match node.op {
                     Op::Reduce { reduce_op, axis } => {
                         let [edge_index] = get_arg_edges(&self.ops, node_index);
@@ -366,7 +371,7 @@ impl Graph {
                             assert!(self.ops[edge_index].view.is_identity());
                             self.ops.edge_endpoints(edge_index).unwrap().0
                         };
-                        self.ops[node_index].cluster_id = self.clusters.insert(Cluster {
+                        self.ops[node_index].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: Kernel::Reduce(ReduceKernel {
                                 input_shape: self.ops[input_node_index].shape.clone(),
                                 reduce_op,
@@ -375,7 +380,7 @@ impl Graph {
                             inputs: vec![input_node_index],
                             members: vec![node_index],
                             outputs: vec![node_index],
-                        });
+                        }));
                     }
                     Op::MatMul => {
                         let edge_indices: [_; 2] = get_arg_edges(&self.ops, node_index);
@@ -395,20 +400,53 @@ impl Graph {
                             .collect::<ArrayVec<_, 2>>()
                             .into_inner()
                             .unwrap();
-                        self.ops[node_index].cluster_id = self.clusters.insert(Cluster {
+                        self.ops[node_index].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: Kernel::MatMul(MatMulKernel {
                                 inputs: kernel_inputs,
                             }),
                             inputs: input_node_indices.iter().copied().collect(),
                             members: vec![node_index],
                             outputs: vec![node_index],
-                        });
+                        }));
                     }
                     Op::Input { .. } | Op::Output { .. } | Op::Literal(_) => {}
                     _ => panic!("unexpected op without a kernel"),
                 }
             }
         }
+
+        // make cluster ordering
+        let mut cluster_graph = StableDiGraph::<ClusterId, (), usize>::default();
+        let mut cluster_node_indices = SecondaryMap::new();
+        for cluster_id in self.clusters.keys() {
+            cluster_node_indices.insert(cluster_id, cluster_graph.add_node(cluster_id));
+        }
+        for (source_id, target_id) in self.ops.edge_references().filter_map(|edge_ref| {
+            let source_id = self.ops[edge_ref.source()].cluster_id?;
+            let target_id = self.ops[edge_ref.target()].cluster_id?;
+            if source_id != target_id {
+                Some((source_id, target_id))
+            } else {
+                None
+            }
+        }) {
+            cluster_graph.add_edge(
+                cluster_node_indices[source_id],
+                cluster_node_indices[target_id],
+                (),
+            );
+        }
+        println!(
+            "{}, {}",
+            cluster_graph.node_indices().count(),
+            cluster_graph.edge_indices().count()
+        );
+        self.clusters_sorted.clear();
+        let mut topo = Topo::new(&cluster_graph);
+        while let Some(index) = topo.next(&cluster_graph) {
+            self.clusters_sorted.push(cluster_graph[index]);
+        }
+        assert_eq!(self.clusters_sorted.len(), self.clusters.len());
     }
 
     fn generate_kernel_source(&self, cluster_index: usize) -> Result<String, fmt::Error> {
@@ -450,11 +488,11 @@ impl Graph {
 
     pub fn write_dot(&self, w: &mut impl io::Write) -> io::Result<()> {
         writeln!(w, "digraph G {{")?;
-        for (index, cluster_id) in iter::once(ClusterId::null())
-            .chain(self.clusters.iter().map(|(id, _)| id))
+        for (index, cluster_id) in iter::once(None)
+            .chain(self.clusters.keys().map(|id| Some(id)))
             .enumerate()
         {
-            if !cluster_id.is_null() {
+            if cluster_id.is_some() {
                 writeln!(w, "subgraph cluster{} {{ style=filled;", index)?;
             }
             for node_ref in self
@@ -482,7 +520,7 @@ impl Graph {
                 }
                 writeln!(w, "{}\"];", node.shape)?;
             }
-            if !cluster_id.is_null() {
+            if cluster_id.is_some() {
                 writeln!(w, "}}")?;
             }
         }

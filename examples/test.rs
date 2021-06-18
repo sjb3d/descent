@@ -117,7 +117,12 @@ fn main() {
     let mut f = BufWriter::new(File::create("debug.dot").unwrap());
     graph.write_dot(&mut f).unwrap();
 
-    graph.compile_kernel_source(0);
+    env.writer(x_var);
+    env.writer(y_var);
+    env.writer(w_var);
+    env.run(&graph);
+
+    //graph.compile_kernel_source(0);
 
     if env::args().len() > 1 {
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);

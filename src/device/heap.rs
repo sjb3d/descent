@@ -82,6 +82,14 @@ impl<K: Key, T: Tag> Block<K, T> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HeapStats {
+    pub(crate) alloc_count: usize,
+    pub(crate) total_alloc_size: usize,
+    pub(crate) total_free_size: usize,
+    pub(crate) largest_free_size: usize,
+}
+
 type BlockSlotMap<K, T> = SlotMap<K, Block<K, T>>;
 
 #[derive(Debug)]
@@ -215,6 +223,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
     }
 
     fn print_state(&self) {
+        println!("stats: {:?}", self.stats());
         for (index, first_block_id) in self.free_lists.iter().copied().enumerate() {
             println!("free list {}:", index);
             if let Some(first_block_id) = first_block_id {
@@ -235,6 +244,26 @@ impl<K: Key, T: Tag> Heap<K, T> {
                 println!("{:?} = {:?}", block_id, block);
             }
         }
+    }
+
+    pub(crate) fn stats(&self) -> HeapStats {
+        let mut stats = HeapStats {
+            alloc_count: 0,
+            total_alloc_size: 0,
+            total_free_size: 0,
+            largest_free_size: 0,
+        };
+        for block in self.blocks.values() {
+            let size = block.range.size();
+            if block.free_node.is_none() {
+                stats.alloc_count += 1;
+                stats.total_alloc_size += size;
+            } else {
+                stats.total_free_size += size;
+                stats.largest_free_size = stats.largest_free_size.max(size);
+            }
+        }
+        stats
     }
 
     pub(crate) fn alloc(&mut self, size: usize, align: usize) -> Option<K> {

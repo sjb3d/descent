@@ -1,6 +1,6 @@
 use crate::common::*;
 use petgraph::Incoming;
-use slotmap::{Key, SparseSecondaryMap};
+use slotmap::SparseSecondaryMap;
 use std::{cell::RefCell, ops};
 
 #[derive(Clone, Copy)]
@@ -280,7 +280,7 @@ impl OpGraphBuilder {
             colour: self.colour,
             shape,
             op,
-            cluster_id: ClusterId::null(),
+            cluster_id: None,
         });
         for (index, input) in inputs.iter().copied().enumerate() {
             self.graph.add_edge(
@@ -414,7 +414,6 @@ impl GraphBuilder {
             Graph::new(
                 SharedVariables::clone(&state.variables),
                 state.ops.graph.clone(),
-                state.outputs.values().copied().collect(),
             )
         })
     }

@@ -102,6 +102,10 @@ impl BufferHeap {
             range,
         }
     }
+
+    pub(crate) fn heap_stats(&self) -> HeapStats {
+        self.heap.stats()
+    }
 }
 
 impl Drop for BufferHeap {
