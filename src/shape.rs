@@ -137,8 +137,12 @@ impl Shape {
         Shape(v.iter().copied().rev().collect())
     }
 
+    pub(crate) fn element_count(&self) -> usize {
+        self.0.iter().copied().product::<isize>() as usize
+    }
+
     pub(crate) fn buffer_size(&self) -> usize {
-        (self.0.iter().copied().product::<isize>() as usize) * mem::size_of::<f32>()
+        self.element_count() * mem::size_of::<f32>()
     }
 }
 

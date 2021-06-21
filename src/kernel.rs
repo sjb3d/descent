@@ -194,6 +194,14 @@ impl Kernel {
             Kernel::Reduce(..) => 2,
         }
     }
+
+    fn group_count(&self) -> u32 {
+        match self {
+            Kernel::PerElement(kernel) => ((kernel.shape.element_count() as u32) + 63) / 64,
+            Kernel::MatMul(..) => unimplemented!(),
+            Kernel::Reduce(..) => unimplemented!(),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -202,6 +210,7 @@ pub(crate) struct KernelModule {
     pub(crate) descriptor_set_layout: vk::DescriptorSetLayout,
     pub(crate) pipeline_layout: vk::PipelineLayout,
     pub(crate) pipeline: vk::Pipeline,
+    pub(crate) group_count: u32,
 }
 
 struct KernelCacheWorker {
@@ -288,6 +297,7 @@ impl KernelCacheWorker {
             descriptor_set_layout,
             pipeline_layout,
             pipeline,
+            group_count: kernel.group_count(),
         }
     }
 }

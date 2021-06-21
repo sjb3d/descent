@@ -47,10 +47,6 @@ impl BufferCursor {
         self.info.range.end - self.next
     }
 
-    fn is_starting(&self) -> bool {
-        self.next == self.info.range.begin
-    }
-
     fn is_finished(&self) -> bool {
         self.next == self.info.range.end
     }
@@ -167,31 +163,6 @@ impl<'a> StagingWriter<'a> {
                 }
                 self.buffer.next += transfer_size;
 
-                if self.buffer.is_finished() {
-                    let buffer_memory_barrier = vk::BufferMemoryBarrier {
-                        src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-                        dst_access_mask: vk::AccessFlags::SHADER_READ
-                            | vk::AccessFlags::SHADER_WRITE,
-                        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                        buffer: Some(self.buffer.info.buffer),
-                        offset: self.buffer.info.range.begin as vk::DeviceSize,
-                        size: self.buffer.info.range.size() as vk::DeviceSize,
-                        ..Default::default()
-                    };
-                    unsafe {
-                        self.owner.context.device.cmd_pipeline_barrier(
-                            cmd.get(),
-                            vk::PipelineStageFlags::TRANSFER,
-                            vk::PipelineStageFlags::COMPUTE_SHADER,
-                            vk::DependencyFlags::empty(),
-                            &[],
-                            slice::from_ref(&buffer_memory_barrier),
-                            &[],
-                        )
-                    }
-                }
-
                 let fence_id = cmd.submit(self.fences);
                 self.owner
                     .regions
@@ -279,30 +250,6 @@ impl<'a> StagingReader<'a> {
         } else {
             let cmd = self.command_buffers.acquire(self.fences);
 
-            if self.buffer.is_starting() {
-                let buffer_memory_barrier = vk::BufferMemoryBarrier {
-                    src_access_mask: vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
-                    dst_access_mask: vk::AccessFlags::TRANSFER_READ,
-                    src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                    dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                    buffer: Some(self.buffer.info.buffer),
-                    offset: self.buffer.info.range.begin as vk::DeviceSize,
-                    size: self.buffer.info.range.size() as vk::DeviceSize,
-                    ..Default::default()
-                };
-                unsafe {
-                    self.owner.context.device.cmd_pipeline_barrier(
-                        cmd.get(),
-                        vk::PipelineStageFlags::COMPUTE_SHADER,
-                        vk::PipelineStageFlags::TRANSFER,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        slice::from_ref(&buffer_memory_barrier),
-                        &[],
-                    )
-                }
-            }
-
             let staging = StagingCursor::new(region, self.buffer.remaining());
             let staging_begin = staging.region.begin();
             let transfer_size = staging.end - staging_begin;
@@ -323,30 +270,6 @@ impl<'a> StagingReader<'a> {
                 };
             }
             self.buffer.next += transfer_size;
-
-            if self.buffer.is_finished() {
-                let buffer_memory_barrier = vk::BufferMemoryBarrier {
-                    src_access_mask: vk::AccessFlags::TRANSFER_READ,
-                    dst_access_mask: vk::AccessFlags::SHADER_READ,
-                    src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                    dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                    buffer: Some(self.buffer.info.buffer),
-                    offset: self.buffer.info.range.begin as vk::DeviceSize,
-                    size: self.buffer.info.range.size() as vk::DeviceSize,
-                    ..Default::default()
-                };
-                unsafe {
-                    self.owner.context.device.cmd_pipeline_barrier(
-                        cmd.get(),
-                        vk::PipelineStageFlags::TRANSFER,
-                        vk::PipelineStageFlags::COMPUTE_SHADER,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        slice::from_ref(&buffer_memory_barrier),
-                        &[],
-                    )
-                }
-            }
 
             let fence_id = cmd.submit(self.fences);
             self.pending.push_back(Fenced::new(staging, fence_id));

@@ -1,7 +1,14 @@
 use crate::{common::*, device::common::*};
 use petgraph::visit::{IntoNodeReferences, NodeIndexable, NodeRef};
 use slotmap::SlotMap;
-use std::{cell::RefCell, collections::HashSet, io, rc::Rc};
+use spark::{vk, Builder};
+use std::{
+    cell::RefCell,
+    collections::{HashSet, VecDeque},
+    io,
+    rc::Rc,
+    slice,
+};
 
 slotmap::new_key_type! {
     pub struct VariableId;
@@ -42,6 +49,72 @@ struct OpNodeStorage {
     buffer_id: Option<BufferId>,
 }
 
+struct DescriptorPoolSet {
+    context: SharedContext,
+    pools: VecDeque<Fenced<vk::DescriptorPool>>,
+}
+
+impl DescriptorPoolSet {
+    const COUNT: usize = 2;
+
+    const MAX_SETS: u32 = 512;
+    const MAX_BUFFERS: u32 = 8 * Self::MAX_SETS;
+
+    fn new(context: &SharedContext, fences: &FenceSet) -> Self {
+        let device = &context.device;
+        let descriptor_pool_sizes = [vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::STORAGE_BUFFER,
+            descriptor_count: Self::MAX_BUFFERS,
+        }];
+        let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::builder()
+            .max_sets(Self::MAX_SETS)
+            .p_pool_sizes(&descriptor_pool_sizes);
+
+        let mut pools = VecDeque::new();
+        for _ in 0..Self::COUNT {
+            let pool = unsafe { device.create_descriptor_pool(&descriptor_pool_create_info, None) }
+                .unwrap();
+            pools.push_back(Fenced::new(pool, fences.old_id()));
+        }
+        Self {
+            context: SharedContext::clone(context),
+            pools,
+        }
+    }
+
+    fn acquire(&mut self, fences: &FenceSet) -> ScopedDescriptorPool {
+        let pool = self.pools.pop_front().unwrap().take_when_signaled(fences);
+        ScopedDescriptorPool { pool, set: self }
+    }
+}
+
+impl Drop for DescriptorPoolSet {
+    fn drop(&mut self) {
+        let device = &self.context.device;
+        for pool in self.pools.iter() {
+            unsafe {
+                let pool = pool.get_unchecked();
+                device.destroy_descriptor_pool(Some(*pool), None);
+            }
+        }
+    }
+}
+
+struct ScopedDescriptorPool<'a> {
+    pool: vk::DescriptorPool,
+    set: &'a mut DescriptorPoolSet,
+}
+
+impl<'a> ScopedDescriptorPool<'a> {
+    fn get(&self) -> vk::DescriptorPool {
+        self.pool
+    }
+
+    fn recycle(self, fence: FenceId) {
+        self.set.pools.push_back(Fenced::new(self.pool, fence));
+    }
+}
+
 pub struct Environment {
     context: SharedContext,
     fences: FenceSet,
@@ -50,6 +123,7 @@ pub struct Environment {
     staging_buffer: StagingBuffer,
     variables: SharedVariables,
     kernel_cache: KernelCache,
+    descriptor_pools: DescriptorPoolSet,
 }
 
 impl Environment {
@@ -60,6 +134,7 @@ impl Environment {
         let buffer_heap = BufferHeap::new(&context);
         let staging_buffer = StagingBuffer::new(&context, &fences);
         let kernel_cache = KernelCache::new(&context);
+        let descriptor_pools = DescriptorPoolSet::new(&context, &fences);
         Self {
             context,
             fences,
@@ -68,6 +143,7 @@ impl Environment {
             staging_buffer,
             variables: Rc::new(RefCell::new(SlotMap::with_key())),
             kernel_cache,
+            descriptor_pools,
         }
     }
 
@@ -188,6 +264,9 @@ impl Environment {
         }
 
         // run kernels in order, lazily allocate/free buffers
+        let device = &self.context.device;
+        let cmd = self.command_buffers.acquire(&self.fences);
+        let descriptor_pool = self.descriptor_pools.acquire(&self.fences);
         for cluster_id in graph.clusters_sorted.iter().copied() {
             let cluster = &graph.clusters[cluster_id];
             println!("cluster {:?} {:?}", cluster_id, cluster.kernel);
@@ -201,8 +280,83 @@ impl Environment {
                         .unwrap(),
                 );
             }
-            let _module = self.kernel_cache.module(&cluster.kernel);
-            // TODO: run kernel
+
+            let module = self.kernel_cache.module(&cluster.kernel);
+
+            let descriptor_set = {
+                let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+                    .descriptor_pool(descriptor_pool.get())
+                    .p_set_layouts(slice::from_ref(&module.descriptor_set_layout));
+                unsafe { device.allocate_descriptor_sets_single(&descriptor_set_allocate_info) }
+                    .unwrap()
+            };
+
+            {
+                let mut buffer_info = Vec::new();
+                for node_id in cluster
+                    .inputs
+                    .iter()
+                    .copied()
+                    .chain(cluster.outputs.iter().copied())
+                {
+                    let node_state = &node_storage[node_id.index()];
+                    let info = self.buffer_heap.info(node_state.buffer_id.unwrap());
+                    buffer_info.push(vk::DescriptorBufferInfo {
+                        buffer: Some(info.buffer),
+                        offset: info.range.begin as vk::DeviceSize,
+                        range: info.range.size() as vk::DeviceSize,
+                    });
+                }
+                let mut writes = Vec::new();
+                for (i, info) in buffer_info.iter().enumerate() {
+                    writes.push(vk::WriteDescriptorSet {
+                        dst_set: Some(descriptor_set),
+                        dst_binding: i as u32,
+                        descriptor_count: 1,
+                        descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+                        p_buffer_info: info,
+                        ..Default::default()
+                    });
+                }
+                unsafe { self.context.device.update_descriptor_sets(&writes, &[]) };
+            }
+
+            unsafe {
+                device.cmd_bind_pipeline(
+                    cmd.get(),
+                    vk::PipelineBindPoint::COMPUTE,
+                    module.pipeline,
+                );
+                device.cmd_bind_descriptor_sets(
+                    cmd.get(),
+                    vk::PipelineBindPoint::COMPUTE,
+                    module.pipeline_layout,
+                    0,
+                    slice::from_ref(&descriptor_set),
+                    &[],
+                );
+                device.cmd_dispatch(cmd.get(), module.group_count, 1, 1);
+            }
+
+            {
+                // ensure that compute results are visible for next kernel
+                let memory_barrier = vk::MemoryBarrier {
+                    src_access_mask: vk::AccessFlags::SHADER_WRITE,
+                    dst_access_mask: vk::AccessFlags::SHADER_READ,
+                    ..Default::default()
+                };
+                unsafe {
+                    device.cmd_pipeline_barrier(
+                        cmd.get(),
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::DependencyFlags::empty(),
+                        slice::from_ref(&memory_barrier),
+                        &[],
+                        &[],
+                    )
+                }
+            }
             for node_id in cluster.inputs.iter().copied() {
                 let node_state = &mut node_storage[node_id.index()];
                 node_state.usage_count -= 1;
@@ -212,6 +366,8 @@ impl Environment {
                 }
             }
         }
+        let fence_id = cmd.submit(&mut self.fences);
+        descriptor_pool.recycle(fence_id);
 
         // assign buffers to outputs
         for node_id in outputs.iter().copied() {
