@@ -1,7 +1,8 @@
 use crate::{common::*, device::common::*};
 use ordered_float::NotNan;
-use spark::vk;
-use std::{collections::HashMap, fmt, fmt::Write, mem};
+use shaderc::{Compiler, ShaderKind};
+use spark::{vk, Builder};
+use std::{collections::HashMap, ffi::CStr, fmt, fmt::Write, mem, slice};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum PerElementKernelOp {
@@ -185,68 +186,143 @@ impl Kernel {
             Kernel::Reduce(kernel) => kernel.generate_source(),
         }
     }
+
+    fn buffer_count(&self) -> usize {
+        match self {
+            Kernel::PerElement(kernel) => kernel.inputs.len() + kernel.outputs.len(),
+            Kernel::MatMul(..) => 3,
+            Kernel::Reduce(..) => 2,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct KernelModule {
     pub(crate) shader_module: vk::ShaderModule,
-    pub(crate) descriptor_set_layout: Option<vk::DescriptorSetLayout>,
-    pub(crate) pipeline_layout: Option<vk::PipelineLayout>,
-    pub(crate) pipeline: Option<vk::Pipeline>,
+    pub(crate) descriptor_set_layout: vk::DescriptorSetLayout,
+    pub(crate) pipeline_layout: vk::PipelineLayout,
+    pub(crate) pipeline: vk::Pipeline,
+}
+
+struct KernelCacheWorker {
+    context: SharedContext,
+    compiler: Compiler,
+}
+
+impl KernelCacheWorker {
+    fn new(context: &SharedContext) -> Self {
+        Self {
+            context: SharedContext::clone(context),
+            compiler: Compiler::new().unwrap(),
+        }
+    }
+
+    fn create_module(&mut self, kernel: &Kernel) -> KernelModule {
+        let device = &self.context.device;
+
+        let source = kernel.generate_source().unwrap();
+        let shader_module = match self.compiler.compile_into_spirv(
+            &source,
+            ShaderKind::Compute,
+            "kernel",
+            "main",
+            None,
+        ) {
+            Ok(artifact) => {
+                if artifact.get_num_warnings() != 0 {
+                    println!("{}", artifact.get_warning_messages());
+                }
+                let words = artifact.as_binary();
+                let shader_module_create_info = vk::ShaderModuleCreateInfo {
+                    code_size: words.len() * mem::size_of::<u32>(),
+                    p_code: words.as_ptr(),
+                    ..Default::default()
+                };
+                unsafe { device.create_shader_module(&shader_module_create_info, None) }.unwrap()
+            }
+            Err(err) => {
+                panic!("failed to compile shader {}", err);
+            }
+        };
+
+        let descriptor_set_layout = {
+            let mut bindings = Vec::new();
+            for _ in 0..kernel.buffer_count() {
+                let i = bindings.len();
+                bindings.push(vk::DescriptorSetLayoutBinding {
+                    binding: i as u32,
+                    descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+                    descriptor_count: 1,
+                    stage_flags: vk::ShaderStageFlags::COMPUTE,
+                    ..Default::default()
+                });
+            }
+            let create_info = vk::DescriptorSetLayoutCreateInfo::builder().p_bindings(&bindings);
+            unsafe { device.create_descriptor_set_layout(&create_info, None) }.unwrap()
+        };
+
+        let pipeline_layout = {
+            let create_info = vk::PipelineLayoutCreateInfo::builder()
+                .p_set_layouts(slice::from_ref(&descriptor_set_layout));
+            unsafe { device.create_pipeline_layout(&create_info, None) }.unwrap()
+        };
+
+        let pipeline = {
+            let shader_entry_name = CStr::from_bytes_with_nul(b"main\0").unwrap();
+            let pipeline_create_info = vk::ComputePipelineCreateInfo {
+                stage: vk::PipelineShaderStageCreateInfo {
+                    stage: vk::ShaderStageFlags::COMPUTE,
+                    module: Some(shader_module),
+                    p_name: shader_entry_name.as_ptr(),
+                    ..Default::default()
+                },
+                layout: Some(pipeline_layout),
+                ..Default::default()
+            };
+            unsafe { device.create_compute_pipelines_single(None, &pipeline_create_info, None) }
+                .unwrap()
+        };
+
+        KernelModule {
+            shader_module,
+            descriptor_set_layout,
+            pipeline_layout,
+            pipeline,
+        }
+    }
 }
 
 pub(crate) struct KernelCache {
-    context: SharedContext,
+    worker: KernelCacheWorker,
     modules: HashMap<Kernel, KernelModule>,
 }
 
 impl KernelCache {
     pub(crate) fn new(context: &SharedContext) -> Self {
         Self {
-            context: SharedContext::clone(context),
+            worker: KernelCacheWorker::new(context),
             modules: HashMap::new(),
         }
     }
 
     pub(crate) fn module(&mut self, kernel: &Kernel) -> KernelModule {
         *self.modules.entry(kernel.clone()).or_insert_with({
-            let device = &self.context.device;
-            move || {
-                let source = kernel.generate_source().unwrap();
-
-                let mut compiler = shaderc::Compiler::new().unwrap();
-                let shader_module = match compiler.compile_into_spirv(
-                    &source,
-                    shaderc::ShaderKind::Compute,
-                    "kernel",
-                    "main",
-                    None,
-                ) {
-                    Ok(artifact) => {
-                        if artifact.get_num_warnings() != 0 {
-                            println!("{}", artifact.get_warning_messages());
-                        }
-                        let words = artifact.as_binary();
-                        let shader_module_create_info = vk::ShaderModuleCreateInfo {
-                            code_size: words.len() * mem::size_of::<u32>(),
-                            p_code: words.as_ptr(),
-                            ..Default::default()
-                        };
-                        unsafe { device.create_shader_module(&shader_module_create_info, None) }
-                            .unwrap()
-                    }
-                    Err(err) => {
-                        panic!("failed to compile shader {}", err);
-                    }
-                };
-
-                KernelModule {
-                    shader_module,
-                    descriptor_set_layout: None,
-                    pipeline_layout: None,
-                    pipeline: None,
-                }
-            }
+            let worker = &mut self.worker;
+            move || worker.create_module(kernel)
         })
+    }
+}
+
+impl Drop for KernelCache {
+    fn drop(&mut self) {
+        let device = &self.worker.context.device;
+        for (_, module) in self.modules.drain() {
+            unsafe {
+                device.destroy_pipeline(Some(module.pipeline), None);
+                device.destroy_pipeline_layout(Some(module.pipeline_layout), None);
+                device.destroy_descriptor_set_layout(Some(module.descriptor_set_layout), None);
+                device.destroy_shader_module(Some(module.shader_module), None);
+            }
+        }
     }
 }
