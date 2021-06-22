@@ -75,7 +75,7 @@ impl Shape {
         None
     }
 
-    pub(crate) fn matrix_multiply(&self, rhs: &Shape) -> Self {
+    pub(crate) fn matrix_multiply(&self, rhs: &Shape) -> (Self, isize) {
         assert_eq!(rhs.0.len(), 2);
         let (a_last, a_prefix) = self.0.split_last().unwrap();
         let (b_first, b_suffix) = rhs.0.split_first().unwrap();
@@ -83,7 +83,7 @@ impl Shape {
         let mut v = ArrayVec::new();
         v.try_extend_from_slice(a_prefix).unwrap();
         v.try_extend_from_slice(b_suffix).unwrap();
-        Shape::new(v)
+        (Shape::new(v), *a_last)
     }
 
     pub(crate) fn transposed(&self) -> Self {
@@ -92,7 +92,7 @@ impl Shape {
     }
 
     pub(crate) fn identity_view(&self) -> View {
-        View::new(self.0.len())
+        View::identity(self.0.len())
     }
 
     pub(crate) fn axis(&self, index: isize) -> Axis {
@@ -130,8 +130,9 @@ impl Shape {
             .copied()
             .rev()
             .map(|n| {
+                let m = stride;
                 stride *= n;
-                stride
+                m
             })
             .collect();
         Shape(v.iter().copied().rev().collect())
@@ -167,65 +168,74 @@ impl<const N: usize> From<[isize; N]> for Shape {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct AxisRemap {
-    axis: Axis,
-    offset: isize,
     step: isize,
-}
-
-impl AxisRemap {
-    fn new(axis: Axis) -> Self {
-        Self {
-            axis,
-            offset: 0,
-            step: 1,
-        }
-    }
-
-    fn apply(&self, view: &View) -> Self {
-        let src = &view.0[self.axis.index()];
-        AxisRemap {
-            axis: src.axis,
-            offset: self.offset * src.step + src.offset,
-            step: self.step * src.step,
-        }
-    }
+    axis: Axis,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct View(ArrayVec<AxisRemap, MAX_DIM>);
+pub(crate) struct View {
+    offsets: ArrayVec<isize, MAX_DIM>,
+    remap: ArrayVec<AxisRemap, MAX_DIM>,
+}
 
 impl View {
-    pub(crate) fn transposed(&self) -> Self {
-        assert_eq!(self.0.len(), 2);
-        Self(self.0.iter().copied().rev().collect())
+    fn identity(dims: usize) -> Self {
+        Self {
+            offsets: iter::repeat(0).take(dims).collect(),
+            remap: (0..dims)
+                .map(|index| AxisRemap {
+                    step: 1,
+                    axis: Axis::from_index(index),
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn is_identity(&self) -> bool {
+        self.eq(&Self::identity(self.remap.len()))
     }
 
     pub(crate) fn through(&self, view: &View) -> Self {
-        Self(view.0.iter().map(|remap| remap.apply(self)).collect())
+        assert_eq!(self.remap.len(), view.offsets.len());
+        let mut offsets = self.offsets.clone();
+        for (remap, offset) in self.remap.iter().copied().zip(view.offsets.iter().copied()) {
+            offsets[remap.axis.index()] += remap.step * offset;
+        }
+        let remap = view
+            .remap
+            .iter()
+            .map(|outer| {
+                let inner = self.remap[outer.axis.index()];
+                AxisRemap {
+                    step: outer.step * inner.step,
+                    axis: inner.axis,
+                }
+            })
+            .collect();
+        Self { offsets, remap }
     }
 
-    fn new(dims: usize) -> Self {
-        Self(
-            (0..dims)
-                .map(|index| AxisRemap::new(Axis::from_index(index)))
-                .collect(),
-        )
+    pub(crate) fn transposed(&self) -> Self {
+        assert_eq!(self.remap.len(), 2);
+        Self {
+            offsets: self.offsets.clone(),
+            remap: self.remap.iter().copied().rev().collect(),
+        }
     }
 
     pub(crate) fn broadcast(from: &Shape, to: &Shape) -> Self {
+        assert!(from.len() <= to.len());
+        let offsets = iter::repeat(0).take(from.len()).collect();
         let mut remap = ArrayVec::new();
-        while from.len() + remap.len() < to.len() {
+        while remap.len() + from.len() < to.len() {
             remap.push(AxisRemap {
                 axis: Axis::from_index(0),
-                offset: 0,
                 step: 0,
             });
         }
-        assert_eq!(from.len() + remap.len(), to.len());
         for (index, (&from, &to)) in from.iter().zip(to.iter().skip(remap.len())).enumerate() {
             remap.push(AxisRemap {
                 axis: Axis::from_index(index),
-                offset: 0,
                 step: if from == to {
                     1
                 } else {
@@ -234,35 +244,34 @@ impl View {
                 },
             });
         }
-        Self(remap)
-    }
-
-    pub(crate) fn is_identity(&self) -> bool {
-        self.0
-            .iter()
-            .enumerate()
-            .all(|(index, remap)| AxisRemap::new(Axis::from_index(index)) == *remap)
+        Self { offsets, remap }
     }
 }
 
-pub(crate) struct FlatIndexParams {
-    pub(crate) scale: [isize; MAX_DIM],
+pub(crate) struct ViewIndexer {
+    pub(crate) scales: ArrayVec<isize, MAX_DIM>,
     pub(crate) offset: isize,
 }
 
-impl FlatIndexParams {
+impl ViewIndexer {
     pub(crate) fn new(shape: &Shape, view: &View) -> Self {
+        assert_eq!(shape.len(), view.offsets.len());
         let strides = shape.strides();
-        let mut params = FlatIndexParams {
-            scale: [0; MAX_DIM],
-            offset: 0,
-        };
-        for (stride, remap) in strides.iter().copied().zip(view.0.iter()) {
-            let index = remap.axis.index();
-            params.scale[index] += stride * remap.step;
-            params.offset += stride * remap.offset;
-        }
-        params
+
+        let scales = view
+            .remap
+            .iter()
+            .map(|remap| strides[remap.axis.index()] * remap.step)
+            .collect();
+        let offset = view
+            .offsets
+            .iter()
+            .cloned()
+            .zip(strides.iter().cloned())
+            .map(|(offset, stride)| offset * stride)
+            .sum();
+
+        Self { scales, offset }
     }
 }
 

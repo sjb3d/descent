@@ -21,10 +21,48 @@ pub(crate) enum PerElementKernelOp {
     },
 }
 
+fn generate_input_buffer(
+    binding_index: usize,
+    input_index: usize,
+    w: &mut impl Write,
+) -> fmt::Result {
+    writeln!(w, "layout(std430, set = 0, binding = {})", binding_index)?;
+    writeln!(
+        w,
+        "readonly restrict buffer input_layout{0} {{ float input{0}[]; }};",
+        input_index
+    )?;
+    Ok(())
+}
+
+fn generate_output_buffer(
+    binding_index: usize,
+    output_index: usize,
+    w: &mut impl Write,
+) -> fmt::Result {
+    writeln!(w, "layout(std430, set = 0, binding = {})", binding_index)?;
+    writeln!(
+        w,
+        "writeonly restrict buffer output_layout{0} {{ float output{0}[]; }};",
+        output_index
+    )?;
+    Ok(())
+}
+
+fn generate_coord(name: &str, shape: &Shape, w: &mut impl Write) -> fmt::Result {
+    writeln!(w, "uint {}[{}];", name, shape.len())?;
+    write!(w, "if (!compute_grid_coord({}", name)?;
+    for &n in shape.iter() {
+        write!(w, ", {}", n)?;
+    }
+    writeln!(w, ")) {{ return; }}")?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct KernelInput {
-    pub(crate) view: View,
     pub(crate) shape: Shape,
+    pub(crate) view: View,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -35,25 +73,6 @@ pub(crate) struct PerElementKernel {
     pub(crate) ops: Vec<PerElementKernelOp>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct ReduceKernel {
-    pub(crate) input_shape: Shape,
-    pub(crate) reduce_op: ReduceOp,
-    pub(crate) axis: Axis,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct MatMulKernel {
-    pub(crate) inputs: [KernelInput; 2],
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum Kernel {
-    PerElement(PerElementKernel),
-    Reduce(ReduceKernel),
-    MatMul(MatMulKernel),
-}
-
 impl PerElementKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
@@ -62,35 +81,19 @@ impl PerElementKernel {
         write!(w, "{}", include_str!("kernel_common.glsl"))?;
 
         let mut binding_index = 0;
-
         for input_index in 0..self.inputs.len() {
-            writeln!(w, "layout(std430, set = 0, binding = {})", binding_index)?;
-            writeln!(
-                w,
-                "readonly restrict buffer input_layout{0} {{ float input{0}[]; }};",
-                input_index
-            )?;
+            generate_input_buffer(binding_index, input_index, w)?;
             binding_index += 1;
         }
         for output_index in 0..self.outputs.len() {
-            writeln!(w, "layout(std430, set = 0, binding = {})", binding_index)?;
-            writeln!(
-                w,
-                "writeonly restrict buffer output_layout{0} {{ float output{0}[]; }};",
-                output_index
-            )?;
+            generate_output_buffer(binding_index, output_index, w)?;
             binding_index += 1;
         }
 
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
 
-        writeln!(w, "uint coord[{}];", self.shape.len())?;
-        write!(w, "if (!compute_grid_coord(coord")?;
-        for &n in self.shape.iter() {
-            write!(w, ", {}", n)?;
-        }
-        writeln!(w, ")) {{ return; }}")?;
+        generate_coord("coord", &self.shape, w)?;
 
         for (op_index, op) in self.ops.iter().enumerate() {
             write!(w, "float tmp{} = ", op_index)?;
@@ -100,9 +103,9 @@ impl PerElementKernel {
                     if input.view.is_identity() {
                         write!(w, "input{}[gl_GlobalInvocationID.x]", input_index)?
                     } else {
-                        let params = FlatIndexParams::new(&input.shape, &input.view);
+                        let params = ViewIndexer::new(&input.shape, &input.view);
                         write!(w, "input{}[{}", input_index, params.offset)?;
-                        for (index, scale) in params.scale.iter().copied().enumerate() {
+                        for (index, scale) in params.scales.iter().copied().enumerate() {
                             if scale != 0 {
                                 write!(w, " + {}*coord[{}]", scale, index)?;
                             }
@@ -150,6 +153,13 @@ impl PerElementKernel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct MatMulKernel {
+    pub(crate) shape: Shape,
+    pub(crate) k: isize,
+    pub(crate) inputs: [KernelInput; 2],
+}
+
 impl MatMulKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
@@ -157,11 +167,59 @@ impl MatMulKernel {
 
         write!(w, "{}", include_str!("kernel_common.glsl"))?;
 
+        let mut binding_index = 0;
+        for input_index in 0..2 {
+            generate_input_buffer(binding_index, input_index, w)?;
+            binding_index += 1;
+        }
+        for output_index in 0..1 {
+            generate_output_buffer(binding_index, output_index, w)?;
+            binding_index += 1;
+        }
+
         writeln!(w, "layout(local_size_x = 64) in;")?;
-        writeln!(w, "void main() {{ }}")?;
+        writeln!(w, "void main() {{")?;
+
+        generate_coord("coord0", &self.shape, w)?;
+
+        let sum_axis = self.shape.len() - 1;
+        writeln!(w, "uint coord1[2];")?;
+        writeln!(w, "coord1[1] = coord0[{}];", sum_axis)?;
+
+        writeln!(w, "float sum = 0.f;")?;
+        writeln!(w, "for (uint k = 0; k < {}; ++k) {{", self.k)?;
+
+        writeln!(w, "coord0[{}] = k;", sum_axis)?;
+        writeln!(w, "coord1[0] = k;")?;
+
+        for (input_index, input) in self.inputs.iter().enumerate() {
+            write!(w, "float tmp{} = ", input_index)?;
+            let params = ViewIndexer::new(&input.shape, &input.view);
+            write!(w, "input{}[{}", input_index, params.offset)?;
+            for (index, scale) in params.scales.iter().copied().enumerate() {
+                if scale != 0 {
+                    write!(w, " + {}*coord{}[{}]", scale, input_index, index)?;
+                }
+            }
+            writeln!(w, "];")?;
+        }
+        writeln!(w, "sum += tmp0 * tmp1;")?;
+
+        writeln!(w, "}}")?;
+
+        writeln!(w, "output0[gl_GlobalInvocationID.x] = sum;",)?;
+
+        writeln!(w, "}}")?;
 
         Ok(src)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ReduceKernel {
+    pub(crate) input_shape: Shape,
+    pub(crate) reduce_op: ReduceOp,
+    pub(crate) axis: Axis,
 }
 
 impl ReduceKernel {
@@ -176,6 +234,13 @@ impl ReduceKernel {
 
         Ok(src)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum Kernel {
+    PerElement(PerElementKernel),
+    Reduce(ReduceKernel),
+    MatMul(MatMulKernel),
 }
 
 impl Kernel {
@@ -196,11 +261,12 @@ impl Kernel {
     }
 
     fn group_count(&self) -> u32 {
-        match self {
-            Kernel::PerElement(kernel) => ((kernel.shape.element_count() as u32) + 63) / 64,
-            Kernel::MatMul(..) => unimplemented!(),
-            Kernel::Reduce(..) => unimplemented!(),
-        }
+        let shape = match self {
+            Kernel::PerElement(kernel) => &kernel.shape,
+            Kernel::MatMul(kernel) => &kernel.shape,
+            Kernel::Reduce(kernel) => &kernel.input_shape, // HACK!
+        };
+        ((shape.element_count() as u32) + 63) / 64
     }
 }
 
@@ -230,6 +296,8 @@ impl KernelCacheWorker {
         let device = &self.context.device;
 
         let source = kernel.generate_source().unwrap();
+        //println!("{}", source);
+
         let shader_module = match self.compiler.compile_into_spirv(
             &source,
             ShaderKind::Compute,

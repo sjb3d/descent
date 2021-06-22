@@ -365,7 +365,7 @@ impl Graph {
                             outputs: vec![node_id],
                         }));
                     }
-                    Op::MatMul => {
+                    Op::MatMul { k } => {
                         let edge_indices: [_; 2] = get_arg_edge_ids(&self.ops, node_id);
                         let input_node_indices = edge_indices
                             .iter()
@@ -377,14 +377,16 @@ impl Graph {
                             .iter()
                             .zip(input_node_indices.iter())
                             .map(|(&edge_id, &node_id)| KernelInput {
-                                view: self.ops[edge_id].view.clone(),
                                 shape: self.ops[node_id].shape.clone(),
+                                view: self.ops[edge_id].view.clone(),
                             })
                             .collect::<ArrayVec<_, 2>>()
                             .into_inner()
                             .unwrap();
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: Kernel::MatMul(MatMulKernel {
+                                shape: node.shape.clone(),
+                                k,
                                 inputs: kernel_inputs,
                             }),
                             inputs: input_node_indices.iter().copied().collect(),
