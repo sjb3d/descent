@@ -222,6 +222,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
         blocks.remove(append_id).unwrap();
     }
 
+    #[allow(dead_code)]
     fn print_state(&self) {
         println!("stats: {:?}", self.stats());
         for (index, first_block_id) in self.free_lists.iter().copied().enumerate() {

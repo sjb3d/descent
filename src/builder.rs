@@ -59,11 +59,9 @@ impl<'builder> Array<'builder> {
         })
     }
 
-    fn reduce_op(self, reduce_op: ReduceOp, axis: isize) -> Self {
+    fn reduce_op(self, reduce_op: ReduceOp, axis: Axis) -> Self {
         self.builder.with_state(|state| {
-            let shape = &state.ops.graph[self.node_id].shape;
-            let axis = shape.axis(axis);
-            let shape = shape.reduce(axis);
+            let shape = state.ops.graph[self.node_id].shape.reduce(axis);
             Array {
                 node_id: state
                     .ops
@@ -86,16 +84,16 @@ impl<'builder> Array<'builder> {
     }
 
     pub fn reduce_max(self, axis: isize) -> Self {
-        self.reduce_op(ReduceOp::Max, axis)
+        self.reduce_op(ReduceOp::Max, self.shape().axis(axis))
     }
     pub fn reduce_sum(self, axis: isize) -> Self {
-        self.reduce_op(ReduceOp::Sum, axis)
+        self.reduce_op(ReduceOp::Sum, self.shape().axis(axis))
     }
 
     fn reduce_onto_per_element(self, shape: &Shape) -> Self {
         let mut output = self;
         while let Some(axis) = output.shape().reduce_axis_onto_per_element(shape) {
-            output = output.reduce_sum(axis);
+            output = output.reduce_op(ReduceOp::Sum, axis);
         }
         output
     }

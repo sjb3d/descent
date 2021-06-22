@@ -55,9 +55,9 @@ impl Shape {
         Shape::new(rev.into_iter().rev().collect())
     }
 
-    pub(crate) fn reduce_axis_onto_per_element(&self, rhs: &Shape) -> Option<isize> {
+    pub(crate) fn reduce_axis_onto_per_element(&self, rhs: &Shape) -> Option<Axis> {
         if self.0.len() > rhs.0.len() {
-            return Some(0);
+            return Some(Axis::from_index(0));
         }
         assert_eq!(self.0.len(), rhs.0.len());
         for (i, (a, b)) in self
@@ -69,7 +69,7 @@ impl Shape {
         {
             if a != b {
                 assert_eq!(b, 1);
-                return Some(i as isize);
+                return Some(Axis::from_index(i));
             }
         }
         None

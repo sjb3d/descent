@@ -18,11 +18,11 @@ impl PhysicalDeviceMemoryPropertiesExt for vk::PhysicalDeviceMemoryProperties {
 
 pub(crate) struct Context {
     pub(crate) instance: Instance,
-    pub(crate) physical_device: vk::PhysicalDevice,
+    pub(crate) _physical_device: vk::PhysicalDevice,
     pub(crate) physical_device_properties: vk::PhysicalDeviceProperties,
     pub(crate) physical_device_memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub(crate) queue_family_index: u32,
-    pub(crate) queue_family_properties: vk::QueueFamilyProperties,
+    pub(crate) _queue_family_properties: vk::QueueFamilyProperties,
     pub(crate) queue: vk::Queue,
     pub(crate) device: Device,
 }
@@ -103,11 +103,11 @@ impl Context {
 
         SharedContext::new(Self {
             instance,
-            physical_device,
+            _physical_device: physical_device,
             physical_device_properties,
             physical_device_memory_properties,
             queue_family_index,
-            queue_family_properties,
+            _queue_family_properties: queue_family_properties,
             queue,
             device,
         })

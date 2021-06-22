@@ -49,9 +49,9 @@ fn generate_output_buffer(
     Ok(())
 }
 
-fn generate_coord(name: &str, shape: &Shape, w: &mut impl Write) -> fmt::Result {
-    writeln!(w, "uint {}[{}];", name, shape.len())?;
-    write!(w, "if (!compute_grid_coord({}", name)?;
+fn generate_coord(shape: &Shape, w: &mut impl Write) -> fmt::Result {
+    writeln!(w, "uint coord[{}];", shape.len())?;
+    write!(w, "if (!compute_grid_coord(coord")?;
     for &n in shape.iter() {
         write!(w, ", {}", n)?;
     }
@@ -63,6 +63,12 @@ fn generate_coord(name: &str, shape: &Shape, w: &mut impl Write) -> fmt::Result 
 pub(crate) struct KernelInput {
     pub(crate) shape: Shape,
     pub(crate) view: View,
+}
+
+impl KernelInput {
+    fn indexer(&self) -> ViewIndexer {
+        ViewIndexer::new(&self.shape, &self.view)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -93,7 +99,7 @@ impl PerElementKernel {
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
 
-        generate_coord("coord", &self.shape, w)?;
+        generate_coord(&self.shape, w)?;
 
         for (op_index, op) in self.ops.iter().enumerate() {
             write!(w, "float tmp{} = ", op_index)?;
@@ -103,9 +109,9 @@ impl PerElementKernel {
                     if input.view.is_identity() {
                         write!(w, "input{}[gl_GlobalInvocationID.x]", input_index)?
                     } else {
-                        let params = ViewIndexer::new(&input.shape, &input.view);
-                        write!(w, "input{}[{}", input_index, params.offset)?;
-                        for (index, scale) in params.scales.iter().copied().enumerate() {
+                        let indexer = input.indexer();
+                        write!(w, "input{}[{}", input_index, indexer.offset)?;
+                        for (index, scale) in indexer.scales.iter().copied().enumerate() {
                             if scale != 0 {
                                 write!(w, " + {}*coord[{}]", scale, index)?;
                             }
@@ -180,31 +186,36 @@ impl MatMulKernel {
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
 
-        generate_coord("coord0", &self.shape, w)?;
+        generate_coord(&self.shape, w)?;
 
-        let sum_axis = self.shape.len() - 1;
-        writeln!(w, "uint coord1[2];")?;
-        writeln!(w, "coord1[1] = coord0[{}];", sum_axis)?;
+        let indexer0 = self.inputs[0].indexer();
+        let (stride0, scales0) = indexer0.scales.split_last().unwrap();
+        write!(w, "uint base0 = {}", indexer0.offset)?;
+        for (index, scale) in scales0.iter().copied().enumerate() {
+            if scale != 0 {
+                write!(w, " + {}*coord[{}]", scale, index)?;
+            }
+        }
+        writeln!(w, ";")?;
+        writeln!(w, "uint stride0 = {};", stride0)?;
+
+        let indexer1 = self.inputs[1].indexer();
+        let (stride1, scales1) = indexer1.scales.split_first().unwrap();
+        assert_eq!(indexer1.scales.len(), 2);
+        writeln!(
+            w,
+            "uint base1 = {} + {}*coord[{}];",
+            indexer1.offset,
+            scales1[0],
+            scales0.len()
+        )?;
+        writeln!(w, "uint stride1 = {};", stride1)?;
 
         writeln!(w, "float sum = 0.f;")?;
         writeln!(w, "for (uint k = 0; k < {}; ++k) {{", self.k)?;
-
-        writeln!(w, "coord0[{}] = k;", sum_axis)?;
-        writeln!(w, "coord1[0] = k;")?;
-
-        for (input_index, input) in self.inputs.iter().enumerate() {
-            write!(w, "float tmp{} = ", input_index)?;
-            let params = ViewIndexer::new(&input.shape, &input.view);
-            write!(w, "input{}[{}", input_index, params.offset)?;
-            for (index, scale) in params.scales.iter().copied().enumerate() {
-                if scale != 0 {
-                    write!(w, " + {}*coord{}[{}]", scale, input_index, index)?;
-                }
-            }
-            writeln!(w, "];")?;
-        }
+        writeln!(w, "float tmp0 = input0[base0 + k*stride0]")?;
+        writeln!(w, "float tmp1 = input1[base1 + k*stride1]")?;
         writeln!(w, "sum += tmp0 * tmp1;")?;
-
         writeln!(w, "}}")?;
 
         writeln!(w, "output0[gl_GlobalInvocationID.x] = sum;",)?;
@@ -296,7 +307,7 @@ impl KernelCacheWorker {
         let device = &self.context.device;
 
         let source = kernel.generate_source().unwrap();
-        //println!("{}", source);
+        println!("{}", source);
 
         let shader_module = match self.compiler.compile_into_spirv(
             &source,
