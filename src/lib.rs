@@ -16,7 +16,25 @@ pub mod shape;
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
+    use bytemuck::{cast_slice, cast_slice_mut};
     use std::io::{Read, Write};
+
+    #[test]
+    fn variables() {
+        let mut env = Environment::new();
+
+        let a_var = env.variable([10], "a");
+
+        let a_data = [0f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        env.writer(a_var).write_all(cast_slice(&a_data)).unwrap();
+
+        let mut a_result = [0f32; 10];
+        env.reader(a_var)
+            .read_exact(cast_slice_mut(&mut a_result))
+            .unwrap();
+
+        assert_eq!(a_data, a_result);
+    }
 
     #[test]
     fn reduce() {
@@ -28,9 +46,7 @@ mod tests {
         let a_var = env.variable([10, 10], "a");
         let b_var = env.variable([10, 1], "b");
 
-        env.writer(a_var)
-            .write_all(bytemuck::cast_slice(&a_data))
-            .unwrap();
+        env.writer(a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.builder();
         g.output(b_var, g.input(a_var).value().reduce_sum(-1));
@@ -40,7 +56,7 @@ mod tests {
 
         let mut b_result = vec![0f32; 10];
         env.reader(b_var)
-            .read_exact(bytemuck::cast_slice_mut(&mut b_result))
+            .read_exact(cast_slice_mut(&mut b_result))
             .unwrap();
         assert_eq!(b_result, b_data);
     }

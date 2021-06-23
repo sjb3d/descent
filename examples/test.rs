@@ -80,18 +80,6 @@ fn main() {
     let w_var = env.variable([28 * 28, 10], "w");
     let b_var = env.variable([10], "b");
 
-    let b_write: [f32; 10] = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-    env.writer(b_var)
-        .write_all(bytemuck::cast_slice(&b_write))
-        .unwrap();
-
-    let mut b_read = [0f32; 10];
-    env.reader(b_var)
-        .read_exact(bytemuck::cast_slice_mut(&mut b_read))
-        .unwrap();
-
-    assert_eq!(b_write, b_read);
-
     let w = g.input(w_var);
     let b = g.input(b_var);
     let z = x.matmul(w) + b;
@@ -119,6 +107,7 @@ fn main() {
     env.writer(x_var);
     env.writer(y_var);
     env.writer(w_var);
+    env.writer(b_var);
     env.run(&graph);
 
     if env::args().len() > 1 {
