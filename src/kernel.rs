@@ -100,16 +100,17 @@ impl PerElementKernel {
         writeln!(w, "void main() {{")?;
 
         generate_coord(&self.shape, w)?;
+        let coord_indexer = self.shape.identity_indexer();
 
         for (op_index, op) in self.ops.iter().enumerate() {
             write!(w, "float tmp{} = ", op_index)?;
             match op {
                 PerElementKernelOp::Load { input_index } => {
                     let input = &self.inputs[*input_index];
-                    if input.view.is_identity() {
+                    let indexer = input.indexer();
+                    if indexer == coord_indexer {
                         write!(w, "input{}[gl_GlobalInvocationID.x]", input_index)?
                     } else {
-                        let indexer = input.indexer();
                         write!(w, "input{}[{}", input_index, indexer.offset)?;
                         for (index, scale) in indexer.scales.iter().copied().enumerate() {
                             if scale != 0 {
@@ -213,8 +214,8 @@ impl MatMulKernel {
 
         writeln!(w, "float sum = 0.f;")?;
         writeln!(w, "for (uint k = 0; k < {}; ++k) {{", self.k)?;
-        writeln!(w, "float tmp0 = input0[base0 + k*stride0]")?;
-        writeln!(w, "float tmp1 = input1[base1 + k*stride1]")?;
+        writeln!(w, "float tmp0 = input0[base0 + k*stride0];")?;
+        writeln!(w, "float tmp1 = input1[base1 + k*stride1];")?;
         writeln!(w, "sum += tmp0 * tmp1;")?;
         writeln!(w, "}}")?;
 
@@ -228,7 +229,8 @@ impl MatMulKernel {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ReduceKernel {
-    pub(crate) input_shape: Shape,
+    pub(crate) shape: Shape,
+    pub(crate) input: KernelInput,
     pub(crate) reduce_op: ReduceOp,
     pub(crate) axis: Axis,
 }
@@ -241,7 +243,11 @@ impl ReduceKernel {
         write!(w, "{}", include_str!("kernel_common.glsl"))?;
 
         writeln!(w, "layout(local_size_x = 64) in;")?;
-        writeln!(w, "void main() {{ }}")?;
+        writeln!(w, "void main() {{")?;
+
+        generate_coord(&self.shape, w)?;
+
+        writeln!(w, "}}")?;
 
         Ok(src)
     }
@@ -275,7 +281,7 @@ impl Kernel {
         let shape = match self {
             Kernel::PerElement(kernel) => &kernel.shape,
             Kernel::MatMul(kernel) => &kernel.shape,
-            Kernel::Reduce(kernel) => &kernel.input_shape, // HACK!
+            Kernel::Reduce(kernel) => &kernel.shape,
         };
         ((shape.element_count() as u32) + 63) / 64
     }

@@ -350,13 +350,14 @@ impl Graph {
                 match node.op {
                     Op::Reduce { reduce_op, axis } => {
                         let [edge_id] = get_arg_edge_ids(&self.ops, node_id);
-                        let input_node_id = {
-                            assert!(self.ops[edge_id].view.is_identity());
-                            self.ops.edge_endpoints(edge_id).unwrap().0
-                        };
+                        let input_node_id = self.ops.edge_endpoints(edge_id).unwrap().0;
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: Kernel::Reduce(ReduceKernel {
-                                input_shape: self.ops[input_node_id].shape.clone(),
+                                shape: node.shape.clone(),
+                                input: KernelInput {
+                                    shape: self.ops[input_node_id].shape.clone(),
+                                    view: self.ops[edge_id].view.clone(),
+                                },
                                 reduce_op,
                                 axis,
                             }),
@@ -366,16 +367,16 @@ impl Graph {
                         }));
                     }
                     Op::MatMul { k } => {
-                        let edge_indices: [_; 2] = get_arg_edge_ids(&self.ops, node_id);
-                        let input_node_indices = edge_indices
+                        let edge_ids: [_; 2] = get_arg_edge_ids(&self.ops, node_id);
+                        let input_node_ids = edge_ids
                             .iter()
                             .map(|&edge_id| self.ops.edge_endpoints(edge_id).unwrap().0)
                             .collect::<ArrayVec<_, 2>>()
                             .into_inner()
                             .unwrap();
-                        let kernel_inputs = edge_indices
+                        let kernel_inputs = edge_ids
                             .iter()
-                            .zip(input_node_indices.iter())
+                            .zip(input_node_ids.iter())
                             .map(|(&edge_id, &node_id)| KernelInput {
                                 shape: self.ops[node_id].shape.clone(),
                                 view: self.ops[edge_id].view.clone(),
@@ -389,7 +390,7 @@ impl Graph {
                                 k,
                                 inputs: kernel_inputs,
                             }),
-                            inputs: input_node_indices.iter().copied().collect(),
+                            inputs: input_node_ids.iter().copied().collect(),
                             members: vec![node_id],
                             outputs: vec![node_id],
                         }));
