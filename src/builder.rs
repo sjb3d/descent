@@ -107,13 +107,13 @@ impl<'builder> Array<'builder> {
 
     pub fn matmul(self, rhs: Array) -> Self {
         self.builder.with_state(|state| {
-            let (shape, k) = state.ops.graph[self.node_id]
+            let shape = state.ops.graph[self.node_id]
                 .shape
                 .matrix_multiply(&state.ops.graph[rhs.node_id].shape);
             Array {
                 node_id: state
                     .ops
-                    .new_node(shape, Op::MatMul { k }, &[self.node_id, rhs.node_id]),
+                    .new_node(shape, Op::MatMul, &[self.node_id, rhs.node_id]),
                 builder: self.builder,
             }
         })

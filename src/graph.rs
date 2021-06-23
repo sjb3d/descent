@@ -366,7 +366,7 @@ impl Graph {
                             outputs: vec![node_id],
                         }));
                     }
-                    Op::MatMul { k } => {
+                    Op::MatMul => {
                         let edge_ids: [_; 2] = get_arg_edge_ids(&self.ops, node_id);
                         let input_node_ids = edge_ids
                             .iter()
@@ -387,7 +387,6 @@ impl Graph {
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: Kernel::MatMul(MatMulKernel {
                                 shape: node.shape.clone(),
-                                k,
                                 inputs: kernel_inputs,
                             }),
                             inputs: input_node_ids.iter().copied().collect(),

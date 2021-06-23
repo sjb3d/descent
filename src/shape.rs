@@ -79,7 +79,7 @@ impl Shape {
         None
     }
 
-    pub(crate) fn matrix_multiply(&self, rhs: &Shape) -> (Self, isize) {
+    pub(crate) fn matrix_multiply(&self, rhs: &Shape) -> Self {
         assert_eq!(rhs.0.len(), 2);
         let (a_last, a_prefix) = self.0.split_last().unwrap();
         let (b_first, b_suffix) = rhs.0.split_first().unwrap();
@@ -87,7 +87,7 @@ impl Shape {
         let mut v = ArrayVec::new();
         v.try_extend_from_slice(a_prefix).unwrap();
         v.try_extend_from_slice(b_suffix).unwrap();
-        (Shape::new(v), *a_last)
+        Shape::new(v)
     }
 
     pub(crate) fn transposed(&self) -> Self {
@@ -202,7 +202,7 @@ impl AxisRemap {
 pub(crate) struct View {
     offsets: ArrayVec<isize, MAX_DIM>,
     remap: ArrayVec<Option<AxisRemap>, MAX_DIM>,
-    shape: Shape,
+    pub(crate) shape: Shape,
 }
 
 impl View {

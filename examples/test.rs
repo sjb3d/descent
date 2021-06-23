@@ -86,16 +86,6 @@ fn main() {
         .write_all(bytemuck::cast_slice(&b_write))
         .unwrap();
 
-    {
-        let g = env.builder();
-
-        let b = g.input(b_var);
-        g.output(b_var, 2.0 * b.value() + b.value());
-
-        let g = g.build();
-        env.run(&g);
-    }
-
     let mut b_read = [0f32; 10];
     env.reader(b_var)
         .read_exact(bytemuck::cast_slice_mut(&mut b_read))

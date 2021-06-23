@@ -163,7 +163,6 @@ impl PerElementKernel {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct MatMulKernel {
     pub(crate) shape: Shape,
-    pub(crate) k: isize,
     pub(crate) inputs: [KernelInput; 2],
 }
 
@@ -174,20 +173,16 @@ impl MatMulKernel {
 
         write!(w, "{}", include_str!("kernel_common.glsl"))?;
 
-        let mut binding_index = 0;
-        for input_index in 0..2 {
-            generate_input_buffer(binding_index, input_index, w)?;
-            binding_index += 1;
-        }
-        for output_index in 0..1 {
-            generate_output_buffer(binding_index, output_index, w)?;
-            binding_index += 1;
-        }
+        generate_input_buffer(0, 0, w)?;
+        generate_input_buffer(1, 1, w)?;
+        generate_output_buffer(2, 0, w)?;
 
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
 
         generate_coord(&self.shape, w)?;
+
+        let k = self.inputs[0].view.shape.last().unwrap();
 
         let indexer0 = self.inputs[0].indexer();
         let (stride0, scales0) = indexer0.scales.split_last().unwrap();
@@ -201,25 +196,24 @@ impl MatMulKernel {
         writeln!(w, "uint stride0 = {};", stride0)?;
 
         let indexer1 = self.inputs[1].indexer();
-        let (stride1, scales1) = indexer1.scales.split_first().unwrap();
         assert_eq!(indexer1.scales.len(), 2);
         writeln!(
             w,
             "uint base1 = {} + {}*coord[{}];",
             indexer1.offset,
-            scales1[0],
+            indexer1.scales[1],
             scales0.len()
         )?;
-        writeln!(w, "uint stride1 = {};", stride1)?;
+        writeln!(w, "uint stride1 = {};", indexer1.scales[0])?;
 
         writeln!(w, "float sum = 0.f;")?;
-        writeln!(w, "for (uint k = 0; k < {}; ++k) {{", self.k)?;
+        writeln!(w, "for (uint k = 0; k < {}; ++k) {{", k)?;
         writeln!(w, "float tmp0 = input0[base0 + k*stride0];")?;
         writeln!(w, "float tmp1 = input1[base1 + k*stride1];")?;
         writeln!(w, "sum += tmp0 * tmp1;")?;
         writeln!(w, "}}")?;
 
-        writeln!(w, "output0[gl_GlobalInvocationID.x] = sum;",)?;
+        writeln!(w, "output0[gl_GlobalInvocationID.x] = sum;")?;
 
         writeln!(w, "}}")?;
 
@@ -242,10 +236,48 @@ impl ReduceKernel {
 
         write!(w, "{}", include_str!("kernel_common.glsl"))?;
 
+        generate_input_buffer(0, 0, w)?;
+        generate_output_buffer(1, 0, w)?;
+
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
 
         generate_coord(&self.shape, w)?;
+
+        let k = self.input.view.shape[self.axis.index()];
+
+        let indexer = self.input.indexer();
+        write!(w, "uint base = {}", indexer.offset)?;
+        for (index, scale) in indexer.scales.iter().copied().enumerate() {
+            if scale != 0 && index != self.axis.index() {
+                let offset = if self.axis.index() == 0 { 1 } else { 0 };
+                write!(w, " + {}*coord[{}]", scale, index - offset)?;
+            }
+        }
+        writeln!(w, ";")?;
+        writeln!(w, "uint stride = {};", indexer.scales[self.axis.index()])?;
+
+        writeln!(
+            w,
+            "float result = {};",
+            match self.reduce_op {
+                ReduceOp::Max => "uintBitsToFloat(0xff800000)",
+                ReduceOp::Sum => "0.f",
+            }
+        )?;
+        writeln!(w, "for (uint k = 0; k < {}; ++k) {{", k)?;
+        writeln!(w, "float tmp = input0[base + k*stride];")?;
+        writeln!(
+            w,
+            "{};",
+            match self.reduce_op {
+                ReduceOp::Max => "result = max(result, tmp)",
+                ReduceOp::Sum => "result += tmp",
+            }
+        )?;
+        writeln!(w, "}}")?;
+
+        writeln!(w, "output0[gl_GlobalInvocationID.x] = result;")?;
 
         writeln!(w, "}}")?;
 
@@ -313,7 +345,7 @@ impl KernelCacheWorker {
         let device = &self.context.device;
 
         let source = kernel.generate_source().unwrap();
-        println!("{}", source);
+        //println!("{}", source);
 
         let shader_module = match self.compiler.compile_into_spirv(
             &source,
