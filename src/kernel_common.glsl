@@ -22,4 +22,5 @@ bool compute_grid_coord(out uint coord[2], uint shape0, uint shape1)
 
     coord[0] = tmp0;
     coord[1] = tmp1 - shape1*tmp0;
+    return true;
 }

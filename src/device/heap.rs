@@ -349,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn heap_test() {
+    fn heap() {
         let mut heap = Heap::default();
         heap.extend_with(0usize, 1000);
 

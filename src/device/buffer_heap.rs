@@ -81,7 +81,13 @@ impl BufferHeap {
             .context
             .physical_device_properties
             .limits
-            .non_coherent_atom_size as usize;
+            .non_coherent_atom_size
+            .max(
+                self.context
+                    .physical_device_properties
+                    .limits
+                    .min_storage_buffer_offset_alignment,
+            ) as usize;
         match self.heap.alloc(size, align) {
             Some(alloc) => Some(alloc),
             None => {

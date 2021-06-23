@@ -383,13 +383,6 @@ impl Environment {
 
         println!("{:?}", self.buffer_heap.heap_stats());
     }
-
-    pub fn test(&mut self) {
-        for _ in 0..4 {
-            let cmd = self.command_buffers.acquire(&self.fences);
-            cmd.submit(&mut self.fences);
-        }
-    }
 }
 
 impl Drop for Environment {

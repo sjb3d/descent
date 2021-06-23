@@ -66,7 +66,6 @@ fn softmax_cross_entropy_loss<'builder>(
 
 fn main() {
     let mut env = Environment::new();
-    env.test();
 
     let m = 1000;
     let x_var = env.variable([m, 28 * 28], "x");
