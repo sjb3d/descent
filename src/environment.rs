@@ -100,6 +100,12 @@ impl DescriptorPoolSet {
 
     fn acquire(&mut self, fences: &FenceSet) -> ScopedDescriptorPool {
         let pool = self.pools.pop_front().unwrap().take_when_signaled(fences);
+        unsafe {
+            self.context
+                .device
+                .reset_descriptor_pool(pool, vk::DescriptorPoolResetFlags::empty())
+                .unwrap();
+        }
         ScopedDescriptorPool { pool, set: self }
     }
 }
