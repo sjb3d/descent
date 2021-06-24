@@ -6,7 +6,7 @@ use rand::SeedableRng;
 use std::{
     env,
     fs::File,
-    io::{BufReader, BufWriter, Read, Write},
+    io::{BufReader, BufWriter, Read},
     path::Path,
 };
 
@@ -44,8 +44,8 @@ fn load_labels(path: impl AsRef<Path>) -> ArrayOld {
 }
 
 fn softmax_cross_entropy_loss<'builder>(
-    z: Tensor<'builder>,
-    y: Tensor<'builder>,
+    z: DualArray<'builder>,
+    y: DualArray<'builder>,
 ) -> Array<'builder> {
     let (z, dz) = (z.value(), z.grad());
     let y = y.value();

@@ -11,8 +11,8 @@ pub struct Array<'builder> {
 }
 
 #[derive(Clone, Copy)]
-pub struct Tensor<'builder> {
-    node_ids: (OpNodeId, OpNodeId),
+pub struct DualArray<'builder> {
+    node_ids: DualOpNodeId,
     builder: &'builder GraphBuilder,
 }
 
@@ -208,29 +208,32 @@ impl<'builder> ops::Div<f32> for Array<'builder> {
     }
 }
 
-impl<'builder> Tensor<'builder> {
+impl<'builder> DualArray<'builder> {
     pub fn new(value: Array<'builder>, grad: Array<'builder>) -> Self {
         Self {
-            node_ids: (value.node_id, grad.node_id),
+            node_ids: DualOpNodeId {
+                value: value.node_id,
+                grad: grad.node_id,
+            },
             builder: value.builder,
         }
     }
 
     pub fn value(self) -> Array<'builder> {
         Array {
-            node_id: self.node_ids.0,
+            node_id: self.node_ids.value,
             builder: self.builder,
         }
     }
 
     pub fn grad(self) -> Array<'builder> {
         Array {
-            node_id: self.node_ids.1,
+            node_id: self.node_ids.grad,
             builder: self.builder,
         }
     }
 
-    pub fn matmul(self, rhs: Tensor) -> Self {
+    pub fn matmul(self, rhs: DualArray) -> Self {
         let a = self.value();
         let da = self.grad();
         let b = rhs.value();
@@ -246,9 +249,9 @@ impl<'builder> Tensor<'builder> {
     }
 }
 
-impl<'builder> ops::Add for Tensor<'builder> {
-    type Output = Tensor<'builder>;
-    fn add(self, rhs: Tensor<'builder>) -> Self::Output {
+impl<'builder> ops::Add for DualArray<'builder> {
+    type Output = DualArray<'builder>;
+    fn add(self, rhs: DualArray<'builder>) -> Self::Output {
         let a = self.value();
         let da = self.grad();
         let b = rhs.value();
@@ -295,7 +298,7 @@ impl OpGraphBuilder {
 struct GraphBuilderState {
     ops: OpGraphBuilder,
     variables: SharedVariables,
-    inputs: SparseSecondaryMap<VariableId, (OpNodeId, OpNodeId)>,
+    inputs: SparseSecondaryMap<VariableId, DualOpNodeId>,
     outputs: SparseSecondaryMap<VariableId, OpNodeId>,
 }
 
@@ -335,7 +338,7 @@ impl GraphBuilder {
         })
     }
 
-    pub fn input(&self, variable_id: VariableId) -> Tensor {
+    pub fn input(&self, variable_id: VariableId) -> DualArray {
         let node_ids = self.with_state(|state| {
             let shape = state
                 .variables
@@ -345,14 +348,16 @@ impl GraphBuilder {
                 .shape
                 .clone();
             let ops = &mut state.ops;
-            *state.inputs.entry(variable_id).unwrap().or_insert_with(|| {
-                (
-                    ops.new_node(shape.clone(), Op::Input { variable_id }, &[]),
-                    ops.new_node(shape, Op::Accumulate, &[]),
-                )
-            })
+            *state
+                .inputs
+                .entry(variable_id)
+                .unwrap()
+                .or_insert_with(|| DualOpNodeId {
+                    value: ops.new_node(shape.clone(), Op::Input { variable_id }, &[]),
+                    grad: ops.new_node(shape, Op::Accumulate, &[]),
+                })
         });
-        Tensor {
+        DualArray {
             node_ids,
             builder: self,
         }
@@ -384,7 +389,10 @@ impl GraphBuilder {
             // ensure that if we read this variable again we read the latest value
             state.inputs.insert(
                 variable_id,
-                (rhs.node_id, state.ops.new_node(shape, Op::Accumulate, &[])),
+                DualOpNodeId {
+                    value: rhs.node_id,
+                    grad: state.ops.new_node(shape, Op::Accumulate, &[]),
+                },
             );
         });
     }
