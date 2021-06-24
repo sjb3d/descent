@@ -98,6 +98,14 @@ impl<'builder> Array<'builder> {
         output
     }
 
+    pub fn coord(self, axis: isize) -> Self {
+        self.builder.coord(self.shape(), axis)
+    }
+
+    pub fn test_eq(self, rhs: Array) -> Self {
+        self.binary_op(rhs, BinaryOp::TestEq)
+    }
+
     pub fn exp(self) -> Self {
         self.unary_op(UnaryOp::Exp)
     }
@@ -335,6 +343,19 @@ impl GraphBuilder {
                 .ops
                 .new_node([1], Op::Literal(NotNan::new(value).unwrap()), &[]),
             builder: self,
+        })
+    }
+
+    pub fn coord(&self, shape: impl Into<Shape>, axis: isize) -> Array {
+        self.with_state(|state| {
+            let shape = shape.into();
+            let axis = shape.axis(axis);
+            Array {
+                node_id: state
+                    .ops
+                    .new_node(shape, Op::BuiltIn(BuiltInOp::Coord { axis }), &[]),
+                builder: self,
+            }
         })
     }
 

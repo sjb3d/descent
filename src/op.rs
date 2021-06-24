@@ -19,11 +19,17 @@ pub(crate) enum ReduceOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum BuiltInOp {
+    Coord { axis: Axis },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BinaryOp {
     Add,
     Sub,
     Mul,
     Div,
+    TestEq,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -40,6 +46,7 @@ pub(crate) enum Op {
     Output { variable_id: VariableId },
     Literal(NotNan<f32>),
     View(View),
+    BuiltIn(BuiltInOp),
     Unary(UnaryOp),
     Binary(BinaryOp),
     MatMul,
@@ -60,6 +67,10 @@ impl Op {
             Self::Output { variable_id } => Some(*variable_id),
             _ => None,
         }
+    }
+
+    pub(crate) fn is_per_element(&self) -> bool {
+        matches!(self, Self::BuiltIn(..) | Self::Unary(..) | Self::Binary(..))
     }
 }
 

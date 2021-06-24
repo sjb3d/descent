@@ -184,7 +184,7 @@ impl Graph {
             if !first_node.cluster_id.is_none() {
                 continue;
             }
-            if matches!(first_node.op, Op::Unary(_) | Op::Binary(_)) {
+            if first_node.op.is_per_element() {
                 let shape = first_node.shape.clone();
 
                 let cluster_id = Some(self.clusters.insert(Cluster {
@@ -206,8 +206,7 @@ impl Graph {
 
                         // check this node has no cluster and matches shape
                         let is_matching_shape =
-                            matches!(other_node.op, Op::Unary(_) | Op::Binary(_))
-                                && other_node.shape == shape;
+                            other_node.op.is_per_element() && other_node.shape == shape;
                         let is_literal = matches!(other_node.op, Op::Literal(_));
                         let can_include =
                             other_node.cluster_id.is_none() && (is_matching_shape || is_literal);
@@ -318,6 +317,7 @@ impl Graph {
                 // emit the op
                 let op_index = kernel.ops.len();
                 kernel.ops.push(match graph[node_id].op {
+                    Op::BuiltIn(op) => PerElementKernelOp::BuiltIn(op),
                     Op::Unary(op) => PerElementKernelOp::Unary {
                         op,
                         arg0_index: args[0].unwrap(),

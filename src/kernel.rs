@@ -10,6 +10,7 @@ pub(crate) enum PerElementKernelOp {
         input_index: usize,
     },
     Literal(NotNan<f32>),
+    BuiltIn(BuiltInOp),
     Unary {
         op: UnaryOp,
         arg0_index: usize,
@@ -121,6 +122,9 @@ impl PerElementKernel {
                     }
                 }
                 PerElementKernelOp::Literal(value) => write!(w, "{:#?}", value.into_inner())?,
+                PerElementKernelOp::BuiltIn(op) => match op {
+                    BuiltInOp::Coord { axis } => write!(w, "float(coord[{}])", axis.index())?,
+                },
                 PerElementKernelOp::Unary { op, arg0_index } => match op {
                     UnaryOp::Neg => write!(w, "-tmp{}", arg0_index)?,
                     UnaryOp::Exp => write!(w, "exp(tmp{})", arg0_index)?,
@@ -141,6 +145,9 @@ impl PerElementKernel {
                     BinaryOp::Sub => write!(w, "tmp{} - tmp{}", arg0_index, arg1_index)?,
                     BinaryOp::Mul => write!(w, "tmp{} * tmp{}", arg0_index, arg1_index)?,
                     BinaryOp::Div => write!(w, "tmp{} / tmp{}", arg0_index, arg1_index)?,
+                    BinaryOp::TestEq => {
+                        write!(w, "(tmp{} == tmp{}) ? 1.f : 0.f", arg0_index, arg1_index)?
+                    }
                 },
             }
             writeln!(w, ";")?;
