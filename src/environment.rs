@@ -255,7 +255,6 @@ impl Environment {
         for node_id in inputs.iter().copied() {
             let variable_id = graph.ops[node_id].op.input_variable_id().unwrap();
             let var = &mut variables[variable_id];
-            println!("input {:?}: {}", node_id, var.name);
             assert!(var.buffer_id.is_some());
             let storage = &mut node_storage[node_id.index()];
             if !output_variable_ids.contains(&variable_id) {
@@ -265,8 +264,6 @@ impl Environment {
                 storage.buffer_id = var.buffer_id.take();
             }
         }
-
-        println!("{:?}", self.buffer_heap.heap_stats());
 
         // free buffers for variables only used as outputs
         for node_id in outputs.iter().copied() {
@@ -285,9 +282,7 @@ impl Environment {
         let descriptor_pool = self.descriptor_pools.acquire(&self.fences);
         for cluster_id in graph.clusters_sorted.iter().copied() {
             let cluster = &graph.clusters[cluster_id];
-            println!("cluster {:?} {:?}", cluster_id, cluster.kernel);
             for node_id in cluster.outputs.iter().copied() {
-                println!("allocate {:?}", node_id);
                 let node_state = &mut node_storage[node_id.index()];
                 assert!(node_state.buffer_id.is_none());
                 node_state.buffer_id = Some(
@@ -377,7 +372,6 @@ impl Environment {
                 let node_state = &mut node_storage[node_id.index()];
                 node_state.usage_count -= 1;
                 if node_state.usage_count == 0 {
-                    println!("free {:?}", node_id);
                     self.buffer_heap.free(node_state.buffer_id.take().unwrap());
                 }
             }
@@ -391,13 +385,10 @@ impl Environment {
             let var = &mut variables[variable_id];
             let [edge_id] = get_arg_edge_ids(&graph.ops, node_id);
             let source_node_id = graph.ops.edge_endpoints(edge_id).unwrap().0;
-            println!("output {:?}: {}", source_node_id, var.name);
             let source_storage = &mut node_storage[source_node_id.index()];
             assert!(source_storage.buffer_id.is_some());
             var.buffer_id = source_storage.buffer_id.take();
         }
-
-        println!("{:?}", self.buffer_heap.heap_stats());
     }
 }
 

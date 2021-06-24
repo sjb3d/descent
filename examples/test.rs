@@ -24,19 +24,33 @@ fn read_be_u32(bytes: &[u8]) -> (u32, &[u8]) {
     (u32::from_be_bytes(prefix.try_into().unwrap()), suffix)
 }
 
+fn read_images_info(bytes: &[u8]) -> ((usize, usize, usize), &[u8]) {
+    let (magic, bytes) = read_be_u32(bytes);
+    assert_eq!(magic, 2051);
+    let (images, bytes) = read_be_u32(bytes);
+    let (rows, bytes) = read_be_u32(bytes);
+    let (cols, bytes) = read_be_u32(bytes);
+    ((images as usize, rows as usize, cols as usize), bytes)
+}
+
+fn read_labels_info(bytes: &[u8]) -> (usize, &[u8]) {
+    let (magic, bytes) = read_be_u32(bytes);
+    assert_eq!(magic, 2049);
+    let (items, bytes) = read_be_u32(bytes);
+    ((items as usize), bytes)
+}
+
 fn unpack_images(
-    w: &mut impl Write,
+    env: &mut Environment,
+    variable_id: VariableId,
     bytes: &[u8],
     image_base: usize,
     image_count: usize,
 ) -> io::Result<()> {
-    let (magic, bytes) = read_be_u32(bytes);
-    assert_eq!(magic, 2051);
-    let (total_image_count, bytes) = read_be_u32(bytes);
-    assert!(image_base + image_count <= total_image_count as usize);
-    let (rows, bytes) = read_be_u32(bytes);
-    let (cols, bytes) = read_be_u32(bytes);
-    let pixel_count = (rows * cols) as usize;
+    let ((image_end, rows, cols), bytes) = read_images_info(bytes);
+    assert!(image_base + image_count <= image_end);
+    let pixel_count = rows * cols;
+    let mut w = env.writer(variable_id);
     let mut image = Vec::<f32>::with_capacity(pixel_count);
     for image_index in 0..image_count {
         let begin = (image_base + image_index) * pixel_count;
@@ -49,18 +63,18 @@ fn unpack_images(
 }
 
 fn unpack_labels(
-    w: &mut impl Write,
+    env: &mut Environment,
+    variable_id: VariableId,
     bytes: &[u8],
     label_base: usize,
     label_count: usize,
 ) -> io::Result<()> {
-    let (magic, bytes) = read_be_u32(bytes);
-    assert_eq!(magic, 2049);
-    let (total_label_count, bytes) = read_be_u32(bytes);
-    assert!(label_base + label_count <= total_label_count as usize);
+    let (label_end, bytes) = read_labels_info(bytes);
+    assert!(label_base + label_count <= label_end);
     let begin = label_base;
     let end = begin + label_count;
     let labels: Vec<f32> = bytes[begin..end].iter().map(|&n| n as f32).collect();
+    let mut w = env.writer(variable_id);
     w.write_all(bytemuck::cast_slice(&labels))
 }
 
@@ -159,16 +173,26 @@ fn main() {
     // load training data
     let train_images = load_gz_bytes("data/train-images-idx3-ubyte.gz").unwrap();
     let train_labels = load_gz_bytes("data/train-labels-idx1-ubyte.gz").unwrap();
+    let ((train_image_count, train_image_rows, train_image_cols), _) =
+        read_images_info(&train_images);
+    let (train_label_count, _) = read_labels_info(&train_labels);
+    assert_eq!(train_image_count, train_label_count);
+    assert_eq!(train_image_rows, 28);
+    assert_eq!(train_image_cols, 28);
 
-    // TODO: loop over images
+    // loop over batches
+    let batch_size = m as usize;
+    for batch_index in 0..(train_image_count / batch_size) {
+        let first_index = batch_index * batch_size;
+        unpack_images(&mut env, x_id, &train_images, first_index, batch_size).unwrap();
+        unpack_labels(&mut env, y_id, &train_labels, first_index, batch_size).unwrap();
 
-    unpack_images(&mut env.writer(x_id), &train_images, 0, m as usize).unwrap();
-    unpack_labels(&mut env.writer(y_id), &train_labels, 0, m as usize).unwrap();
-    env.run(&graph);
+        env.run(&graph);
 
-    let mut mean_loss = 0f32;
-    env.reader(mean_loss_id)
-        .read_exact(bytemuck::bytes_of_mut(&mut mean_loss))
-        .unwrap();
-    println!("mean loss: {}", mean_loss);
+        let mut mean_loss = 0f32;
+        env.reader(mean_loss_id)
+            .read_exact(bytemuck::bytes_of_mut(&mut mean_loss))
+            .unwrap();
+        println!("mean loss: {}", mean_loss);
+    }
 }

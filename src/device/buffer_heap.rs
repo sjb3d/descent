@@ -109,6 +109,7 @@ impl BufferHeap {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn heap_stats(&self) -> HeapStats {
         self.heap.stats()
     }

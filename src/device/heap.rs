@@ -167,6 +167,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
         };
         let free_list_index = Self::free_list_index(size);
         let head_id = if prev_id == free_id {
+            assert_eq!(next_id, free_id);
             None
         } else if prev_id == next_id {
             blocks[prev_id].free_node = Some(BlockListNode::new(prev_id));
