@@ -139,6 +139,7 @@ fn main() {
     let w_id = xavier_uniform(&mut env, [28 * 28, 10], "w", &mut rng);
     let b_id = zeros(&mut env, [10], "b");
 
+    let loss_sum_id = env.variable([1], "loss");
     let accuracy_sum_id = env.variable([1], "accuracy");
 
     let train_graph = {
@@ -155,10 +156,7 @@ fn main() {
 
         // loss function
         g.next_colour();
-        let loss = softmax_cross_entropy_loss(z, y);
-
-        // keep track of mean loss (could save to variable)
-        let _mean_loss = loss.reduce_sum(0) / (m as f32);
+        let _loss = softmax_cross_entropy_loss(z, y);
 
         // gradient descent step
         g.next_colour();
@@ -183,11 +181,16 @@ fn main() {
         let z = x.matmul(w) + b;
 
         g.next_colour();
+        let loss = softmax_cross_entropy_loss(z, y);
+        g.output(
+            loss_sum_id,
+            g.input(loss_sum_id).value() + loss.reduce_sum(0),
+        );
 
+        g.next_colour();
         let t = z.value();
         let argmax = (t.test_eq(t.reduce_max(-1)) * t.coord(-1)).reduce_max(-1);
         let accuracy = argmax.test_eq(y);
-
         g.output(
             accuracy_sum_id,
             g.input(accuracy_sum_id).value() + accuracy.reduce_sum(0),
@@ -221,8 +224,9 @@ fn main() {
     assert_eq!(test_image_rows, 28);
     assert_eq!(test_image_cols, 28);
 
-    // loop over batches
+    // run epochs
     for _ in 0..5 {
+        // loop over training batches
         for batch_index in 0..(train_image_count / batch_size) {
             let first_index = batch_index * batch_size;
             unpack_images(&mut env, x_id, &train_images, first_index, batch_size).unwrap();
@@ -230,6 +234,8 @@ fn main() {
             env.run(&train_graph);
         }
 
+        // loop over test batches
+        env.writer(loss_sum_id).zero_fill();
         env.writer(accuracy_sum_id).zero_fill();
         for batch_index in 0..(test_image_count / batch_size) {
             let first_index = batch_index * batch_size;
@@ -237,10 +243,18 @@ fn main() {
             unpack_labels(&mut env, y_id, &test_labels, first_index, batch_size).unwrap();
             env.run(&test_graph);
         }
+        let mut total_loss = 0f32;
         let mut total_accuracy = 0f32;
+        env.reader(loss_sum_id)
+            .read_exact(bytemuck::bytes_of_mut(&mut total_loss))
+            .unwrap();
         env.reader(accuracy_sum_id)
             .read_exact(bytemuck::bytes_of_mut(&mut total_accuracy))
             .unwrap();
-        println!("accuracy: {}", total_accuracy / (test_image_count as f32));
+        println!(
+            "loss: {}, accuracy: {}",
+            total_loss / (test_image_count as f32),
+            total_accuracy / (test_image_count as f32)
+        );
     }
 }
