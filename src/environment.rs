@@ -37,6 +37,16 @@ impl<'a> io::Read for VariableReader<'a> {
     }
 }
 
+impl<'a> io::BufRead for VariableReader<'a> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        Ok(self.0.peek().unwrap_or(&[]))
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.0.advance(amt);
+    }
+}
+
 pub(crate) struct Variable {
     pub(crate) shape: Shape,
     pub(crate) name: String,

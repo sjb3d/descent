@@ -27,6 +27,10 @@ impl StagingCursor {
     fn is_full(&self) -> bool {
         self.next == self.end
     }
+
+    fn remaining(&self) -> usize {
+        self.end - self.next
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -218,28 +222,41 @@ impl<'a> StagingReader<'a> {
         reader
     }
 
-    pub(crate) fn read_slice(&mut self, mut buf: &mut [u8]) -> usize {
-        let mut counter = 0;
-        while let Some(staging) = self.staging.as_mut() {
-            let copy_buf = self.owner.mapping(staging);
-            let copy_size = copy_buf.len().min(buf.len());
-            buf[..copy_size].copy_from_slice(&copy_buf[..copy_size]);
+    pub(crate) fn peek(&mut self) -> Option<&[u8]> {
+        let owner = &mut self.owner;
+        self.staging
+            .as_ref()
+            .map(move |staging| owner.mapping(staging) as &_)
+    }
 
-            staging.next += copy_size;
-            buf = &mut buf[copy_size..];
-            counter += copy_size;
+    pub(crate) fn advance(&mut self, amt: usize) {
+        let staging = self.staging.as_mut().unwrap();
+        assert!(amt <= staging.remaining());
+        staging.next += amt;
+        if staging.is_full() {
+            let region = staging.region;
+            self.staging = None;
+            self.add_pending(region);
+            self.next_staging();
+        }
+    }
 
-            if staging.is_full() {
-                let region = staging.region;
-                self.staging = None;
-                self.add_pending(region);
-                self.next_staging();
-            }
-            if buf.is_empty() {
+    pub(crate) fn read_slice(&mut self, buf: &mut [u8]) -> usize {
+        let limit = buf.len();
+        let mut offset = 0;
+        while let Some(copy_buf) = self.peek() {
+            let copy_size = copy_buf.len().min(limit - offset);
+            let next = offset + copy_size;
+            buf[offset..next].copy_from_slice(&copy_buf[..copy_size]);
+
+            offset = next;
+            self.advance(copy_size);
+
+            if offset == limit {
                 break;
             }
         }
-        counter
+        offset
     }
 
     fn add_pending(&mut self, region: StagingBufferRegion) {
