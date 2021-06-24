@@ -148,7 +148,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
                     .unwrap();
                 prev.free_node.as_mut().unwrap().next_id = alloc_id;
                 alloc.free_node = Some(BlockListNode { prev_id, next_id });
-                next.free_node.as_mut().unwrap().prev_id = prev_id;
+                next.free_node.as_mut().unwrap().prev_id = alloc_id;
             }
         } else {
             blocks[alloc_id].free_node = Some(BlockListNode::new(alloc_id));
