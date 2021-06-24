@@ -1,4 +1,3 @@
-pub mod array;
 pub mod builder;
 mod device;
 pub mod environment;
@@ -17,7 +16,7 @@ pub mod shape;
 mod tests {
     use crate::prelude::*;
     use bytemuck::{cast_slice, cast_slice_mut};
-    use std::io::{Read, Write};
+    use std::io::prelude::*;
 
     #[test]
     fn variables() {

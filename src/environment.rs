@@ -18,6 +18,12 @@ pub(crate) type SharedVariables = Rc<RefCell<SlotMap<VariableId, Variable>>>;
 
 pub struct VariableWriter<'a>(StagingWriter<'a>);
 
+impl<'a> VariableWriter<'a> {
+    pub fn zero_fill(self) {
+        // will zero on drop
+    }
+}
+
 impl<'a> io::Write for VariableWriter<'a> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         Ok(self.0.write_slice(buf))
