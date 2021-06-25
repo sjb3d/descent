@@ -188,9 +188,8 @@ fn main() {
         );
 
         g.next_colour();
-        let t = z.value();
-        let argmax = (t.test_eq(t.reduce_max(-1)) * t.coord(-1)).reduce_max(-1);
-        let accuracy = argmax.test_eq(y);
+        let pred = z.value().argmax(-1);
+        let accuracy = pred.test_eq(y);
         g.output(
             accuracy_sum_id,
             g.input(accuracy_sum_id).value() + accuracy.reduce_sum(0),

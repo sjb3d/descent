@@ -90,6 +90,13 @@ impl<'builder> Array<'builder> {
         self.reduce_op(ReduceOp::Sum, self.shape().axis(axis))
     }
 
+    pub fn argmax(self, axis: isize) -> Self {
+        // implement with reduce_max for now
+        let equals_max = self.test_eq(self.reduce_max(axis));
+        let coord_or_zero = equals_max * self.coord(axis);
+        coord_or_zero.reduce_max(axis)
+    }
+
     fn reduce_onto_per_element(self, shape: &Shape) -> Self {
         let mut output = self;
         while let Some(axis) = output.shape().reduce_axis_onto_per_element(shape) {
