@@ -2,7 +2,9 @@ use crate::common::*;
 use arrayvec::ArrayVec;
 use petgraph::{
     prelude::*,
-    visit::{IntoEdgeReferences, IntoNodeReferences, NodeRef, Topo, VisitMap, Visitable},
+    visit::{
+        IntoEdgeReferences, IntoNodeReferences, NodeIndexable, NodeRef, Topo, VisitMap, Visitable,
+    },
 };
 use slotmap::{SecondaryMap, SlotMap};
 use std::{
@@ -19,6 +21,16 @@ pub(crate) fn get_arg_edge_ids<const N: usize>(ops: &OpGraph, node_id: OpNodeId)
         edge_ids[edge.arg] = edge_ref.id();
     }
     edge_ids
+}
+
+pub(crate) fn get_arg_node_ids<const N: usize>(ops: &OpGraph, node_id: OpNodeId) -> [OpNodeId; N] {
+    let mut arg_node_ids = [OpNodeId::end(); N];
+    for edge_ref in ops.edges_directed(node_id, Incoming) {
+        let edge = edge_ref.weight();
+        assert_eq!(arg_node_ids[edge.arg], OpNodeId::end());
+        arg_node_ids[edge.arg] = edge_ref.source();
+    }
+    arg_node_ids
 }
 
 #[derive(Debug)]
@@ -58,6 +70,9 @@ impl Graph {
         graph.eliminate_accumulate_nodes();
 
         graph.rebuild_ordering();
+        graph.eliminate_common_subgraphs();
+
+        graph.rebuild_ordering();
         graph.eliminate_view_nodes();
 
         graph.rebuild_ordering();
@@ -90,6 +105,51 @@ impl Graph {
             }
         }
         self.ops.retain_nodes(|_, index| live.is_visited(&index));
+    }
+
+    fn eliminate_common_subgraphs(&mut self) {
+        let mut hashes = vec![0u64; self.ops.node_bound()];
+        let mut ids_from_hash = HashMap::new();
+        for node_id in self.ops_sorted.iter().copied() {
+            let node = &self.ops[node_id];
+            let arg_node_ids: [_; 2] = get_arg_node_ids(&self.ops, node_id);
+            let hash = {
+                let mut hasher = DefaultHasher::new();
+                for arg_node_id in arg_node_ids
+                    .iter()
+                    .copied()
+                    .filter(|&id| id != OpNodeId::end())
+                {
+                    hasher.write_u64(hashes[arg_node_id.index()]);
+                }
+                node.shape.hash(&mut hasher);
+                node.op.hash(&mut hasher);
+                hasher.finish()
+            };
+            hashes[node_id.index()] = hash;
+            if matches!(
+                node.op,
+                Op::Unary(_) | Op::Binary(_) | Op::MatMul | Op::Reduce { .. }
+            ) {
+                let ids = ids_from_hash.entry(hash).or_insert_with(|| Vec::new());
+                if let Some(other_id) = ids.iter().copied().find(|&id| {
+                    let other_node = &self.ops[id];
+                    let other_arg_node_ids: [_; 2] = get_arg_node_ids(&self.ops, id);
+                    node.shape == other_node.shape
+                        && node.op == other_node.op
+                        && arg_node_ids == other_arg_node_ids
+                }) {
+                    let mut edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
+                    while let Some((edge_id, dst_id)) = edges.next(&self.ops) {
+                        let edge = self.ops[edge_id].clone();
+                        self.ops.add_edge(other_id, dst_id, edge);
+                    }
+                    self.ops.remove_node(node_id);
+                } else {
+                    ids.push(node_id);
+                }
+            }
+        }
     }
 
     fn eliminate_accumulate_nodes(&mut self) {

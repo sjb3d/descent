@@ -40,7 +40,7 @@ pub(crate) enum UnaryOp {
     OneHot,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub(crate) enum Op {
     Input { variable_id: VariableId },
     Output { variable_id: VariableId },
