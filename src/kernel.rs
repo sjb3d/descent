@@ -13,12 +13,15 @@ pub(crate) enum PerElementKernelOp {
     BuiltIn(BuiltInOp),
     Unary {
         op: UnaryOp,
-        arg0_index: usize,
+        args: usize,
     },
     Binary {
         op: BinaryOp,
-        arg0_index: usize,
-        arg1_index: usize,
+        args: [usize; 2],
+    },
+    CompareAndSelect {
+        compare_mode: CompareMode,
+        args: [usize; 4],
     },
 }
 
@@ -125,30 +128,35 @@ impl PerElementKernel {
                 PerElementKernelOp::BuiltIn(op) => match op {
                     BuiltInOp::Coord { axis } => write!(w, "float(coord[{}])", axis.index())?,
                 },
-                PerElementKernelOp::Unary { op, arg0_index } => match op {
-                    UnaryOp::Neg => write!(w, "-tmp{}", arg0_index)?,
-                    UnaryOp::Sqrt => write!(w, "sqrt(tmp{})", arg0_index)?,
-                    UnaryOp::Exp => write!(w, "exp(tmp{})", arg0_index)?,
-                    UnaryOp::Log => write!(w, "log(tmp{})", arg0_index)?,
+                PerElementKernelOp::Unary { op, args } => match op {
+                    UnaryOp::Neg => write!(w, "-tmp{}", args)?,
+                    UnaryOp::Sqrt => write!(w, "sqrt(tmp{})", args)?,
+                    UnaryOp::Exp => write!(w, "exp(tmp{})", args)?,
+                    UnaryOp::Log => write!(w, "log(tmp{})", args)?,
                     UnaryOp::OneHot => write!(
                         w,
                         "(coord[{}] == uint(tmp{})) ? 1.0 : 0.0",
                         self.shape.len() - 1,
-                        arg0_index
+                        args
                     )?,
                 },
-                PerElementKernelOp::Binary {
-                    op,
-                    arg0_index,
-                    arg1_index,
-                } => match op {
-                    BinaryOp::Add => write!(w, "tmp{} + tmp{}", arg0_index, arg1_index)?,
-                    BinaryOp::Sub => write!(w, "tmp{} - tmp{}", arg0_index, arg1_index)?,
-                    BinaryOp::Mul => write!(w, "tmp{} * tmp{}", arg0_index, arg1_index)?,
-                    BinaryOp::Div => write!(w, "tmp{} / tmp{}", arg0_index, arg1_index)?,
-                    BinaryOp::TestEq => {
-                        write!(w, "(tmp{} == tmp{}) ? 1.f : 0.f", arg0_index, arg1_index)?
-                    }
+                PerElementKernelOp::Binary { op, args } => match op {
+                    BinaryOp::Add => write!(w, "tmp{} + tmp{}", args[0], args[1])?,
+                    BinaryOp::Sub => write!(w, "tmp{} - tmp{}", args[0], args[1])?,
+                    BinaryOp::Mul => write!(w, "tmp{} * tmp{}", args[0], args[1])?,
+                    BinaryOp::Div => write!(w, "tmp{} / tmp{}", args[0], args[1])?,
+                },
+                PerElementKernelOp::CompareAndSelect { compare_mode, args } => match compare_mode {
+                    CompareMode::Eq => write!(
+                        w,
+                        "(tmp{} == tmp{}) ? tmp{} : tmp{}",
+                        args[0], args[1], args[2], args[3]
+                    )?,
+                    CompareMode::Gt => write!(
+                        w,
+                        "(tmp{} > tmp{}) ? tmp{} : tmp{}",
+                        args[0], args[1], args[2], args[3]
+                    )?,
                 },
             }
             writeln!(w, ";")?;

@@ -9,14 +9,13 @@ use petgraph::{
 use slotmap::{SecondaryMap, SlotMap};
 use std::{
     collections::{hash_map::DefaultHasher, HashMap},
+    convert::TryInto,
     hash::{Hash, Hasher},
     io, iter,
 };
 
-pub(crate) const MAX_ARGS: usize = 2;
-
-fn get_arg_edge_ids(ops: &OpGraph, node_id: OpNodeId) -> ArrayVec<OpEdgeId, MAX_ARGS> {
-    let mut v = [None; MAX_ARGS];
+fn get_arg_edge_ids(ops: &OpGraph, node_id: OpNodeId) -> ArrayVec<OpEdgeId, MAX_OP_ARGS> {
+    let mut v = [None; MAX_OP_ARGS];
     let mut n = 0;
     for edge_ref in ops.edges_directed(node_id, Incoming) {
         let edge = edge_ref.weight();
@@ -33,7 +32,10 @@ pub(crate) struct ArgSource {
     pub(crate) view: View,
 }
 
-pub(crate) fn get_arg_sources(ops: &OpGraph, node_id: OpNodeId) -> ArrayVec<ArgSource, MAX_ARGS> {
+pub(crate) fn get_arg_sources(
+    ops: &OpGraph,
+    node_id: OpNodeId,
+) -> ArrayVec<ArgSource, MAX_OP_ARGS> {
     get_arg_edge_ids(ops, node_id)
         .iter()
         .copied()
@@ -380,38 +382,38 @@ impl Graph {
             let graph = &self.ops;
             for node_id in members.iter().copied() {
                 // gather the arguments (loading as necessary)
-                let mut args = [None, None];
-                for edge_ref in graph.edges_directed(node_id, Incoming) {
-                    let source_node_id = edge_ref.source();
-                    let edge = edge_ref.weight();
-                    args[edge.arg] =
-                        Some(*node_op_index.entry(source_node_id).or_insert_with(|| {
-                            let source_node = &graph[source_node_id];
+                let arg_sources = get_arg_sources(&graph, node_id);
+                let args: ArrayVec<usize, MAX_OP_ARGS> = arg_sources
+                    .iter()
+                    .map(|source| {
+                        *node_op_index.entry(source.node_id).or_insert_with(|| {
+                            let source_node = &graph[source.node_id];
                             assert_ne!(source_node.cluster_id, Some(cluster_id));
                             let input_index = kernel.inputs.len();
                             kernel.inputs.push(KernelInput {
                                 shape: source_node.shape.clone(),
-                                view: edge.view.clone(),
+                                view: source.view.clone(),
                             });
-                            inputs.push(source_node_id);
+                            inputs.push(source.node_id);
                             let op_index = kernel.ops.len();
                             kernel.ops.push(PerElementKernelOp::Load { input_index });
                             op_index
-                        }));
-                }
+                        })
+                    })
+                    .collect();
 
                 // emit the op
                 let op_index = kernel.ops.len();
                 kernel.ops.push(match graph[node_id].op {
                     Op::BuiltIn(op) => PerElementKernelOp::BuiltIn(op),
-                    Op::Unary(op) => PerElementKernelOp::Unary {
-                        op,
-                        arg0_index: args[0].unwrap(),
-                    },
+                    Op::Unary(op) => PerElementKernelOp::Unary { op, args: args[0] },
                     Op::Binary(op) => PerElementKernelOp::Binary {
                         op,
-                        arg0_index: args[0].unwrap(),
-                        arg1_index: args[1].unwrap(),
+                        args: args[..2].try_into().unwrap(),
+                    },
+                    Op::Select(compare_mode) => PerElementKernelOp::Select {
+                        compare_mode,
+                        args: args[..4].try_into().unwrap(),
                     },
                     Op::Literal(value) => PerElementKernelOp::Literal(value),
                     _ => panic!("unexpected op type"),

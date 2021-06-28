@@ -21,6 +21,24 @@ impl<'builder> Array<'builder> {
         self.builder
     }
 
+    fn broadcast(self, shape: &Shape) -> Self {
+        self.builder.with_state(|state| {
+            let self_shape = state.ops.graph[self.node_id].shape.clone();
+            if &self_shape == shape {
+                self
+            } else {
+                Array {
+                    node_id: state.ops.new_node(
+                        shape.clone(),
+                        Op::View(View::broadcast(&self_shape, &shape)),
+                        &[self.node_id],
+                    ),
+                    builder: self.builder,
+                }
+            }
+        })
+    }
+
     fn unary_op(self, op: UnaryOp) -> Self {
         self.builder.with_state(|state| {
             let shape = state.ops.graph[self.node_id].shape.clone();
@@ -32,34 +50,48 @@ impl<'builder> Array<'builder> {
     }
 
     fn binary_op(self, rhs: Array, op: BinaryOp) -> Self {
-        self.builder.with_state(|state| {
-            let lhs_shape = state.ops.graph[self.node_id].shape.clone();
-            let rhs_shape = state.ops.graph[rhs.node_id].shape.clone();
-            let op_shape = lhs_shape.match_with_broadcast(&rhs_shape);
+        let op_shape = self.builder.with_state(|state| {
+            state.ops.graph[self.node_id]
+                .shape
+                .match_with_broadcast(&state.ops.graph[rhs.node_id].shape)
+        });
 
-            let lhs = if op_shape == lhs_shape {
-                self.node_id
-            } else {
-                state.ops.new_node(
-                    op_shape.clone(),
-                    Op::View(View::broadcast(&lhs_shape, &op_shape)),
-                    &[self.node_id],
-                )
-            };
-            let rhs = if op_shape == rhs_shape {
-                rhs.node_id
-            } else {
-                state.ops.new_node(
-                    op_shape.clone(),
-                    Op::View(View::broadcast(&rhs_shape, &op_shape)),
-                    &[rhs.node_id],
-                )
-            };
+        let lhs = self.broadcast(&op_shape).node_id;
+        let rhs = rhs.broadcast(&op_shape).node_id;
 
-            Array {
-                node_id: state.ops.new_node(op_shape, Op::Binary(op), &[lhs, rhs]),
-                builder: self.builder,
-            }
+        self.builder.with_state(|state| Array {
+            node_id: state.ops.new_node(op_shape, Op::Binary(op), &[lhs, rhs]),
+            builder: self.builder,
+        })
+    }
+
+    fn compare_and_select(
+        self,
+        compare_mode: CompareMode,
+        rhs: Array,
+        pass: Array,
+        fail: Array,
+    ) -> Self {
+        let op_shape = self.builder.with_state(|state| {
+            state.ops.graph[self.node_id]
+                .shape
+                .match_with_broadcast(&state.ops.graph[rhs.node_id].shape)
+                .match_with_broadcast(&state.ops.graph[pass.node_id].shape)
+                .match_with_broadcast(&state.ops.graph[fail.node_id].shape)
+        });
+
+        let lhs = self.broadcast(&op_shape).node_id;
+        let rhs = rhs.broadcast(&op_shape).node_id;
+        let pass = pass.broadcast(&op_shape).node_id;
+        let fail = fail.broadcast(&op_shape).node_id;
+
+        self.builder.with_state(|state| Array {
+            node_id: state.ops.new_node(
+                op_shape,
+                Op::CompareAndSelect(compare_mode),
+                &[lhs, rhs, pass, fail],
+            ),
+            builder: self.builder,
         })
     }
 
@@ -96,8 +128,11 @@ impl<'builder> Array<'builder> {
 
     pub fn argmax(self, axis: isize) -> Self {
         // implement with reduce_max for now
-        let equals_max = self.test_eq(self.reduce_max(axis));
-        let coord_or_zero = equals_max * self.coord(axis);
+        let coord_or_zero = self.select_eq(
+            self.reduce_max(axis),
+            self.coord(axis),
+            self.builder.literal(0.0),
+        );
         coord_or_zero.reduce_max(axis)
     }
 
@@ -113,8 +148,11 @@ impl<'builder> Array<'builder> {
         self.builder.coord(self.shape(), axis)
     }
 
-    pub fn test_eq(self, rhs: Array) -> Self {
-        self.binary_op(rhs, BinaryOp::TestEq)
+    pub fn select_eq(self, rhs: Array, pass: Array, fail: Array) -> Self {
+        self.compare_and_select(CompareMode::Eq, rhs, pass, fail)
+    }
+    pub fn select_gt(self, rhs: Array, pass: Array, fail: Array) -> Self {
+        self.compare_and_select(CompareMode::Gt, rhs, pass, fail)
     }
 
     pub fn sqrt(self) -> Self {

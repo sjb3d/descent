@@ -24,12 +24,17 @@ pub(crate) enum BuiltInOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum CompareMode {
+    Eq,
+    Gt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BinaryOp {
     Add,
     Sub,
     Mul,
     Div,
-    TestEq,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,6 +46,8 @@ pub(crate) enum UnaryOp {
     OneHot,
 }
 
+pub(crate) const MAX_OP_ARGS: usize = 4;
+
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub(crate) enum Op {
     Input { variable_id: VariableId },
@@ -50,6 +57,7 @@ pub(crate) enum Op {
     BuiltIn(BuiltInOp),
     Unary(UnaryOp),
     Binary(BinaryOp),
+    CompareAndSelect(CompareMode),
     MatMul,
     Reduce { reduce_op: ReduceOp, axis: Axis },
     Accumulate, // accumulates grad from backprop
@@ -71,7 +79,10 @@ impl Op {
     }
 
     pub(crate) fn is_per_element(&self) -> bool {
-        matches!(self, Self::BuiltIn(..) | Self::Unary(..) | Self::Binary(..))
+        matches!(
+            self,
+            Self::BuiltIn(..) | Self::Unary(..) | Self::Binary(..) | Self::CompareAndSelect(..)
+        )
     }
 }
 

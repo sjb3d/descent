@@ -258,7 +258,7 @@ fn main() {
         // accumulate accuracy (into variable)
         graph.next_colour();
         let pred = z.value().argmax(-1);
-        let accuracy = pred.test_eq(y);
+        let accuracy = pred.select_eq(y, graph.literal(1.0), graph.literal(0.0));
         let accuracy_sum = graph.input(accuracy_sum_id).value() + accuracy.reduce_sum(0);
         graph.output(accuracy_sum_id, accuracy_sum);
 
