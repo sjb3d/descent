@@ -2,7 +2,7 @@ use arrayvec::ArrayVec;
 use std::{fmt, iter, mem, ops};
 
 pub(crate) const MAX_DIM: usize = 4;
-pub(crate) type ShapeVec = ArrayVec<isize, MAX_DIM>;
+pub(crate) type ShapeVec = ArrayVec<usize, MAX_DIM>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Axis(u8);
@@ -120,7 +120,7 @@ impl Shape {
         }
     }
 
-    pub(crate) fn one_hot(&self, count: isize) -> Self {
+    pub(crate) fn one_hot(&self, count: usize) -> Self {
         // expand last axis (innermost dimension) from 1 to n
         let (last, prefix) = self.0.split_last().unwrap();
         assert_eq!(*last, 1);
@@ -130,9 +130,9 @@ impl Shape {
         Shape::new(v)
     }
 
-    fn strides(&self) -> Self {
+    fn strides(&self) -> ArrayVec<isize, MAX_DIM> {
         let mut stride = 1;
-        let v: ShapeVec = self
+        let v: ArrayVec<isize, MAX_DIM> = self
             .0
             .iter()
             .copied()
@@ -141,17 +141,17 @@ impl Shape {
                 let m = stride;
                 stride *= n;
                 if n > 1 {
-                    m
+                    m as isize
                 } else {
                     0
                 }
             })
             .collect();
-        Shape(v.iter().copied().rev().collect())
+        v.iter().copied().rev().collect()
     }
 
     pub fn element_count(&self) -> usize {
-        self.0.iter().copied().product::<isize>() as usize
+        self.0.iter().copied().product::<usize>() as usize
     }
 
     pub(crate) fn buffer_size(&self) -> usize {
@@ -160,7 +160,7 @@ impl Shape {
 }
 
 impl ops::Deref for Shape {
-    type Target = [isize];
+    type Target = [usize];
     fn deref(&self) -> &Self::Target {
         self.0.as_slice()
     }
@@ -172,8 +172,8 @@ impl fmt::Display for Shape {
     }
 }
 
-impl<const N: usize> From<[isize; N]> for Shape {
-    fn from(s: [isize; N]) -> Self {
+impl<const N: usize> From<[usize; N]> for Shape {
+    fn from(s: [usize; N]) -> Self {
         Self::new(s.iter().copied().collect())
     }
 }
@@ -185,7 +185,7 @@ struct AxisRemap {
 }
 
 impl AxisRemap {
-    fn identity(axis: Axis, length: isize) -> Option<Self> {
+    fn identity(axis: Axis, length: usize) -> Option<Self> {
         if length > 1 {
             Some(Self { step: 1, axis })
         } else {

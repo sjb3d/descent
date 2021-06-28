@@ -71,7 +71,7 @@ impl<'builder> Array<'builder> {
         })
     }
 
-    pub fn one_hot(self, count: isize) -> Self {
+    pub fn one_hot(self, count: usize) -> Self {
         self.builder.with_state(|state| {
             let shape = state.ops.graph[self.node_id].shape.one_hot(count);
             Array {
