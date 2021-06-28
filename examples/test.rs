@@ -132,10 +132,10 @@ fn softmax_cross_entropy_loss<'builder>(
 fn stochastic_gradient_descent_step(
     graph: &GraphBuilder,
     variable_ids: &[VariableId],
-    m: usize,
+    mini_batch_size: usize,
     learning_rate: f32,
 ) {
-    let alpha = learning_rate / (m as f32);
+    let alpha = learning_rate / (mini_batch_size as f32);
     for id in variable_ids.iter().copied() {
         let p = graph.input(id);
         graph.output(id, p.value() - alpha * p.grad());
@@ -146,7 +146,7 @@ fn adam_step(
     env: &mut Environment,
     graph: &GraphBuilder,
     variable_ids: &[VariableId],
-    m: usize,
+    mini_batch_size: usize,
     learning_rate: f32,
     beta1: f32,
     beta2: f32,
@@ -160,7 +160,6 @@ fn adam_step(
 
     let alpha = learning_rate * (1.0 - (graph.literal(beta2).log() * t).exp()).sqrt()
         / (1.0 - (graph.literal(beta1).log() * t).exp());
-    let m_rcp = 1.0 / (m as f32);
 
     for id in variable_ids.iter().copied() {
         let p = graph.input(id);
@@ -175,8 +174,9 @@ fn adam_step(
         let v = graph.input(v_id).value();
         let g = p.grad();
 
-        let m = m * beta1 + g * ((1.0 - beta1) * m_rcp);
-        let v = v * beta2 + g * g * ((1.0 - beta2) * m_rcp * m_rcp);
+        let rcp = 1.0 / (mini_batch_size as f32);
+        let m = m * beta1 + g * ((1.0 - beta1) * rcp);
+        let v = v * beta2 + g * g * ((1.0 - beta2) * rcp * rcp);
         graph.output(m_id, m);
         graph.output(v_id, v);
 

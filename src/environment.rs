@@ -389,9 +389,10 @@ impl Environment {
         for node_id in outputs.iter().copied() {
             let variable_id = graph.ops[node_id].op.output_variable_id().unwrap();
             let var = &mut variables[variable_id];
-            let [edge_id] = get_arg_edge_ids(&graph.ops, node_id);
-            let source_node_id = graph.ops.edge_endpoints(edge_id).unwrap().0;
-            let source_storage = &mut node_storage[source_node_id.index()];
+            let arg_sources = get_arg_sources(&graph.ops, node_id);
+            assert_eq!(arg_sources.len(), 1);
+            let src0 = &arg_sources[0];
+            let source_storage = &mut node_storage[src0.node_id.index()];
             assert!(source_storage.buffer_id.is_some());
             var.buffer_id = source_storage.buffer_id.take();
         }

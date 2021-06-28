@@ -13,24 +13,35 @@ use std::{
     io, iter,
 };
 
-pub(crate) fn get_arg_edge_ids<const N: usize>(ops: &OpGraph, node_id: OpNodeId) -> [OpEdgeId; N] {
-    let mut edge_ids = [OpEdgeId::end(); N];
+pub(crate) const MAX_ARGS: usize = 2;
+
+fn get_arg_edge_ids(ops: &OpGraph, node_id: OpNodeId) -> ArrayVec<OpEdgeId, MAX_ARGS> {
+    let mut v = [None; MAX_ARGS];
+    let mut n = 0;
     for edge_ref in ops.edges_directed(node_id, Incoming) {
         let edge = edge_ref.weight();
-        assert_eq!(edge_ids[edge.arg], OpEdgeId::end());
-        edge_ids[edge.arg] = edge_ref.id();
+        assert!(v[edge.arg].is_none());
+        v[edge.arg] = Some(edge_ref.id());
+        n = n.max(edge.arg + 1);
     }
-    edge_ids
+    v[..n].iter().copied().map(|id| id.unwrap()).collect()
 }
 
-pub(crate) fn get_arg_node_ids<const N: usize>(ops: &OpGraph, node_id: OpNodeId) -> [OpNodeId; N] {
-    let mut arg_node_ids = [OpNodeId::end(); N];
-    for edge_ref in ops.edges_directed(node_id, Incoming) {
-        let edge = edge_ref.weight();
-        assert_eq!(arg_node_ids[edge.arg], OpNodeId::end());
-        arg_node_ids[edge.arg] = edge_ref.source();
-    }
-    arg_node_ids
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ArgSource {
+    pub(crate) node_id: OpNodeId,
+    pub(crate) view: View,
+}
+
+pub(crate) fn get_arg_sources(ops: &OpGraph, node_id: OpNodeId) -> ArrayVec<ArgSource, MAX_ARGS> {
+    get_arg_edge_ids(ops, node_id)
+        .iter()
+        .copied()
+        .map(|edge_id| ArgSource {
+            node_id: ops.edge_endpoints(edge_id).unwrap().0,
+            view: ops[edge_id].view.clone(),
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -73,6 +84,9 @@ impl Graph {
         graph.eliminate_common_subgraphs();
 
         graph.rebuild_ordering();
+        graph.make_literals_unique();
+
+        graph.rebuild_ordering();
         graph.eliminate_view_nodes();
 
         graph.rebuild_ordering();
@@ -112,15 +126,11 @@ impl Graph {
         let mut ids_from_hash = HashMap::new();
         for node_id in self.ops_sorted.iter().copied() {
             let node = &self.ops[node_id];
-            let arg_node_ids: [_; 2] = get_arg_node_ids(&self.ops, node_id);
+            let arg_sources = get_arg_sources(&self.ops, node_id);
             let hash = {
                 let mut hasher = DefaultHasher::new();
-                for arg_node_id in arg_node_ids
-                    .iter()
-                    .copied()
-                    .filter(|&id| id != OpNodeId::end())
-                {
-                    hasher.write_u64(hashes[arg_node_id.index()]);
+                for arg_source in arg_sources.iter() {
+                    arg_source.hash(&mut hasher);
                 }
                 node.shape.hash(&mut hasher);
                 node.op.hash(&mut hasher);
@@ -129,15 +139,15 @@ impl Graph {
             hashes[node_id.index()] = hash;
             if matches!(
                 node.op,
-                Op::Unary(_) | Op::Binary(_) | Op::MatMul | Op::Reduce { .. }
+                Op::Literal(_) | Op::Unary(_) | Op::Binary(_) | Op::MatMul | Op::Reduce { .. }
             ) {
                 let ids = ids_from_hash.entry(hash).or_insert_with(|| Vec::new());
                 if let Some(other_id) = ids.iter().copied().find(|&id| {
                     let other_node = &self.ops[id];
-                    let other_arg_node_ids: [_; 2] = get_arg_node_ids(&self.ops, id);
+                    let other_arg_sources = get_arg_sources(&self.ops, id);
                     node.shape == other_node.shape
                         && node.op == other_node.op
-                        && arg_node_ids == other_arg_node_ids
+                        && arg_sources == other_arg_sources
                 }) {
                     let mut edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
                     while let Some((edge_id, dst_id)) = edges.next(&self.ops) {
@@ -148,6 +158,22 @@ impl Graph {
                 } else {
                     ids.push(node_id);
                 }
+            }
+        }
+    }
+
+    fn make_literals_unique(&mut self) {
+        for node_id in self.ops_sorted.iter().copied() {
+            let node = &self.ops[node_id];
+            if matches!(&node.op, Op::Literal(_)) {
+                let orig_node = node.clone();
+                let mut out_edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
+                while let Some((out_edge_id, out_node_id)) = out_edges.next(&self.ops) {
+                    let new_node_id = self.ops.add_node(orig_node.clone());
+                    let new_edge = self.ops[out_edge_id].clone();
+                    self.ops.add_edge(new_node_id, out_node_id, new_edge);
+                }
+                self.ops.remove_node(node_id);
             }
         }
     }
@@ -409,37 +435,32 @@ impl Graph {
             if node.cluster_id.is_none() {
                 match node.op {
                     Op::Reduce { reduce_op, axis } => {
-                        let [edge_id] = get_arg_edge_ids(&self.ops, node_id);
-                        let input_node_id = self.ops.edge_endpoints(edge_id).unwrap().0;
+                        let arg_sources = get_arg_sources(&self.ops, node_id);
+                        assert_eq!(arg_sources.len(), 1);
+                        let src0 = &arg_sources[0];
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: Kernel::Reduce(ReduceKernel {
                                 shape: node.shape.clone(),
                                 input: KernelInput {
-                                    shape: self.ops[input_node_id].shape.clone(),
-                                    view: self.ops[edge_id].view.clone(),
+                                    shape: self.ops[src0.node_id].shape.clone(),
+                                    view: src0.view.clone(),
                                 },
                                 reduce_op,
                                 axis,
                             }),
-                            inputs: vec![input_node_id],
+                            inputs: vec![src0.node_id],
                             members: vec![node_id],
                             outputs: vec![node_id],
                         }));
                     }
                     Op::MatMul => {
-                        let edge_ids: [_; 2] = get_arg_edge_ids(&self.ops, node_id);
-                        let input_node_ids = edge_ids
+                        let arg_sources = get_arg_sources(&self.ops, node_id);
+                        assert_eq!(arg_sources.len(), 2);
+                        let kernel_inputs = arg_sources
                             .iter()
-                            .map(|&edge_id| self.ops.edge_endpoints(edge_id).unwrap().0)
-                            .collect::<ArrayVec<_, 2>>()
-                            .into_inner()
-                            .unwrap();
-                        let kernel_inputs = edge_ids
-                            .iter()
-                            .zip(input_node_ids.iter())
-                            .map(|(&edge_id, &node_id)| KernelInput {
-                                shape: self.ops[node_id].shape.clone(),
-                                view: self.ops[edge_id].view.clone(),
+                            .map(|src| KernelInput {
+                                shape: self.ops[src.node_id].shape.clone(),
+                                view: src.view.clone(),
                             })
                             .collect::<ArrayVec<_, 2>>()
                             .into_inner()
@@ -449,7 +470,7 @@ impl Graph {
                                 shape: node.shape.clone(),
                                 inputs: kernel_inputs,
                             }),
-                            inputs: input_node_ids.iter().copied().collect(),
+                            inputs: arg_sources.iter().map(|src| src.node_id).collect(),
                             members: vec![node_id],
                             outputs: vec![node_id],
                         }));
@@ -500,29 +521,38 @@ impl Graph {
                 .filter(|node_ref| node_ref.weight().cluster_id == cluster_id)
             {
                 let node = node_ref.weight();
-                let mut hasher = DefaultHasher::new();
-                node.colour.hash(&mut hasher);
-                let col = ((hasher.finish() >> 40) as u32) | 0x404040;
-                write!(
-                    w,
-                    "n{} [shape=box,style=filled,color=\"#{:06X}\",label=\"{:?}\\n",
-                    node_ref.id().index(),
-                    col,
-                    node.op
-                )?;
-                if let Op::Input { variable_id } | Op::Output { variable_id } = node.op {
+                if let Op::Literal(value) = &node.op {
+                    writeln!(
+                        w,
+                        "n{} [shape=none,label=\"{:E}\"];",
+                        node_ref.id().index(),
+                        value.into_inner()
+                    )?;
+                } else {
+                    let mut hasher = DefaultHasher::new();
+                    node.colour.hash(&mut hasher);
+                    let col = ((hasher.finish() >> 40) as u32) | 0x404040;
                     write!(
                         w,
-                        "{}",
-                        self.variables
-                            .as_ref()
-                            .borrow()
-                            .get(variable_id)
-                            .unwrap()
-                            .name
+                        "n{} [shape=box,style=filled,color=\"#{:06X}\",label=\"{:?}\\n",
+                        node_ref.id().index(),
+                        col,
+                        node.op
                     )?;
+                    if let Op::Input { variable_id } | Op::Output { variable_id } = node.op {
+                        write!(
+                            w,
+                            "{}",
+                            self.variables
+                                .as_ref()
+                                .borrow()
+                                .get(variable_id)
+                                .unwrap()
+                                .name
+                        )?;
+                    }
+                    writeln!(w, "{}\"];", node.shape)?;
                 }
-                writeln!(w, "{}\"];", node.shape)?;
             }
             if cluster_id.is_some() {
                 writeln!(w, "}}")?;
