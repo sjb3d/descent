@@ -127,6 +127,7 @@ impl PerElementKernel {
                 },
                 PerElementKernelOp::Unary { op, arg0_index } => match op {
                     UnaryOp::Neg => write!(w, "-tmp{}", arg0_index)?,
+                    UnaryOp::Sqrt => write!(w, "sqrt(tmp{})", arg0_index)?,
                     UnaryOp::Exp => write!(w, "exp(tmp{})", arg0_index)?,
                     UnaryOp::Log => write!(w, "log(tmp{})", arg0_index)?,
                     UnaryOp::OneHot => write!(

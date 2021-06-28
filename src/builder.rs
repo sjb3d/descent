@@ -113,6 +113,9 @@ impl<'builder> Array<'builder> {
         self.binary_op(rhs, BinaryOp::TestEq)
     }
 
+    pub fn sqrt(self) -> Self {
+        self.unary_op(UnaryOp::Sqrt)
+    }
     pub fn exp(self) -> Self {
         self.unary_op(UnaryOp::Exp)
     }

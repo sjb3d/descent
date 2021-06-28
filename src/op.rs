@@ -35,6 +35,7 @@ pub(crate) enum BinaryOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum UnaryOp {
     Neg,
+    Sqrt,
     Exp,
     Log,
     OneHot,
