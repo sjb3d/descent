@@ -102,10 +102,10 @@ impl BufferHeap {
     }
 
     pub(crate) fn info(&self, id: BufferId) -> BufferInfo {
-        let (chunk_index, range) = self.heap.info(id);
+        let info = self.heap.info(id);
         BufferInfo {
-            buffer: self.chunks[chunk_index.0].buffer,
-            range,
+            buffer: self.chunks[info.tag.0].buffer,
+            range: info.range,
         }
     }
 

@@ -51,7 +51,7 @@ impl HeapRange {
 }
 
 trait_set! {
-    pub(crate) trait Tag = Debug + Clone + Copy + PartialEq + Eq;
+    pub(crate) trait Tag = Debug + Clone;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,13 +73,14 @@ impl<K: Key, T: Tag> Block<K, T> {
     }
 
     fn can_append(&self, other: &Block<K, T>) -> bool {
-        assert_eq!(self.tag, other.tag);
         self.range.end == other.range.begin
     }
+}
 
-    fn info(&self) -> (T, HeapRange) {
-        (self.tag, self.range)
-    }
+#[derive(Debug, Clone)]
+pub(crate) struct HeapAllocInfo<T: Tag> {
+    pub(crate) tag: T,
+    pub(crate) range: HeapRange,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -186,7 +187,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
         let (next_id, new_id) = {
             let orig_block = &mut blocks[orig_id];
             let next_id = orig_block.tag_node.next_id;
-            let tag = orig_block.tag;
+            let tag = orig_block.tag.clone();
             let range = orig_block.range.truncate(new_size);
             let new_id = blocks.insert_with_key(|key| Block::new(key, tag, range));
             (next_id, new_id)
@@ -311,8 +312,12 @@ impl<K: Key, T: Tag> Heap<K, T> {
         None
     }
 
-    pub(crate) fn info(&self, id: K) -> (T, HeapRange) {
-        self.blocks[id].info()
+    pub(crate) fn info(&self, id: K) -> HeapAllocInfo<T> {
+        let block = &self.blocks[id];
+        HeapAllocInfo {
+            tag: block.tag.clone(),
+            range: block.range,
+        }
     }
 
     pub(crate) fn free(&mut self, id: K) {

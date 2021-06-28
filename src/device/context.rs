@@ -46,11 +46,14 @@ impl Context {
 
         let physical_device = {
             let physical_devices = unsafe { instance.enumerate_physical_devices_to_vec() }.unwrap();
-            for physical_device in &physical_devices {
+            for (i, physical_device) in physical_devices.iter().enumerate() {
                 let props = unsafe { instance.get_physical_device_properties(*physical_device) };
-                println!("physical device ({}): {:?}", props.device_type, unsafe {
-                    CStr::from_ptr(props.device_name.as_ptr())
-                });
+                println!(
+                    "physical device {}: {:?} ({})",
+                    i,
+                    unsafe { CStr::from_ptr(props.device_name.as_ptr()) },
+                    props.device_type
+                );
             }
             physical_devices[0]
         };
