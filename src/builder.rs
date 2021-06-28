@@ -17,6 +17,10 @@ pub struct DualArray<'builder> {
 }
 
 impl<'builder> Array<'builder> {
+    pub fn graph(&self) -> &'builder GraphBuilder {
+        self.builder
+    }
+
     fn unary_op(self, op: UnaryOp) -> Self {
         self.builder.with_state(|state| {
             let shape = state.ops.graph[self.node_id].shape.clone();
@@ -186,18 +190,42 @@ impl<'builder> ops::Add for Array<'builder> {
         self.binary_op(rhs, BinaryOp::Add)
     }
 }
+impl<'builder> ops::Add<f32> for Array<'builder> {
+    type Output = Array<'builder>;
+    fn add(self, rhs: f32) -> Self::Output {
+        let rhs = self.builder.literal(rhs);
+        self.binary_op(rhs, BinaryOp::Add)
+    }
+}
+
 impl<'builder> ops::Sub for Array<'builder> {
     type Output = Array<'builder>;
     fn sub(self, rhs: Array) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Sub)
     }
 }
+impl<'builder> ops::Sub<Array<'builder>> for f32 {
+    type Output = Array<'builder>;
+    fn sub(self, rhs: Array<'builder>) -> Self::Output {
+        let lhs = rhs.builder.literal(self);
+        lhs.binary_op(rhs, BinaryOp::Sub)
+    }
+}
+
 impl<'builder> ops::Mul for Array<'builder> {
     type Output = Array<'builder>;
     fn mul(self, rhs: Array) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Mul)
     }
 }
+impl<'builder> ops::Mul<f32> for Array<'builder> {
+    type Output = Array<'builder>;
+    fn mul(self, rhs: f32) -> Self::Output {
+        let rhs = self.builder.literal(rhs);
+        self.binary_op(rhs, BinaryOp::Mul)
+    }
+}
+
 impl<'builder> ops::Div for Array<'builder> {
     type Output = Array<'builder>;
     fn div(self, rhs: Array) -> Self::Output {
@@ -249,6 +277,15 @@ impl<'builder> DualArray<'builder> {
             node_id: self.node_ids.grad,
             builder: self.builder,
         }
+    }
+
+    pub fn shape(&self) -> Shape {
+        self.builder
+            .with_state(|state| state.ops.graph[self.node_ids.value].shape.clone())
+    }
+
+    pub fn graph(&self) -> &'builder GraphBuilder {
+        self.builder
     }
 
     pub fn matmul(self, rhs: DualArray) -> Self {
@@ -347,7 +384,7 @@ impl GraphBuilder {
         f(&mut data)
     }
 
-    fn literal(&self, value: f32) -> Array {
+    pub fn literal(&self, value: f32) -> Array {
         self.with_state(|state| Array {
             node_id: state
                 .ops

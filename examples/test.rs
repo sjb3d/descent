@@ -2,6 +2,7 @@ use descent::prelude::*;
 use flate2::bufread::GzDecoder;
 use rand::{
     distributions::{Distribution, Uniform},
+    prelude::SliceRandom,
     Rng, SeedableRng,
 };
 use std::{
@@ -128,10 +129,67 @@ fn softmax_cross_entropy_loss<'builder>(
     loss
 }
 
+fn stochastic_gradient_descent_step(
+    graph: &GraphBuilder,
+    variable_ids: &[VariableId],
+    m: usize,
+    learning_rate: f32,
+) {
+    let alpha = learning_rate / (m as f32);
+    for id in variable_ids.iter().copied() {
+        let p = graph.input(id);
+        graph.output(id, p.value() - alpha * p.grad());
+    }
+}
+
+fn adam_step(
+    env: &mut Environment,
+    graph: &GraphBuilder,
+    variable_ids: &[VariableId],
+    m: usize,
+    learning_rate: f32,
+    beta1: f32,
+    beta2: f32,
+    epsilon: f32,
+) {
+    let t_id = env.variable([1], "t");
+    env.writer(t_id).zero_fill();
+
+    let t = graph.input(t_id).value() + 1.0;
+    graph.output(t_id, t);
+
+    let alpha = learning_rate * (1.0 - (graph.literal(beta2).log() * t).exp()).sqrt()
+        / (1.0 - (graph.literal(beta1).log() * t).exp());
+    let m_rcp = 1.0 / (m as f32);
+
+    for id in variable_ids.iter().copied() {
+        let p = graph.input(id);
+        let shape = p.shape();
+
+        let m_id = env.variable(shape.clone(), "m");
+        let v_id = env.variable(shape.clone(), "v");
+        env.writer(m_id).zero_fill();
+        env.writer(v_id).zero_fill();
+
+        let m = graph.input(m_id).value();
+        let v = graph.input(v_id).value();
+        let g = p.grad();
+
+        let m = m * beta1 + g * ((1.0 - beta1) * m_rcp);
+        let v = v * beta2 + g * g * ((1.0 - beta2) * m_rcp * m_rcp);
+        graph.output(m_id, m);
+        graph.output(v_id, v);
+
+        graph.output(id, p.value() - alpha * m / (v.sqrt() + epsilon));
+    }
+}
+
 fn main() {
+    let epoch_count = 40;
+    let m = 1000; // mini-batch size
+
     let mut env = Environment::new();
 
-    let m = 1000;
     let x_id = env.variable([m, 28 * 28], "x");
     let y_id = env.variable([m, 1], "y");
 
@@ -143,64 +201,71 @@ fn main() {
     let accuracy_sum_id = env.variable([1], "accuracy");
 
     let train_graph = {
-        let g = env.builder();
-
-        let x = g.input(x_id);
-        let y = g.input(y_id).value();
+        let graph = env.builder();
+        let x = graph.input(x_id);
+        let y = graph.input(y_id).value();
 
         // linear layer (no activation)
-        g.next_colour();
-        let w = g.input(w_id);
-        let b = g.input(b_id);
+        graph.next_colour();
+        let w = graph.input(w_id);
+        let b = graph.input(b_id);
         let z = x.matmul(w) + b;
 
         // loss function
-        g.next_colour();
+        graph.next_colour();
         let _loss = softmax_cross_entropy_loss(z, y);
 
-        // gradient descent step
-        g.next_colour();
-        let alpha = 0.1 / (m as f32);
-        g.output(w_id, w.value() - alpha * w.grad());
-        g.output(b_id, b.value() - alpha * b.grad());
+        // update parameters from gradients
+        graph.next_colour();
+        let variable_ids = [w_id, b_id];
+        if false {
+            stochastic_gradient_descent_step(&graph, &variable_ids, m, 0.1);
+        } else {
+            adam_step(
+                &mut env,
+                &graph,
+                &variable_ids,
+                m,
+                0.001,
+                0.9,
+                0.999,
+                1.0E-8,
+            );
+        }
 
-        g.build()
+        graph.build()
     };
     let mut f = BufWriter::new(File::create("train.dot").unwrap());
     train_graph.write_dot(&mut f).unwrap();
 
     let test_graph = {
-        let g = env.builder();
+        let graph = env.builder();
+        let x = graph.input(x_id);
+        let y = graph.input(y_id).value();
 
-        let x = g.input(x_id);
-        let y = g.input(y_id).value();
-
-        g.next_colour();
-        let w = g.input(w_id);
-        let b = g.input(b_id);
+        // linear layer (no activation)
+        graph.next_colour();
+        let w = graph.input(w_id);
+        let b = graph.input(b_id);
         let z = x.matmul(w) + b;
 
-        g.next_colour();
+        // accumulate loss  (into variable)
+        graph.next_colour();
         let loss = softmax_cross_entropy_loss(z, y);
-        g.output(
-            loss_sum_id,
-            g.input(loss_sum_id).value() + loss.reduce_sum(0),
-        );
+        let loss_sum = graph.input(loss_sum_id).value() + loss.reduce_sum(0);
+        graph.output(loss_sum_id, loss_sum);
 
-        g.next_colour();
+        // accumulate accuracy (into variable)
+        graph.next_colour();
         let pred = z.value().argmax(-1);
         let accuracy = pred.test_eq(y);
-        g.output(
-            accuracy_sum_id,
-            g.input(accuracy_sum_id).value() + accuracy.reduce_sum(0),
-        );
+        let accuracy_sum = graph.input(accuracy_sum_id).value() + accuracy.reduce_sum(0);
+        graph.output(accuracy_sum_id, accuracy_sum);
 
-        g.build()
+        graph.build()
     };
     let mut f = BufWriter::new(File::create("test.dot").unwrap());
     test_graph.write_dot(&mut f).unwrap();
-
-    let batch_size = m as usize;
 
     // load training data
     let train_images = load_gz_bytes("data/train-images-idx3-ubyte.gz").unwrap();
@@ -209,7 +274,7 @@ fn main() {
         read_images_info(&train_images);
     let (train_label_count, _) = read_labels_info(&train_labels);
     assert_eq!(train_image_count, train_label_count);
-    assert_eq!(train_image_count % batch_size, 0);
+    assert_eq!(train_image_count % m, 0);
     assert_eq!(train_image_rows, 28);
     assert_eq!(train_image_cols, 28);
 
@@ -219,27 +284,29 @@ fn main() {
     let ((test_image_count, test_image_rows, test_image_cols), _) = read_images_info(&test_images);
     let (test_label_count, _) = read_labels_info(&test_labels);
     assert_eq!(test_image_count, test_label_count);
-    assert_eq!(test_image_count % batch_size, 0);
+    assert_eq!(test_image_count % m, 0);
     assert_eq!(test_image_rows, 28);
     assert_eq!(test_image_cols, 28);
 
     // run epochs
-    for _ in 0..5 {
-        // loop over training batches
-        for batch_index in 0..(train_image_count / batch_size) {
-            let first_index = batch_index * batch_size;
-            unpack_images(&mut env, x_id, &train_images, first_index, batch_size).unwrap();
-            unpack_labels(&mut env, y_id, &train_labels, first_index, batch_size).unwrap();
+    for epoch_index in 0..epoch_count {
+        // loop over training mini-batches
+        let mut batch_indices: Vec<_> = (0..(train_image_count / m)).collect();
+        batch_indices.shuffle(&mut rng);
+        for batch_index in batch_indices.iter().copied() {
+            let first_index = batch_index * m;
+            unpack_images(&mut env, x_id, &train_images, first_index, m).unwrap();
+            unpack_labels(&mut env, y_id, &train_labels, first_index, m).unwrap();
             env.run(&train_graph);
         }
 
-        // loop over test batches
+        // loop over test mini-batches to evaluate loss and accuracy
         env.writer(loss_sum_id).zero_fill();
         env.writer(accuracy_sum_id).zero_fill();
-        for batch_index in 0..(test_image_count / batch_size) {
-            let first_index = batch_index * batch_size;
-            unpack_images(&mut env, x_id, &test_images, first_index, batch_size).unwrap();
-            unpack_labels(&mut env, y_id, &test_labels, first_index, batch_size).unwrap();
+        for batch_index in 0..(test_image_count / m) {
+            let first_index = batch_index * m;
+            unpack_images(&mut env, x_id, &test_images, first_index, m).unwrap();
+            unpack_labels(&mut env, y_id, &test_labels, first_index, m).unwrap();
             env.run(&test_graph);
         }
         let mut total_loss = 0f32;
@@ -251,7 +318,8 @@ fn main() {
             .read_exact(bytemuck::bytes_of_mut(&mut total_accuracy))
             .unwrap();
         println!(
-            "loss: {}, accuracy: {}",
+            "epoch: {}, loss: {}, accuracy: {}",
+            epoch_index,
             total_loss / (test_image_count as f32),
             total_accuracy / (test_image_count as f32)
         );
