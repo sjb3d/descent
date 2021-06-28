@@ -194,8 +194,12 @@ fn main() {
     let y_id = env.variable([m, 1], "y");
 
     let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
-    let w_id = xavier_uniform(&mut env, [28 * 28, 10], "w", &mut rng);
-    let b_id = zeros(&mut env, [10], "b");
+    let w1_id = xavier_uniform(&mut env, [28 * 28, 300], "w1", &mut rng);
+    let b1_id = zeros(&mut env, [300], "b1");
+    let leakiness = 0.01;
+
+    let w2_id = xavier_uniform(&mut env, [300, 10], "w2", &mut rng);
+    let b2_id = zeros(&mut env, [10], "b2");
 
     let loss_sum_id = env.variable([1], "loss");
     let accuracy_sum_id = env.variable([1], "accuracy");
@@ -205,19 +209,26 @@ fn main() {
         let x = graph.input(x_id);
         let y = graph.input(y_id).value();
 
+        // linear layer (leaky relu)
+        graph.next_colour();
+        let w1 = graph.input(w1_id);
+        let b1 = graph.input(b1_id);
+        let z1 = x.matmul(w1) + b1;
+        let a1 = z1.leaky_relu(leakiness);
+
         // linear layer (no activation)
         graph.next_colour();
-        let w = graph.input(w_id);
-        let b = graph.input(b_id);
-        let z = x.matmul(w) + b;
+        let w2 = graph.input(w2_id);
+        let b2 = graph.input(b2_id);
+        let z2 = a1.matmul(w2) + b2;
 
         // loss function
         graph.next_colour();
-        let _loss = softmax_cross_entropy_loss(z, y);
+        let _loss = softmax_cross_entropy_loss(z2, y);
 
         // update parameters from gradients
         graph.next_colour();
-        let variable_ids = [w_id, b_id];
+        let variable_ids = [w1_id, b1_id, w2_id, b2_id];
         if false {
             stochastic_gradient_descent_step(&graph, &variable_ids, m, 0.1);
         } else {
@@ -243,21 +254,28 @@ fn main() {
         let x = graph.input(x_id);
         let y = graph.input(y_id).value();
 
+        // linear layer (leaky relu)
+        graph.next_colour();
+        let w1 = graph.input(w1_id);
+        let b1 = graph.input(b1_id);
+        let z1 = x.matmul(w1) + b1;
+        let a1 = z1.leaky_relu(leakiness);
+
         // linear layer (no activation)
         graph.next_colour();
-        let w = graph.input(w_id);
-        let b = graph.input(b_id);
-        let z = x.matmul(w) + b;
+        let w2 = graph.input(w2_id);
+        let b2 = graph.input(b2_id);
+        let z2 = a1.matmul(w2) + b2;
 
         // accumulate loss  (into variable)
         graph.next_colour();
-        let loss = softmax_cross_entropy_loss(z, y);
+        let loss = softmax_cross_entropy_loss(z2, y);
         let loss_sum = graph.input(loss_sum_id).value() + loss.reduce_sum(0);
         graph.output(loss_sum_id, loss_sum);
 
         // accumulate accuracy (into variable)
         graph.next_colour();
-        let pred = z.value().argmax(-1);
+        let pred = z2.value().argmax(-1);
         let accuracy = pred.select_eq(y, graph.literal(1.0), graph.literal(0.0));
         let accuracy_sum = graph.input(accuracy_sum_id).value() + accuracy.reduce_sum(0);
         graph.output(accuracy_sum_id, accuracy_sum);

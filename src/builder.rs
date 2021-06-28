@@ -326,6 +326,19 @@ impl<'builder> DualArray<'builder> {
         self.builder
     }
 
+    pub fn leaky_relu(self, leakiness: f32) -> Self {
+        let a = self.value();
+        let da = self.grad();
+
+        let zero = self.builder.literal(0.0);
+        let b = a.select_gt(zero, a, a * leakiness);
+
+        let db = self.builder.accumulator(b.shape());
+        da.accumulate(a.select_gt(zero, db, db * leakiness));
+
+        Self::new(b, db)
+    }
+
     pub fn matmul(self, rhs: DualArray) -> Self {
         let a = self.value();
         let da = self.grad();
@@ -333,8 +346,8 @@ impl<'builder> DualArray<'builder> {
         let db = rhs.grad();
 
         let c = a.matmul(b);
-        let dc = self.builder.accumulator(c.shape());
 
+        let dc = self.builder.accumulator(c.shape());
         da.accumulate(dc.matmul(b.transpose()));
         db.accumulate(a.transpose().matmul(dc));
 

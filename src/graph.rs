@@ -411,7 +411,7 @@ impl Graph {
                         op,
                         args: args[..2].try_into().unwrap(),
                     },
-                    Op::Select(compare_mode) => PerElementKernelOp::Select {
+                    Op::CompareAndSelect(compare_mode) => PerElementKernelOp::CompareAndSelect {
                         compare_mode,
                         args: args[..4].try_into().unwrap(),
                     },
@@ -532,7 +532,9 @@ impl Graph {
                     )?;
                 } else {
                     let mut hasher = DefaultHasher::new();
-                    node.colour.hash(&mut hasher);
+                    for _ in 0..4 {
+                        node.colour.hash(&mut hasher);
+                    }
                     let col = ((hasher.finish() >> 40) as u32) | 0x404040;
                     write!(
                         w,
