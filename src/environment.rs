@@ -11,10 +11,10 @@ use std::{
 };
 
 slotmap::new_key_type! {
-    pub struct VariableId;
+    pub(crate) struct VariableId;
 }
 
-pub(crate) type SharedVariables = Rc<RefCell<SlotMap<VariableId, Variable>>>;
+pub(crate) type SharedVariables = Rc<RefCell<SlotMap<VariableId, VariableStorage>>>;
 
 pub struct VariableWriter<'a>(StagingWriter<'a>);
 
@@ -53,10 +53,33 @@ impl<'a> io::BufRead for VariableReader<'a> {
     }
 }
 
-pub(crate) struct Variable {
+pub(crate) struct VariableStorage {
     pub(crate) shape: Shape,
     pub(crate) name: String,
     pub(crate) buffer_id: Option<BufferId>,
+}
+
+#[derive(Clone)]
+pub struct Variable {
+    id: VariableId,
+    owner: SharedVariables,
+}
+
+impl Variable {
+    pub(crate) fn checked_id(&self, store: &SharedVariables) -> VariableId {
+        if !SharedVariables::ptr_eq(&self.owner, store) {
+            panic!("variable does not come from the same environment");
+        }
+        self.id
+    }
+
+    pub fn shape(&self) -> Shape {
+        self.owner.borrow().get(self.id).unwrap().shape.clone()
+    }
+
+    pub fn name(&self) -> String {
+        self.owner.borrow().get(self.id).unwrap().name.clone()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -169,20 +192,24 @@ impl Environment {
         }
     }
 
-    pub fn variable(&mut self, shape: impl Into<Shape>, name: impl Into<String>) -> VariableId {
+    pub fn variable(&mut self, shape: impl Into<Shape>, name: impl Into<String>) -> Variable {
         let shape = shape.into();
         let name = name.into();
-        let variable_id = self.variables.borrow_mut().insert(Variable {
+        let variable_id = self.variables.borrow_mut().insert(VariableStorage {
             shape: shape.clone(),
             name,
             buffer_id: None,
         });
-        variable_id
+        Variable {
+            id: variable_id,
+            owner: SharedVariables::clone(&self.variables),
+        }
     }
 
-    pub fn writer(&mut self, variable_id: VariableId) -> VariableWriter {
+    pub fn writer(&mut self, variable: &Variable) -> VariableWriter {
+        let variable_id = variable.checked_id(&self.variables);
         let mut variables = self.variables.borrow_mut();
-        let var = &mut variables[variable_id];
+        let var = variables.get_mut(variable_id).unwrap();
         if let Some(buffer_id) = var.buffer_id.take() {
             self.buffer_heap.free(buffer_id);
         }
@@ -196,9 +223,10 @@ impl Environment {
         ))
     }
 
-    pub fn reader(&mut self, variable_id: VariableId) -> VariableReader {
+    pub fn reader(&mut self, variable: &Variable) -> VariableReader {
+        let variable_id = variable.checked_id(&self.variables);
         let variables = self.variables.borrow();
-        let var = &variables[variable_id];
+        let var = variables.get(variable_id).unwrap();
         let buffer_id = var.buffer_id.unwrap();
         VariableReader(StagingReader::new(
             &mut self.staging_buffer,

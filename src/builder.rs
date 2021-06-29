@@ -457,8 +457,9 @@ impl GraphBuilder {
         })
     }
 
-    pub fn input(&self, variable_id: VariableId) -> DualArray {
+    pub fn input(&self, variable: &Variable) -> DualArray {
         let node_ids = self.with_state(|state| {
+            let variable_id = variable.checked_id(&state.variables);
             let shape = state
                 .variables
                 .borrow()
@@ -482,8 +483,9 @@ impl GraphBuilder {
         }
     }
 
-    pub fn output(&self, variable_id: VariableId, rhs: Array) {
+    pub fn output(&self, variable: &Variable, rhs: Array) {
         self.with_state(|state| {
+            let variable_id = variable.checked_id(&state.variables);
             let shape = state.ops.graph[rhs.node_id].shape.clone();
             assert_eq!(
                 state
