@@ -6,12 +6,6 @@ pub(crate) type OpGraph = StableDiGraph<OpNode, OpEdge, usize>;
 pub(crate) type OpNodeId = NodeIndex<usize>;
 pub(crate) type OpEdgeId = EdgeIndex<usize>;
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DualOpNodeId {
-    pub(crate) value: OpNodeId,
-    pub(crate) grad: OpNodeId,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ReduceOp {
     Max,

@@ -12,7 +12,8 @@ pub struct Array<'builder> {
 
 #[derive(Clone, Copy)]
 pub struct DualArray<'builder> {
-    node_ids: DualOpNodeId,
+    value_node_id: OpNodeId,
+    grad_node_id: OpNodeId,
     builder: &'builder GraphBuilder,
 }
 
@@ -295,31 +296,28 @@ impl<'builder> ops::Div<f32> for Array<'builder> {
 impl<'builder> DualArray<'builder> {
     pub fn new(value: Array<'builder>, grad: Array<'builder>) -> Self {
         Self {
-            node_ids: DualOpNodeId {
-                value: value.node_id,
-                grad: grad.node_id,
-            },
+            value_node_id: value.node_id,
+            grad_node_id: grad.node_id,
             builder: value.builder,
         }
     }
 
     pub fn value(self) -> Array<'builder> {
         Array {
-            node_id: self.node_ids.value,
+            node_id: self.value_node_id,
             builder: self.builder,
         }
     }
 
     pub fn grad(self) -> Array<'builder> {
         Array {
-            node_id: self.node_ids.grad,
+            node_id: self.grad_node_id,
             builder: self.builder,
         }
     }
 
     pub fn shape(&self) -> Shape {
-        self.builder
-            .with_state(|state| state.ops.graph[self.node_ids.value].shape.clone())
+        self.value().shape()
     }
 
     pub fn graph(&self) -> &'builder GraphBuilder {
@@ -401,10 +399,16 @@ impl OpGraphBuilder {
     }
 }
 
+#[derive(Clone, Copy)]
+struct GraphBuilderInput {
+    value_node_id: OpNodeId,
+    grad_node_id: Option<OpNodeId>,
+}
+
 struct GraphBuilderState {
     ops: OpGraphBuilder,
     variables: SharedVariables,
-    inputs: SparseSecondaryMap<VariableId, DualOpNodeId>,
+    inputs: SparseSecondaryMap<VariableId, GraphBuilderInput>,
     outputs: SparseSecondaryMap<VariableId, OpNodeId>,
 }
 
@@ -457,8 +461,8 @@ impl GraphBuilder {
         })
     }
 
-    pub fn input(&self, variable: &Variable) -> DualArray {
-        let node_ids = self.with_state(|state| {
+    fn input(&self, variable: &Variable) -> GraphBuilderInput {
+        self.with_state(|state| {
             let variable_id = variable.checked_id(&state.variables);
             let shape = state
                 .variables
@@ -472,18 +476,31 @@ impl GraphBuilder {
                 .inputs
                 .entry(variable_id)
                 .unwrap()
-                .or_insert_with(|| DualOpNodeId {
-                    value: ops.new_node(shape.clone(), Op::Input { variable_id }, &[]),
-                    grad: ops.new_node(shape, Op::Accumulate, &[]),
+                .or_insert_with(|| GraphBuilderInput {
+                    value_node_id: ops.new_node(shape.clone(), Op::Input { variable_id }, &[]),
+                    grad_node_id: Some(ops.new_node(shape, Op::Accumulate, &[])),
                 })
-        });
+        })
+    }
+
+    pub fn parameter(&self, variable: &Variable) -> DualArray {
+        let input = self.input(variable);
         DualArray {
-            node_ids,
+            value_node_id: input.value_node_id,
+            grad_node_id: input.grad_node_id.unwrap(),
             builder: self,
         }
     }
 
-    pub fn output(&self, variable: &Variable, rhs: Array) {
+    pub fn read_variable(&self, variable: &Variable) -> Array {
+        let input = self.input(variable);
+        Array {
+            node_id: input.value_node_id,
+            builder: self,
+        }
+    }
+
+    pub fn write_variable(&self, variable: &Variable, rhs: Array) {
         self.with_state(|state| {
             let variable_id = variable.checked_id(&state.variables);
             let shape = state.ops.graph[rhs.node_id].shape.clone();
@@ -510,12 +527,22 @@ impl GraphBuilder {
             // ensure that if we read this variable again we read the latest value
             state.inputs.insert(
                 variable_id,
-                DualOpNodeId {
-                    value: rhs.node_id,
-                    grad: state.ops.new_node(shape, Op::Accumulate, &[]),
+                GraphBuilderInput {
+                    value_node_id: rhs.node_id,
+                    grad_node_id: None,
                 },
             );
         });
+    }
+
+    pub fn update_variable<'builder>(
+        &'builder self,
+        variable: &Variable,
+        f: impl FnOnce(Array<'builder>) -> Array<'builder>,
+    ) -> Array<'builder> {
+        let result = f(self.read_variable(variable));
+        self.write_variable(variable, result);
+        result
     }
 
     pub fn accumulator(&self, shape: impl Into<Shape>) -> Array {

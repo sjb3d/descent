@@ -49,7 +49,7 @@ mod tests {
         env.writer(a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.builder();
-        g.output(b_var, g.input(a_var).value().reduce_sum(-1));
+        g.write_variable(b_var, g.parameter(a_var).value().reduce_sum(-1));
 
         let g = g.build();
         env.run(&g);

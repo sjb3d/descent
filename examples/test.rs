@@ -137,8 +137,8 @@ fn stochastic_gradient_descent_step(
 ) {
     let alpha = learning_rate / (mini_batch_size as f32);
     for var in variables.iter() {
-        let param = graph.input(var);
-        graph.output(var, param.value() - alpha * param.grad());
+        let g = graph.parameter(var).grad();
+        graph.update_variable(var, |theta| theta - alpha * g);
     }
 }
 
@@ -155,33 +155,24 @@ fn adam_step(
     let t_var = env.variable([1], "t");
     env.writer(&t_var).zero_fill();
 
-    let t = graph.input(&t_var).value() + 1.0;
-    graph.output(&t_var, t);
-
+    let t = graph.update_variable(&t_var, |t| t + 1.0);
     let alpha = learning_rate * (1.0 - (graph.literal(beta2).log() * t).exp()).sqrt()
         / (1.0 - (graph.literal(beta1).log() * t).exp());
 
     for var in variables.iter() {
         let shape = var.shape();
-
         let m_var = env.variable(shape.clone(), "m");
         let v_var = env.variable(shape.clone(), "v");
         env.writer(&m_var).zero_fill();
         env.writer(&v_var).zero_fill();
 
-        let param = graph.input(var);
-
-        let m = graph.input(&m_var).value();
-        let v = graph.input(&v_var).value();
-        let g = param.grad();
-
+        let g = graph.parameter(var).grad();
         let rcp = 1.0 / (mini_batch_size as f32);
-        let m = m * beta1 + g * ((1.0 - beta1) * rcp);
-        let v = v * beta2 + g * g * ((1.0 - beta2) * rcp * rcp);
-        graph.output(&m_var, m);
-        graph.output(&v_var, v);
 
-        graph.output(var, param.value() - alpha * m / (v.sqrt() + epsilon));
+        let m = graph.update_variable(&m_var, |m| m * beta1 + g * ((1.0 - beta1) * rcp));
+        let v = graph.update_variable(&v_var, |v| v * beta2 + g * g * ((1.0 - beta2) * rcp * rcp));
+
+        graph.update_variable(var, |theta| theta - alpha * m / (v.sqrt() + epsilon));
     }
 }
 
@@ -207,25 +198,25 @@ fn main() {
 
     let train_graph = {
         let graph = env.builder();
-        let x = graph.input(&x_var);
-        let y = graph.input(&y_var).value();
+        let x = graph.parameter(&x_var);
 
         // linear layer (leaky relu)
         graph.next_colour();
-        let w1 = graph.input(&w1_var);
-        let b1 = graph.input(&b1_var);
-        let z1 = x.matmul(w1) + b1;
-        let a1 = z1.leaky_relu(leakiness);
+        let w1 = graph.parameter(&w1_var);
+        let b1 = graph.parameter(&b1_var);
+        let x = x.matmul(w1) + b1;
+        let x = x.leaky_relu(leakiness);
 
         // linear layer (no activation)
         graph.next_colour();
-        let w2 = graph.input(&w2_var);
-        let b2 = graph.input(&b2_var);
-        let z2 = a1.matmul(w2) + b2;
+        let w2 = graph.parameter(&w2_var);
+        let b2 = graph.parameter(&b2_var);
+        let x = x.matmul(w2) + b2;
 
         // loss function
         graph.next_colour();
-        let _loss = softmax_cross_entropy_loss(z2, y);
+        let y = graph.read_variable(&y_var);
+        let _loss = softmax_cross_entropy_loss(x, y);
 
         // update parameters from gradients
         graph.next_colour();
@@ -248,34 +239,34 @@ fn main() {
 
     let test_graph = {
         let graph = env.builder();
-        let x = graph.input(&x_var);
-        let y = graph.input(&y_var).value();
+        let x = graph.parameter(&x_var);
 
         // linear layer (leaky relu)
         graph.next_colour();
-        let w1 = graph.input(&w1_var);
-        let b1 = graph.input(&b1_var);
+        let w1 = graph.parameter(&w1_var);
+        let b1 = graph.parameter(&b1_var);
         let z1 = x.matmul(w1) + b1;
         let a1 = z1.leaky_relu(leakiness);
 
         // linear layer (no activation)
         graph.next_colour();
-        let w2 = graph.input(&w2_var);
-        let b2 = graph.input(&b2_var);
+        let w2 = graph.parameter(&w2_var);
+        let b2 = graph.parameter(&b2_var);
         let z2 = a1.matmul(w2) + b2;
 
         // accumulate loss  (into variable)
         graph.next_colour();
+        let y = graph.read_variable(&y_var);
         let loss = softmax_cross_entropy_loss(z2, y);
-        let loss_sum = graph.input(&loss_sum_var).value() + loss.reduce_sum(0);
-        graph.output(&loss_sum_var, loss_sum);
+        graph.update_variable(&loss_sum_var, |loss_sum| loss_sum + loss.reduce_sum(0));
 
         // accumulate accuracy (into variable)
         graph.next_colour();
         let pred = z2.value().argmax(-1);
         let accuracy = pred.select_eq(y, graph.literal(1.0), graph.literal(0.0));
-        let accuracy_sum = graph.input(&accuracy_sum_var).value() + accuracy.reduce_sum(0);
-        graph.output(&accuracy_sum_var, accuracy_sum);
+        graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
+            accuracy_sum + accuracy.reduce_sum(0)
+        });
 
         graph.build()
     };
