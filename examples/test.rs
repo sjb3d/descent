@@ -79,14 +79,8 @@ fn unpack_labels(
     w.write_all(bytemuck::cast_slice(&labels))
 }
 
-fn xavier_uniform(
-    env: &mut Environment,
-    shape: impl Into<Shape>,
-    name: &str,
-    rng: &mut impl Rng,
-) -> Variable {
-    let shape = shape.into();
-    let variable = env.variable(shape.clone(), name);
+fn write_xavier_uniform(env: &mut Environment, variable: &Variable, rng: &mut impl Rng) {
+    let shape = variable.shape();
 
     let mut writer = env.writer(&variable);
     let a = (6.0 / (shape[0] as f32)).sqrt();
@@ -95,18 +89,6 @@ fn xavier_uniform(
         let x: f32 = dist.sample(rng);
         writer.write_all(bytemuck::bytes_of(&x)).unwrap();
     }
-
-    variable
-}
-
-fn zeros(env: &mut Environment, shape: impl Into<Shape>, name: &str) -> Variable {
-    let shape = shape.into();
-    let variable = env.variable(shape, name);
-
-    let writer = env.writer(&variable);
-    writer.zero_fill();
-
-    variable
 }
 
 fn softmax_cross_entropy_loss<'builder>(
@@ -176,6 +158,106 @@ fn adam_step(
     }
 }
 
+trait Layer {
+    #[must_use]
+    fn forward_pass<'builder>(
+        &self,
+        graph: &'builder GraphBuilder,
+        input: DualArray<'builder>,
+    ) -> DualArray<'builder>;
+
+    fn collect_parameters(&self, _parameters: &mut Vec<Variable>) {}
+}
+
+struct Linear {
+    w: Variable,
+    b: Variable, // TODO: optional bias?
+}
+
+impl Linear {
+    fn new(env: &mut Environment, input: usize, output: usize, rng: &mut impl Rng) -> Self {
+        let w = env.variable([input, output], "w");
+        let b = env.variable([output], "b");
+
+        write_xavier_uniform(env, &w, rng);
+        env.writer(&b).zero_fill();
+
+        Self { w, b }
+    }
+}
+
+impl Layer for Linear {
+    fn forward_pass<'builder>(
+        &self,
+        graph: &'builder GraphBuilder,
+        input: DualArray<'builder>,
+    ) -> DualArray<'builder> {
+        let w = graph.parameter(&self.w);
+        let b = graph.parameter(&self.b);
+        input.matmul(w) + b
+    }
+
+    fn collect_parameters(&self, parameters: &mut Vec<Variable>) {
+        parameters.push(self.w.clone());
+        parameters.push(self.b.clone());
+    }
+}
+
+struct LeakyRelu {
+    amount: f32,
+}
+
+impl LeakyRelu {
+    fn new(amount: f32) -> Self {
+        Self { amount }
+    }
+}
+
+impl Layer for LeakyRelu {
+    fn forward_pass<'builder>(
+        &self,
+        _graph: &'builder GraphBuilder,
+        input: DualArray<'builder>,
+    ) -> DualArray<'builder> {
+        input.leaky_relu(self.amount)
+    }
+}
+
+struct LayeredNetwork {
+    layers: Vec<Box<dyn Layer>>,
+}
+
+impl LayeredNetwork {
+    fn new() -> Self {
+        Self { layers: Vec::new() }
+    }
+
+    fn add_layer(&mut self, layer: impl Layer + 'static) {
+        self.layers.push(Box::new(layer));
+    }
+}
+
+impl Layer for LayeredNetwork {
+    fn forward_pass<'builder>(
+        &self,
+        graph: &'builder GraphBuilder,
+        input: DualArray<'builder>,
+    ) -> DualArray<'builder> {
+        let mut x = input;
+        for layer in self.layers.iter() {
+            graph.next_colour();
+            x = layer.forward_pass(graph, x);
+        }
+        x
+    }
+
+    fn collect_parameters(&self, parameters: &mut Vec<Variable>) {
+        for layer in self.layers.iter() {
+            layer.collect_parameters(parameters);
+        }
+    }
+}
+
 fn main() {
     let epoch_count = 40;
     let m = 1000; // mini-batch size
@@ -186,12 +268,10 @@ fn main() {
     let y_var = env.variable([m, 1], "y");
 
     let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
-    let w1_var = xavier_uniform(&mut env, [28 * 28, 300], "w1", &mut rng);
-    let b1_var = zeros(&mut env, [300], "b1");
-    let leakiness = 0.01;
-
-    let w2_var = xavier_uniform(&mut env, [300, 10], "w2", &mut rng);
-    let b2_var = zeros(&mut env, [10], "b2");
+    let mut network = LayeredNetwork::new();
+    network.add_layer(Linear::new(&mut env, 28 * 28, 300, &mut rng));
+    network.add_layer(LeakyRelu::new(0.01));
+    network.add_layer(Linear::new(&mut env, 300, 10, &mut rng));
 
     let loss_sum_var = env.variable([1], "loss");
     let accuracy_sum_var = env.variable([1], "accuracy");
@@ -200,18 +280,8 @@ fn main() {
         let graph = env.builder();
         let x = graph.parameter(&x_var);
 
-        // linear layer (leaky relu)
-        graph.next_colour();
-        let w1 = graph.parameter(&w1_var);
-        let b1 = graph.parameter(&b1_var);
-        let x = x.matmul(w1) + b1;
-        let x = x.leaky_relu(leakiness);
-
-        // linear layer (no activation)
-        graph.next_colour();
-        let w2 = graph.parameter(&w2_var);
-        let b2 = graph.parameter(&b2_var);
-        let x = x.matmul(w2) + b2;
+        // emit all the layers of the network
+        let x = network.forward_pass(&graph, x);
 
         // loss function
         graph.next_colour();
@@ -220,16 +290,12 @@ fn main() {
 
         // update parameters from gradients
         graph.next_colour();
-        let variables = [
-            w1_var.clone(),
-            b1_var.clone(),
-            w2_var.clone(),
-            b2_var.clone(),
-        ];
+        let mut parameters = Vec::new();
+        network.collect_parameters(&mut parameters);
         if false {
-            stochastic_gradient_descent_step(&graph, &variables, m, 0.1);
+            stochastic_gradient_descent_step(&graph, &parameters, m, 0.1);
         } else {
-            adam_step(&mut env, &graph, &variables, m, 0.001, 0.9, 0.999, 1.0E-8);
+            adam_step(&mut env, &graph, &parameters, m, 0.001, 0.9, 0.999, 1.0E-8);
         }
 
         graph.build()
@@ -241,28 +307,18 @@ fn main() {
         let graph = env.builder();
         let x = graph.parameter(&x_var);
 
-        // linear layer (leaky relu)
-        graph.next_colour();
-        let w1 = graph.parameter(&w1_var);
-        let b1 = graph.parameter(&b1_var);
-        let z1 = x.matmul(w1) + b1;
-        let a1 = z1.leaky_relu(leakiness);
-
-        // linear layer (no activation)
-        graph.next_colour();
-        let w2 = graph.parameter(&w2_var);
-        let b2 = graph.parameter(&b2_var);
-        let z2 = a1.matmul(w2) + b2;
+        // emit all the layers of the network
+        let x = network.forward_pass(&graph, x);
 
         // accumulate loss  (into variable)
         graph.next_colour();
         let y = graph.read_variable(&y_var);
-        let loss = softmax_cross_entropy_loss(z2, y);
+        let loss = softmax_cross_entropy_loss(x, y);
         graph.update_variable(&loss_sum_var, |loss_sum| loss_sum + loss.reduce_sum(0));
 
         // accumulate accuracy (into variable)
         graph.next_colour();
-        let pred = z2.value().argmax(-1);
+        let pred = x.value().argmax(-1);
         let accuracy = pred.select_eq(y, graph.literal(1.0), graph.literal(0.0));
         graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
             accuracy_sum + accuracy.reduce_sum(0)
