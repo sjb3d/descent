@@ -143,7 +143,7 @@ impl Schedule {
                 node.op,
                 Op::Literal(_) | Op::Unary(_) | Op::Binary(_) | Op::MatMul | Op::Reduce { .. }
             ) {
-                let ids = ids_from_hash.entry(hash).or_insert_with(|| Vec::new());
+                let ids = ids_from_hash.entry(hash).or_insert_with(Vec::new);
                 if let Some(other_id) = ids.iter().copied().find(|&id| {
                     let other_node = &self.ops[id];
                     let other_arg_sources = get_arg_sources(&self.ops, id);
@@ -242,7 +242,7 @@ impl Schedule {
                 }
             }
         }
-        return false;
+        false
     }
 
     fn any_successor(&self, roots: &[OpNodeId], mut f: impl FnMut(OpNodeId) -> bool) -> bool {
@@ -262,14 +262,15 @@ impl Schedule {
                 }
             }
         }
-        return false;
+        false
     }
 
+    #[allow(clippy::blocks_in_if_conditions)]
     fn build_clusters(&mut self) {
         // first gather per-element nodes into kernels
         for first_node_id in self.ops_sorted.iter().copied() {
             let first_node = &self.ops[first_node_id];
-            if !first_node.cluster_id.is_none() {
+            if first_node.cluster_id.is_some() {
                 continue;
             }
             if first_node.op.is_per_element() {
@@ -511,7 +512,7 @@ impl Schedule {
     pub fn write_dot(&self, w: &mut impl io::Write) -> io::Result<()> {
         writeln!(w, "digraph G {{")?;
         for (index, cluster_id) in iter::once(None)
-            .chain(self.clusters.keys().map(|id| Some(id)))
+            .chain(self.clusters.keys().map(Some))
             .enumerate()
         {
             if cluster_id.is_some() {

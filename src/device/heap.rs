@@ -279,7 +279,7 @@ impl<K: Key, T: Tag> Heap<K, T> {
             .get(start_free_list_index..)?
             .iter()
             .copied()
-            .filter_map(|id| id)
+            .flatten()
         {
             let mut block_id = first_block_id;
             loop {

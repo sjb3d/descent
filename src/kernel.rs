@@ -301,6 +301,7 @@ impl ReduceKernel {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Kernel {
     PerElement(PerElementKernel),

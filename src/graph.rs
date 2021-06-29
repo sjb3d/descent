@@ -516,10 +516,9 @@ impl Graph {
             );
 
             // update the output node for this variable (remove any old one)
-            let node_id =
-                state
-                    .ops
-                    .new_node(shape.clone(), Op::Output { variable_id }, &[rhs.node_id]);
+            let node_id = state
+                .ops
+                .new_node(shape, Op::Output { variable_id }, &[rhs.node_id]);
             if let Some(node_id) = state.outputs.insert(variable_id, node_id) {
                 state.ops.graph.remove_node(node_id);
             }

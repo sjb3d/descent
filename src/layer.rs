@@ -84,6 +84,12 @@ impl LayeredNetwork {
     }
 }
 
+impl Default for LayeredNetwork {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Layer for LayeredNetwork {
     fn forward_pass<'g>(&self, graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g> {
         let mut x = input;

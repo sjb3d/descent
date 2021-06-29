@@ -58,6 +58,12 @@ pub struct Environment {
     descriptor_pools: DescriptorPoolSet,
 }
 
+impl Default for Environment {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Environment {
     pub fn new() -> Self {
         let context = Context::new();
@@ -83,7 +89,7 @@ impl Environment {
         let shape = shape.into();
         let name = name.into();
         let variable_id = self.variables.borrow_mut().insert(VariableStorage {
-            shape: shape.clone(),
+            shape,
             name,
             buffer_id: None,
         });
@@ -176,7 +182,7 @@ impl Environment {
             assert!(var.buffer_id.is_some());
             let storage = &mut node_storage[node_id.index()];
             if !output_variable_ids.contains(&variable_id) {
-                storage.buffer_id = var.buffer_id.clone();
+                storage.buffer_id = var.buffer_id;
                 storage.usage_count += 1;
             } else {
                 storage.buffer_id = var.buffer_id.take();
