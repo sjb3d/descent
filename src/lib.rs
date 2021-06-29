@@ -48,10 +48,10 @@ mod tests {
 
         env.writer(a_var).write_all(cast_slice(&a_data)).unwrap();
 
-        let g = env.builder();
+        let g = env.graph();
         g.write_variable(b_var, g.parameter(a_var).value().reduce_sum(-1));
 
-        let g = g.build();
+        let g = g.build_schedule();
         env.run(&g);
 
         let mut b_result = vec![0f32; 10];

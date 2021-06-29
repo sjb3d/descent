@@ -91,10 +91,7 @@ fn write_xavier_uniform(env: &mut Environment, variable: &Variable, rng: &mut im
     }
 }
 
-fn softmax_cross_entropy_loss<'builder>(
-    z: DualArray<'builder>,
-    y: Array<'builder>,
-) -> Array<'builder> {
+fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: Array<'g>) -> Array<'g> {
     let (z, dz) = (z.value(), z.grad());
 
     // softmax
@@ -112,11 +109,13 @@ fn softmax_cross_entropy_loss<'builder>(
 }
 
 fn stochastic_gradient_descent_step(
-    graph: &GraphBuilder,
+    graph: &Graph,
     variables: &[Variable],
     mini_batch_size: usize,
     learning_rate: f32,
 ) {
+    graph.next_colour();
+
     let alpha = learning_rate / (mini_batch_size as f32);
     for var in variables.iter() {
         let g = graph.parameter(var).grad();
@@ -126,7 +125,7 @@ fn stochastic_gradient_descent_step(
 
 fn adam_step(
     env: &mut Environment,
-    graph: &GraphBuilder,
+    graph: &Graph,
     variables: &[Variable],
     mini_batch_size: usize,
     learning_rate: f32,
@@ -134,6 +133,8 @@ fn adam_step(
     beta2: f32,
     epsilon: f32,
 ) {
+    graph.next_colour();
+
     let t_var = env.variable([1], "t");
     env.writer(&t_var).zero_fill();
 
@@ -160,11 +161,7 @@ fn adam_step(
 
 trait Layer {
     #[must_use]
-    fn forward_pass<'builder>(
-        &self,
-        graph: &'builder GraphBuilder,
-        input: DualArray<'builder>,
-    ) -> DualArray<'builder>;
+    fn forward_pass<'g>(&self, graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g>;
 
     fn collect_parameters(&self, _parameters: &mut Vec<Variable>) {}
 }
@@ -187,11 +184,7 @@ impl Linear {
 }
 
 impl Layer for Linear {
-    fn forward_pass<'builder>(
-        &self,
-        graph: &'builder GraphBuilder,
-        input: DualArray<'builder>,
-    ) -> DualArray<'builder> {
+    fn forward_pass<'g>(&self, graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g> {
         let w = graph.parameter(&self.w);
         let b = graph.parameter(&self.b);
         input.matmul(w) + b
@@ -214,11 +207,7 @@ impl LeakyRelu {
 }
 
 impl Layer for LeakyRelu {
-    fn forward_pass<'builder>(
-        &self,
-        _graph: &'builder GraphBuilder,
-        input: DualArray<'builder>,
-    ) -> DualArray<'builder> {
+    fn forward_pass<'g>(&self, _graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g> {
         input.leaky_relu(self.amount)
     }
 }
@@ -238,16 +227,13 @@ impl LayeredNetwork {
 }
 
 impl Layer for LayeredNetwork {
-    fn forward_pass<'builder>(
-        &self,
-        graph: &'builder GraphBuilder,
-        input: DualArray<'builder>,
-    ) -> DualArray<'builder> {
+    fn forward_pass<'g>(&self, graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g> {
         let mut x = input;
         for layer in self.layers.iter() {
             graph.next_colour();
             x = layer.forward_pass(graph, x);
         }
+        graph.next_colour();
         x
     }
 
@@ -277,19 +263,17 @@ fn main() {
     let accuracy_sum_var = env.variable([1], "accuracy");
 
     let train_graph = {
-        let graph = env.builder();
+        let graph = env.graph();
         let x = graph.parameter(&x_var);
+        let y = graph.read_variable(&y_var);
 
         // emit all the layers of the network
         let x = network.forward_pass(&graph, x);
 
         // loss function
-        graph.next_colour();
-        let y = graph.read_variable(&y_var);
         let _loss = softmax_cross_entropy_loss(x, y);
 
         // update parameters from gradients
-        graph.next_colour();
         let mut parameters = Vec::new();
         network.collect_parameters(&mut parameters);
         if false {
@@ -298,33 +282,31 @@ fn main() {
             adam_step(&mut env, &graph, &parameters, m, 0.001, 0.9, 0.999, 1.0E-8);
         }
 
-        graph.build()
+        graph.build_schedule()
     };
     let mut f = BufWriter::new(File::create("train.dot").unwrap());
     train_graph.write_dot(&mut f).unwrap();
 
     let test_graph = {
-        let graph = env.builder();
+        let graph = env.graph();
         let x = graph.parameter(&x_var);
+        let y = graph.read_variable(&y_var);
 
         // emit all the layers of the network
         let x = network.forward_pass(&graph, x);
 
         // accumulate loss  (into variable)
-        graph.next_colour();
-        let y = graph.read_variable(&y_var);
         let loss = softmax_cross_entropy_loss(x, y);
         graph.update_variable(&loss_sum_var, |loss_sum| loss_sum + loss.reduce_sum(0));
 
         // accumulate accuracy (into variable)
-        graph.next_colour();
         let pred = x.value().argmax(-1);
         let accuracy = pred.select_eq(y, graph.literal(1.0), graph.literal(0.0));
         graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
             accuracy_sum + accuracy.reduce_sum(0)
         });
 
-        graph.build()
+        graph.build_schedule()
     };
     let mut f = BufWriter::new(File::create("test.dot").unwrap());
     test_graph.write_dot(&mut f).unwrap();

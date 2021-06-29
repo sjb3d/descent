@@ -58,7 +58,7 @@ slotmap::new_key_type! {
     pub(crate) struct ClusterId;
 }
 
-pub struct Graph {
+pub struct Schedule {
     pub(crate) variables: SharedVariables,
     pub(crate) ops: OpGraph,
     pub(crate) ops_sorted: Vec<OpNodeId>,
@@ -66,9 +66,9 @@ pub struct Graph {
     pub(crate) clusters_sorted: Vec<ClusterId>,
 }
 
-impl Graph {
+impl Schedule {
     pub(crate) fn new(variables: SharedVariables, ops: OpGraph) -> Self {
-        let mut graph = Self {
+        let mut sched = Self {
             variables,
             ops,
             ops_sorted: Vec::new(),
@@ -76,25 +76,25 @@ impl Graph {
             clusters_sorted: Vec::new(),
         };
 
-        graph.rebuild_ordering();
-        graph.eliminate_dead_code();
+        sched.rebuild_ordering();
+        sched.eliminate_dead_code();
 
-        graph.rebuild_ordering();
-        graph.eliminate_accumulate_nodes();
+        sched.rebuild_ordering();
+        sched.eliminate_accumulate_nodes();
 
-        graph.rebuild_ordering();
-        graph.eliminate_common_subgraphs();
+        sched.rebuild_ordering();
+        sched.eliminate_common_subgraphs();
 
-        graph.rebuild_ordering();
-        graph.make_literals_unique();
+        sched.rebuild_ordering();
+        sched.make_literals_unique();
 
-        graph.rebuild_ordering();
-        graph.eliminate_view_nodes();
+        sched.rebuild_ordering();
+        sched.eliminate_view_nodes();
 
-        graph.rebuild_ordering();
-        graph.build_clusters();
+        sched.rebuild_ordering();
+        sched.build_clusters();
 
-        graph
+        sched
     }
 
     fn rebuild_ordering(&mut self) {

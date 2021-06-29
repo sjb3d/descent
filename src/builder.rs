@@ -5,25 +5,25 @@ use slotmap::SparseSecondaryMap;
 use std::{cell::RefCell, ops};
 
 #[derive(Clone, Copy)]
-pub struct Array<'builder> {
+pub struct Array<'g> {
     node_id: OpNodeId,
-    builder: &'builder GraphBuilder,
+    graph: &'g Graph,
 }
 
 #[derive(Clone, Copy)]
-pub struct DualArray<'builder> {
+pub struct DualArray<'g> {
     value_node_id: OpNodeId,
     grad_node_id: OpNodeId,
-    builder: &'builder GraphBuilder,
+    graph: &'g Graph,
 }
 
-impl<'builder> Array<'builder> {
-    pub fn graph(&self) -> &'builder GraphBuilder {
-        self.builder
+impl<'g> Array<'g> {
+    pub fn graph(&self) -> &'g Graph {
+        self.graph
     }
 
     fn broadcast(self, shape: &Shape) -> Self {
-        self.builder.with_state(|state| {
+        self.graph.with_state(|state| {
             let self_shape = state.ops.graph[self.node_id].shape.clone();
             if &self_shape == shape {
                 self
@@ -34,24 +34,24 @@ impl<'builder> Array<'builder> {
                         Op::View(View::broadcast(&self_shape, &shape)),
                         &[self.node_id],
                     ),
-                    builder: self.builder,
+                    graph: self.graph,
                 }
             }
         })
     }
 
     fn unary_op(self, op: UnaryOp) -> Self {
-        self.builder.with_state(|state| {
+        self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id].shape.clone();
             Array {
                 node_id: state.ops.new_node(shape, Op::Unary(op), &[self.node_id]),
-                builder: self.builder,
+                graph: self.graph,
             }
         })
     }
 
     fn binary_op(self, rhs: Array, op: BinaryOp) -> Self {
-        let op_shape = self.builder.with_state(|state| {
+        let op_shape = self.graph.with_state(|state| {
             state.ops.graph[self.node_id]
                 .shape
                 .match_with_broadcast(&state.ops.graph[rhs.node_id].shape)
@@ -60,9 +60,9 @@ impl<'builder> Array<'builder> {
         let lhs = self.broadcast(&op_shape).node_id;
         let rhs = rhs.broadcast(&op_shape).node_id;
 
-        self.builder.with_state(|state| Array {
+        self.graph.with_state(|state| Array {
             node_id: state.ops.new_node(op_shape, Op::Binary(op), &[lhs, rhs]),
-            builder: self.builder,
+            graph: self.graph,
         })
     }
 
@@ -73,7 +73,7 @@ impl<'builder> Array<'builder> {
         pass: Array,
         fail: Array,
     ) -> Self {
-        let op_shape = self.builder.with_state(|state| {
+        let op_shape = self.graph.with_state(|state| {
             state.ops.graph[self.node_id]
                 .shape
                 .match_with_broadcast(&state.ops.graph[rhs.node_id].shape)
@@ -86,36 +86,36 @@ impl<'builder> Array<'builder> {
         let pass = pass.broadcast(&op_shape).node_id;
         let fail = fail.broadcast(&op_shape).node_id;
 
-        self.builder.with_state(|state| Array {
+        self.graph.with_state(|state| Array {
             node_id: state.ops.new_node(
                 op_shape,
                 Op::CompareAndSelect(compare_mode),
                 &[lhs, rhs, pass, fail],
             ),
-            builder: self.builder,
+            graph: self.graph,
         })
     }
 
     fn reduce_op(self, reduce_op: ReduceOp, axis: Axis) -> Self {
-        self.builder.with_state(|state| {
+        self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id].shape.reduce(axis);
             Array {
                 node_id: state
                     .ops
                     .new_node(shape, Op::Reduce { reduce_op, axis }, &[self.node_id]),
-                builder: self.builder,
+                graph: self.graph,
             }
         })
     }
 
     pub fn one_hot(self, count: usize) -> Self {
-        self.builder.with_state(|state| {
+        self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id].shape.one_hot(count);
             Array {
                 node_id: state
                     .ops
                     .new_node(shape, Op::Unary(UnaryOp::OneHot), &[self.node_id]),
-                builder: self.builder,
+                graph: self.graph,
             }
         })
     }
@@ -132,7 +132,7 @@ impl<'builder> Array<'builder> {
         let coord_or_zero = self.select_eq(
             self.reduce_max(axis),
             self.coord(axis),
-            self.builder.literal(0.0),
+            self.graph.literal(0.0),
         );
         coord_or_zero.reduce_max(axis)
     }
@@ -146,7 +146,7 @@ impl<'builder> Array<'builder> {
     }
 
     pub fn coord(self, axis: isize) -> Self {
-        self.builder.coord(self.shape(), axis)
+        self.graph.coord(self.shape(), axis)
     }
 
     pub fn select_eq(self, rhs: Array, pass: Array, fail: Array) -> Self {
@@ -167,7 +167,7 @@ impl<'builder> Array<'builder> {
     }
 
     pub fn matmul(self, rhs: Array) -> Self {
-        self.builder.with_state(|state| {
+        self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape
                 .matrix_multiply(&state.ops.graph[rhs.node_id].shape);
@@ -175,13 +175,13 @@ impl<'builder> Array<'builder> {
                 node_id: state
                     .ops
                     .new_node(shape, Op::MatMul, &[self.node_id, rhs.node_id]),
-                builder: self.builder,
+                graph: self.graph,
             }
         })
     }
 
     pub fn transpose(self) -> Self {
-        self.builder.with_state(|state| {
+        self.graph.with_state(|state| {
             let input_shape = &state.ops.graph[self.node_id].shape;
             let view = input_shape.identity_view().transposed();
             let output_shape = input_shape.transposed();
@@ -189,18 +189,18 @@ impl<'builder> Array<'builder> {
                 node_id: state
                     .ops
                     .new_node(output_shape, Op::View(view), &[self.node_id]),
-                builder: self.builder,
+                graph: self.graph,
             }
         })
     }
 
     pub fn shape(&self) -> Shape {
-        self.builder
+        self.graph
             .with_state(|state| state.ops.graph[self.node_id].shape.clone())
     }
 
     pub fn accumulate(&self, src: Array) {
-        self.builder.with_state(|state| {
+        self.graph.with_state(|state| {
             assert_eq!(state.ops.graph[self.node_id].op, Op::Accumulate);
             assert_eq!(
                 state.ops.graph[self.node_id].shape,
@@ -223,96 +223,96 @@ impl<'builder> Array<'builder> {
     }
 }
 
-impl<'builder> ops::Add for Array<'builder> {
-    type Output = Array<'builder>;
+impl<'g> ops::Add for Array<'g> {
+    type Output = Array<'g>;
     fn add(self, rhs: Array) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Add)
     }
 }
-impl<'builder> ops::Add<f32> for Array<'builder> {
-    type Output = Array<'builder>;
+impl<'g> ops::Add<f32> for Array<'g> {
+    type Output = Array<'g>;
     fn add(self, rhs: f32) -> Self::Output {
-        let rhs = self.builder.literal(rhs);
+        let rhs = self.graph.literal(rhs);
         self.binary_op(rhs, BinaryOp::Add)
     }
 }
 
-impl<'builder> ops::Sub for Array<'builder> {
-    type Output = Array<'builder>;
+impl<'g> ops::Sub for Array<'g> {
+    type Output = Array<'g>;
     fn sub(self, rhs: Array) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Sub)
     }
 }
-impl<'builder> ops::Sub<Array<'builder>> for f32 {
-    type Output = Array<'builder>;
-    fn sub(self, rhs: Array<'builder>) -> Self::Output {
-        let lhs = rhs.builder.literal(self);
+impl<'g> ops::Sub<Array<'g>> for f32 {
+    type Output = Array<'g>;
+    fn sub(self, rhs: Array<'g>) -> Self::Output {
+        let lhs = rhs.graph.literal(self);
         lhs.binary_op(rhs, BinaryOp::Sub)
     }
 }
 
-impl<'builder> ops::Mul for Array<'builder> {
-    type Output = Array<'builder>;
+impl<'g> ops::Mul for Array<'g> {
+    type Output = Array<'g>;
     fn mul(self, rhs: Array) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Mul)
     }
 }
-impl<'builder> ops::Mul<f32> for Array<'builder> {
-    type Output = Array<'builder>;
+impl<'g> ops::Mul<f32> for Array<'g> {
+    type Output = Array<'g>;
     fn mul(self, rhs: f32) -> Self::Output {
-        let rhs = self.builder.literal(rhs);
+        let rhs = self.graph.literal(rhs);
         self.binary_op(rhs, BinaryOp::Mul)
     }
 }
 
-impl<'builder> ops::Div for Array<'builder> {
-    type Output = Array<'builder>;
+impl<'g> ops::Div for Array<'g> {
+    type Output = Array<'g>;
     fn div(self, rhs: Array) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Div)
     }
 }
-impl<'builder> ops::Neg for Array<'builder> {
-    type Output = Array<'builder>;
+impl<'g> ops::Neg for Array<'g> {
+    type Output = Array<'g>;
     fn neg(self) -> Self::Output {
         self.unary_op(UnaryOp::Neg)
     }
 }
 
-impl<'builder> ops::Mul<Array<'builder>> for f32 {
-    type Output = Array<'builder>;
-    fn mul(self, rhs: Array<'builder>) -> Self::Output {
-        let lhs = rhs.builder.literal(self);
+impl<'g> ops::Mul<Array<'g>> for f32 {
+    type Output = Array<'g>;
+    fn mul(self, rhs: Array<'g>) -> Self::Output {
+        let lhs = rhs.graph.literal(self);
         lhs.binary_op(rhs, BinaryOp::Mul)
     }
 }
-impl<'builder> ops::Div<f32> for Array<'builder> {
-    type Output = Array<'builder>;
+impl<'g> ops::Div<f32> for Array<'g> {
+    type Output = Array<'g>;
     fn div(self, rhs: f32) -> Self::Output {
-        let rhs = self.builder.literal(rhs);
+        let rhs = self.graph.literal(rhs);
         self.binary_op(rhs, BinaryOp::Div)
     }
 }
 
-impl<'builder> DualArray<'builder> {
-    pub fn new(value: Array<'builder>, grad: Array<'builder>) -> Self {
+impl<'g> DualArray<'g> {
+    pub fn new(value: Array<'g>, grad: Array<'g>) -> Self {
         Self {
             value_node_id: value.node_id,
             grad_node_id: grad.node_id,
-            builder: value.builder,
+            graph: value.graph,
         }
     }
 
-    pub fn value(self) -> Array<'builder> {
+    pub fn value(self) -> Array<'g> {
         Array {
             node_id: self.value_node_id,
-            builder: self.builder,
+            graph: self.graph,
         }
     }
 
-    pub fn grad(self) -> Array<'builder> {
+    pub fn grad(self) -> Array<'g> {
         Array {
             node_id: self.grad_node_id,
-            builder: self.builder,
+            graph: self.graph,
         }
     }
 
@@ -320,18 +320,18 @@ impl<'builder> DualArray<'builder> {
         self.value().shape()
     }
 
-    pub fn graph(&self) -> &'builder GraphBuilder {
-        self.builder
+    pub fn graph(&self) -> &'g Graph {
+        self.graph
     }
 
     pub fn leaky_relu(self, leakiness: f32) -> Self {
         let a = self.value();
         let da = self.grad();
 
-        let zero = self.builder.literal(0.0);
+        let zero = self.graph.literal(0.0);
         let b = a.select_gt(zero, a, a * leakiness);
 
-        let db = self.builder.accumulator(b.shape());
+        let db = self.graph.accumulator(b.shape());
         da.accumulate(a.select_gt(zero, db, db * leakiness));
 
         Self::new(b, db)
@@ -345,7 +345,7 @@ impl<'builder> DualArray<'builder> {
 
         let c = a.matmul(b);
 
-        let dc = self.builder.accumulator(c.shape());
+        let dc = self.graph.accumulator(c.shape());
         da.accumulate(dc.matmul(b.transpose()));
         db.accumulate(a.transpose().matmul(dc));
 
@@ -353,16 +353,16 @@ impl<'builder> DualArray<'builder> {
     }
 }
 
-impl<'builder> ops::Add for DualArray<'builder> {
-    type Output = DualArray<'builder>;
-    fn add(self, rhs: DualArray<'builder>) -> Self::Output {
+impl<'g> ops::Add for DualArray<'g> {
+    type Output = DualArray<'g>;
+    fn add(self, rhs: DualArray<'g>) -> Self::Output {
         let a = self.value();
         let da = self.grad();
         let b = rhs.value();
         let db = rhs.grad();
 
         let c = a + b;
-        let dc = self.builder.accumulator(c.shape());
+        let dc = self.graph.accumulator(c.shape());
 
         da.accumulate(dc.reduce_onto_per_element(&a.shape()));
         db.accumulate(dc.reduce_onto_per_element(&b.shape()));
@@ -371,16 +371,16 @@ impl<'builder> ops::Add for DualArray<'builder> {
     }
 }
 
-struct OpGraphBuilder {
+struct OpGraphState {
     graph: OpGraph,
-    colour: usize,
+    next_colour: usize,
 }
 
-impl OpGraphBuilder {
+impl OpGraphState {
     fn new_node(&mut self, shape: impl Into<Shape>, op: Op, inputs: &[OpNodeId]) -> OpNodeId {
         let shape = shape.into();
         let node_id = self.graph.add_node(OpNode {
-            colour: self.colour,
+            colour: self.next_colour,
             shape,
             op,
             cluster_id: None,
@@ -400,29 +400,29 @@ impl OpGraphBuilder {
 }
 
 #[derive(Clone, Copy)]
-struct GraphBuilderInput {
+struct GraphInput {
     value_node_id: OpNodeId,
     grad_node_id: Option<OpNodeId>,
 }
 
-struct GraphBuilderState {
-    ops: OpGraphBuilder,
+struct GraphState {
+    ops: OpGraphState,
     variables: SharedVariables,
-    inputs: SparseSecondaryMap<VariableId, GraphBuilderInput>,
+    inputs: SparseSecondaryMap<VariableId, GraphInput>,
     outputs: SparseSecondaryMap<VariableId, OpNodeId>,
 }
 
-pub struct GraphBuilder {
-    state: RefCell<GraphBuilderState>,
+pub struct Graph {
+    state: RefCell<GraphState>,
 }
 
-impl GraphBuilder {
+impl Graph {
     pub(crate) fn new(variables: SharedVariables) -> Self {
         Self {
-            state: RefCell::new(GraphBuilderState {
-                ops: OpGraphBuilder {
+            state: RefCell::new(GraphState {
+                ops: OpGraphState {
                     graph: Default::default(),
-                    colour: 0,
+                    next_colour: 0,
                 },
                 variables,
                 inputs: SparseSecondaryMap::new(),
@@ -433,7 +433,7 @@ impl GraphBuilder {
 
     fn with_state<F, T>(&self, f: F) -> T
     where
-        F: FnOnce(&mut GraphBuilderState) -> T,
+        F: FnOnce(&mut GraphState) -> T,
     {
         let mut data = self.state.borrow_mut();
         f(&mut data)
@@ -444,7 +444,7 @@ impl GraphBuilder {
             node_id: state
                 .ops
                 .new_node([1], Op::Literal(NotNan::new(value).unwrap()), &[]),
-            builder: self,
+            graph: self,
         })
     }
 
@@ -456,12 +456,12 @@ impl GraphBuilder {
                 node_id: state
                     .ops
                     .new_node(shape, Op::BuiltIn(BuiltInOp::Coord { axis }), &[]),
-                builder: self,
+                graph: self,
             }
         })
     }
 
-    fn input(&self, variable: &Variable) -> GraphBuilderInput {
+    fn input(&self, variable: &Variable) -> GraphInput {
         self.with_state(|state| {
             let variable_id = variable.checked_id(&state.variables);
             let shape = state
@@ -476,7 +476,7 @@ impl GraphBuilder {
                 .inputs
                 .entry(variable_id)
                 .unwrap()
-                .or_insert_with(|| GraphBuilderInput {
+                .or_insert_with(|| GraphInput {
                     value_node_id: ops.new_node(shape.clone(), Op::Input { variable_id }, &[]),
                     grad_node_id: Some(ops.new_node(shape, Op::Accumulate, &[])),
                 })
@@ -488,7 +488,7 @@ impl GraphBuilder {
         DualArray {
             value_node_id: input.value_node_id,
             grad_node_id: input.grad_node_id.unwrap(),
-            builder: self,
+            graph: self,
         }
     }
 
@@ -496,7 +496,7 @@ impl GraphBuilder {
         let input = self.input(variable);
         Array {
             node_id: input.value_node_id,
-            builder: self,
+            graph: self,
         }
     }
 
@@ -527,7 +527,7 @@ impl GraphBuilder {
             // ensure that if we read this variable again we read the latest value
             state.inputs.insert(
                 variable_id,
-                GraphBuilderInput {
+                GraphInput {
                     value_node_id: rhs.node_id,
                     grad_node_id: None,
                 },
@@ -535,11 +535,11 @@ impl GraphBuilder {
         });
     }
 
-    pub fn update_variable<'builder>(
-        &'builder self,
+    pub fn update_variable<'g>(
+        &'g self,
         variable: &Variable,
-        f: impl FnOnce(Array<'builder>) -> Array<'builder>,
-    ) -> Array<'builder> {
+        f: impl FnOnce(Array<'g>) -> Array<'g>,
+    ) -> Array<'g> {
         let result = f(self.read_variable(variable));
         self.write_variable(variable, result);
         result
@@ -548,19 +548,19 @@ impl GraphBuilder {
     pub fn accumulator(&self, shape: impl Into<Shape>) -> Array {
         self.with_state(|state| Array {
             node_id: state.ops.new_node(shape, Op::Accumulate, &[]),
-            builder: self,
+            graph: self,
         })
     }
 
     pub fn next_colour(&self) {
         self.with_state(|state| {
-            state.ops.colour += 1;
+            state.ops.next_colour += 1;
         })
     }
 
-    pub fn build(self) -> Graph {
+    pub fn build_schedule(self) -> Schedule {
         self.with_state(|state| {
-            Graph::new(
+            Schedule::new(
                 SharedVariables::clone(&state.variables),
                 state.ops.graph.clone(),
             )
