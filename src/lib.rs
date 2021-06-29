@@ -8,6 +8,7 @@ mod common {
     pub(crate) use crate::{kernel::*, op::*, prelude::*};
 }
 mod kernel;
+pub mod layer;
 mod op;
 pub mod schedule;
 pub mod shape;

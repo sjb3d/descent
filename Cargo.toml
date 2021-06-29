@@ -16,8 +16,8 @@ shaderc = "0.7"
 slotmap = "1.0"
 trait-set = "0.2"
 ordered-float = "2.0"
+bytemuck = "1.5"
 
 [dev-dependencies]
 rand_chacha = "0.3"
-bytemuck = "1.5"
 flate2 = "1.0"

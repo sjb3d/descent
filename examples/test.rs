@@ -1,10 +1,6 @@
-use descent::prelude::*;
+use descent::{layer::*, prelude::*};
 use flate2::bufread::GzDecoder;
-use rand::{
-    distributions::{Distribution, Uniform},
-    prelude::SliceRandom,
-    Rng, SeedableRng,
-};
+use rand::{prelude::SliceRandom, SeedableRng};
 use std::{
     convert::TryInto,
     fs::File,
@@ -79,18 +75,6 @@ fn unpack_labels(
     w.write_all(bytemuck::cast_slice(&labels))
 }
 
-fn write_xavier_uniform(env: &mut Environment, variable: &Variable, rng: &mut impl Rng) {
-    let shape = variable.shape();
-
-    let mut writer = env.writer(&variable);
-    let a = (6.0 / (shape[0] as f32)).sqrt();
-    let dist = Uniform::new(-a, a);
-    for _ in 0..shape.element_count() {
-        let x: f32 = dist.sample(rng);
-        writer.write_all(bytemuck::bytes_of(&x)).unwrap();
-    }
-}
-
 fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: Array<'g>) -> Array<'g> {
     let (z, dz) = (z.value(), z.grad());
 
@@ -106,6 +90,17 @@ fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: Array<'g>) -> Array<'g> {
     dz.accumulate(p - h);
 
     loss
+}
+
+fn softmax_cross_entropy_accuracy<'g>(z: DualArray<'g>, y: Array<'g>) -> Array<'g> {
+    let graph = z.graph();
+    let z = z.value();
+
+    // index of most likely choice
+    let pred = z.argmax(-1);
+
+    // set to 1 when correct, 0 when incorrect
+    pred.select_eq(y, graph.literal(1.0), graph.literal(0.0))
 }
 
 fn stochastic_gradient_descent_step(
@@ -156,91 +151,6 @@ fn adam_step(
         let v = graph.update_variable(&v_var, |v| v * beta2 + g * g * ((1.0 - beta2) * rcp * rcp));
 
         graph.update_variable(var, |theta| theta - alpha * m / (v.sqrt() + epsilon));
-    }
-}
-
-trait Layer {
-    #[must_use]
-    fn forward_pass<'g>(&self, graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g>;
-
-    fn collect_parameters(&self, _parameters: &mut Vec<Variable>) {}
-}
-
-struct Linear {
-    w: Variable,
-    b: Variable, // TODO: optional bias?
-}
-
-impl Linear {
-    fn new(env: &mut Environment, input: usize, output: usize, rng: &mut impl Rng) -> Self {
-        let w = env.variable([input, output], "w");
-        let b = env.variable([output], "b");
-
-        write_xavier_uniform(env, &w, rng);
-        env.writer(&b).zero_fill();
-
-        Self { w, b }
-    }
-}
-
-impl Layer for Linear {
-    fn forward_pass<'g>(&self, graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g> {
-        let w = graph.parameter(&self.w);
-        let b = graph.parameter(&self.b);
-        input.matmul(w) + b
-    }
-
-    fn collect_parameters(&self, parameters: &mut Vec<Variable>) {
-        parameters.push(self.w.clone());
-        parameters.push(self.b.clone());
-    }
-}
-
-struct LeakyRelu {
-    amount: f32,
-}
-
-impl LeakyRelu {
-    fn new(amount: f32) -> Self {
-        Self { amount }
-    }
-}
-
-impl Layer for LeakyRelu {
-    fn forward_pass<'g>(&self, _graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g> {
-        input.leaky_relu(self.amount)
-    }
-}
-
-struct LayeredNetwork {
-    layers: Vec<Box<dyn Layer>>,
-}
-
-impl LayeredNetwork {
-    fn new() -> Self {
-        Self { layers: Vec::new() }
-    }
-
-    fn add_layer(&mut self, layer: impl Layer + 'static) {
-        self.layers.push(Box::new(layer));
-    }
-}
-
-impl Layer for LayeredNetwork {
-    fn forward_pass<'g>(&self, graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g> {
-        let mut x = input;
-        for layer in self.layers.iter() {
-            graph.next_colour();
-            x = layer.forward_pass(graph, x);
-        }
-        graph.next_colour();
-        x
-    }
-
-    fn collect_parameters(&self, parameters: &mut Vec<Variable>) {
-        for layer in self.layers.iter() {
-            layer.collect_parameters(parameters);
-        }
     }
 }
 
@@ -300,8 +210,7 @@ fn main() {
         graph.update_variable(&loss_sum_var, |loss_sum| loss_sum + loss.reduce_sum(0));
 
         // accumulate accuracy (into variable)
-        let pred = x.value().argmax(-1);
-        let accuracy = pred.select_eq(y, graph.literal(1.0), graph.literal(0.0));
+        let accuracy = softmax_cross_entropy_accuracy(x, y);
         graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
             accuracy_sum + accuracy.reduce_sum(0)
         });
