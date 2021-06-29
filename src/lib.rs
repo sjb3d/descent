@@ -1,8 +1,8 @@
-pub mod builder;
 mod device;
 pub mod environment;
+pub mod graph;
 pub mod prelude {
-    pub use crate::{builder::*, environment::*, schedule::*, shape::*, variable::*};
+    pub use crate::{environment::*, graph::*, schedule::*, shape::*, variable::*};
 }
 mod common {
     pub(crate) use crate::{kernel::*, op::*, prelude::*};
