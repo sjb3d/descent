@@ -10,12 +10,6 @@ use std::{
     slice,
 };
 
-slotmap::new_key_type! {
-    pub(crate) struct VariableId;
-}
-
-pub(crate) type SharedVariables = Rc<RefCell<SlotMap<VariableId, VariableStorage>>>;
-
 pub struct VariableWriter<'a>(StagingWriter<'a>);
 
 impl<'a> VariableWriter<'a> {
@@ -50,35 +44,6 @@ impl<'a> io::BufRead for VariableReader<'a> {
 
     fn consume(&mut self, amt: usize) {
         self.0.advance(amt);
-    }
-}
-
-pub(crate) struct VariableStorage {
-    pub(crate) shape: Shape,
-    pub(crate) name: String,
-    pub(crate) buffer_id: Option<BufferId>,
-}
-
-#[derive(Clone)]
-pub struct Variable {
-    id: VariableId,
-    owner: SharedVariables,
-}
-
-impl Variable {
-    pub(crate) fn checked_id(&self, store: &SharedVariables) -> VariableId {
-        if !SharedVariables::ptr_eq(&self.owner, store) {
-            panic!("variable does not come from the same environment");
-        }
-        self.id
-    }
-
-    pub fn shape(&self) -> Shape {
-        self.owner.borrow().get(self.id).unwrap().shape.clone()
-    }
-
-    pub fn name(&self) -> String {
-        self.owner.borrow().get(self.id).unwrap().name.clone()
     }
 }
 
@@ -200,10 +165,7 @@ impl Environment {
             name,
             buffer_id: None,
         });
-        Variable {
-            id: variable_id,
-            owner: SharedVariables::clone(&self.variables),
-        }
+        Variable::new(variable_id, &self.variables)
     }
 
     pub fn writer(&mut self, variable: &Variable) -> VariableWriter {
