@@ -1,6 +1,6 @@
 use crate::common::*;
 use ordered_float::NotNan;
-use petgraph::Incoming;
+use petgraph::prelude::*;
 use slotmap::SparseSecondaryMap;
 use std::{cell::RefCell, ops};
 
@@ -265,6 +265,32 @@ impl<'g> Array<'g> {
             );
         })
     }
+
+    fn set_loss_grad(&self) {
+        let one = self.graph.literal(1.0);
+        self.graph.with_state(|state| {
+            assert_eq!(state.ops.graph[self.node_id].op, Op::Accumulate);
+            assert_eq!(
+                state
+                    .ops
+                    .graph
+                    .edges_directed(self.node_id, Incoming)
+                    .count(),
+                0
+            );
+            let one_shape = Shape::from([1]);
+            let grad_shape = state.ops.graph[self.node_id].shape.clone();
+            state.ops.graph[self.node_id].op = Op::View(View::broadcast(&one_shape, &grad_shape));
+            state.ops.graph.add_edge(
+                one.node_id,
+                self.node_id,
+                OpEdge {
+                    arg: 0,
+                    view: one_shape.identity_view(),
+                },
+            );
+        })
+    }
 }
 
 impl<'g, T> ops::Add<T> for Array<'g>
@@ -396,6 +422,11 @@ impl<'g> DualArray<'g> {
         db.accumulate(a.transpose().matmul(dc));
 
         Self::new(c, dc)
+    }
+
+    pub fn set_loss(self) -> Array<'g> {
+        self.grad().set_loss_grad();
+        self.value()
     }
 }
 

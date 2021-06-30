@@ -75,7 +75,7 @@ fn unpack_labels(
     w.write_all(bytemuck::cast_slice(&labels))
 }
 
-fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> Array<'g> {
+fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> DualArray<'g> {
     let (z, dz) = (z.value(), z.grad());
     let y = y.into_array(z.graph());
 
@@ -86,11 +86,12 @@ fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> Ar
     // cross entropy loss
     let h = y.one_hot(10);
     let loss = -(h * p.log()).reduce_sum(-1); // TODO: pick element of p using value of y
+    let dloss = loss.graph().accumulator(loss.shape());
 
     // backprop (softmax with cross entropy directly)
-    dz.accumulate(p - h);
+    dz.accumulate((p - h) * dloss);
 
-    loss
+    DualArray::new(loss, dloss)
 }
 
 fn softmax_cross_entropy_accuracy<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> Array<'g> {
@@ -176,15 +177,14 @@ fn main() {
     let train_graph = {
         let graph = env.graph();
 
-        // emit all the layers of the network
+        // emit the graph for the network
         let x = network.forward_pass(graph.parameter(&x_var));
+        let loss = softmax_cross_entropy_loss(x, &y_var);
 
-        // loss function
-        let _loss = softmax_cross_entropy_loss(x, &y_var);
-
-        // update parameters from gradients
+        // train using gradient of the loss
         let mut parameters = Vec::new();
         network.collect_parameters(&mut parameters);
+        loss.set_loss();
         if false {
             stochastic_gradient_descent_step(&graph, &parameters, m, 0.1);
         } else {
@@ -199,12 +199,14 @@ fn main() {
     let test_graph = {
         let graph = env.graph();
 
-        // emit all the layers of the network
+        // emit the graph for the network
         let x = network.forward_pass(graph.parameter(&x_var));
-
-        // accumulate loss  (into variable)
         let loss = softmax_cross_entropy_loss(x, &y_var);
-        graph.update_variable(&loss_sum_var, |loss_sum| loss_sum + loss.reduce_sum(0));
+
+        // accumulate loss (into variable)
+        graph.update_variable(&loss_sum_var, |loss_sum| {
+            loss_sum + loss.value().reduce_sum(0)
+        });
 
         // accumulate accuracy (into variable)
         let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
