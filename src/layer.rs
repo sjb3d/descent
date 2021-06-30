@@ -19,7 +19,7 @@ fn write_xavier_uniform(env: &mut Environment, variable: &Variable, rng: &mut im
 
 pub trait Layer {
     #[must_use]
-    fn forward_pass<'g>(&self, graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g>;
+    fn forward_pass<'g>(&self, input: DualArray<'g>) -> DualArray<'g>;
 
     fn collect_parameters(&self, _parameters: &mut Vec<Variable>) {}
 }
@@ -42,9 +42,9 @@ impl Linear {
 }
 
 impl Layer for Linear {
-    fn forward_pass<'g>(&self, graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g> {
-        let w = graph.parameter(&self.w);
-        let b = graph.parameter(&self.b);
+    fn forward_pass<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+        let w = input.graph().parameter(&self.w);
+        let b = input.graph().parameter(&self.b);
         input.matmul(w) + b
     }
 
@@ -65,7 +65,7 @@ impl LeakyRelu {
 }
 
 impl Layer for LeakyRelu {
-    fn forward_pass<'g>(&self, _graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g> {
+    fn forward_pass<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
         input.leaky_relu(self.amount)
     }
 }
@@ -91,13 +91,13 @@ impl Default for LayeredNetwork {
 }
 
 impl Layer for LayeredNetwork {
-    fn forward_pass<'g>(&self, graph: &'g Graph, input: DualArray<'g>) -> DualArray<'g> {
+    fn forward_pass<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
         let mut x = input;
         for layer in self.layers.iter() {
-            graph.next_colour();
-            x = layer.forward_pass(graph, x);
+            x.graph().next_colour();
+            x = layer.forward_pass(x);
         }
-        graph.next_colour();
+        x.graph().next_colour();
         x
     }
 

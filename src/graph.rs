@@ -17,6 +17,39 @@ pub struct DualArray<'g> {
     graph: &'g Graph,
 }
 
+pub trait IntoArray<'g> {
+    fn into_array(self, graph: &'g Graph) -> Array<'g>;
+}
+impl<'g> IntoArray<'g> for Array<'g> {
+    fn into_array(self, _graph: &'g Graph) -> Array<'g> {
+        self
+    }
+}
+impl<'g> IntoArray<'g> for f32 {
+    fn into_array(self, graph: &'g Graph) -> Array<'g> {
+        graph.literal(self)
+    }
+}
+impl<'g> IntoArray<'g> for &Variable {
+    fn into_array(self, graph: &'g Graph) -> Array<'g> {
+        graph.read_variable(self)
+    }
+}
+
+pub trait IntoDualArray<'g> {
+    fn into_dual_array(self, graph: &'g Graph) -> DualArray<'g>;
+}
+impl<'g> IntoDualArray<'g> for DualArray<'g> {
+    fn into_dual_array(self, _graph: &'g Graph) -> DualArray<'g> {
+        self
+    }
+}
+impl<'g> IntoDualArray<'g> for &Variable {
+    fn into_dual_array(self, graph: &'g Graph) -> DualArray<'g> {
+        graph.parameter(self)
+    }
+}
+
 impl<'g> Array<'g> {
     pub fn graph(&self) -> &'g Graph {
         self.graph
@@ -50,7 +83,8 @@ impl<'g> Array<'g> {
         })
     }
 
-    fn binary_op(self, rhs: Array, op: BinaryOp) -> Self {
+    fn binary_op(self, rhs: impl IntoArray<'g>, op: BinaryOp) -> Self {
+        let rhs = rhs.into_array(self.graph);
         let op_shape = self.graph.with_state(|state| {
             state.ops.graph[self.node_id]
                 .shape
@@ -69,10 +103,14 @@ impl<'g> Array<'g> {
     fn compare_and_select(
         self,
         compare_mode: CompareMode,
-        rhs: Array,
-        pass: Array,
-        fail: Array,
+        rhs: impl IntoArray<'g>,
+        pass: impl IntoArray<'g>,
+        fail: impl IntoArray<'g>,
     ) -> Self {
+        let rhs = rhs.into_array(self.graph);
+        let pass = pass.into_array(self.graph);
+        let fail = fail.into_array(self.graph);
+
         let op_shape = self.graph.with_state(|state| {
             state.ops.graph[self.node_id]
                 .shape
@@ -129,11 +167,7 @@ impl<'g> Array<'g> {
 
     pub fn argmax(self, axis: isize) -> Self {
         // implement with reduce_max for now
-        let coord_or_zero = self.select_eq(
-            self.reduce_max(axis),
-            self.coord(axis),
-            self.graph.literal(0.0),
-        );
+        let coord_or_zero = self.select_eq(self.reduce_max(axis), self.coord(axis), 0.0);
         coord_or_zero.reduce_max(axis)
     }
 
@@ -149,10 +183,20 @@ impl<'g> Array<'g> {
         self.graph.coord(self.shape(), axis)
     }
 
-    pub fn select_eq(self, rhs: Array, pass: Array, fail: Array) -> Self {
+    pub fn select_eq(
+        self,
+        rhs: impl IntoArray<'g>,
+        pass: impl IntoArray<'g>,
+        fail: impl IntoArray<'g>,
+    ) -> Self {
         self.compare_and_select(CompareMode::Eq, rhs, pass, fail)
     }
-    pub fn select_gt(self, rhs: Array, pass: Array, fail: Array) -> Self {
+    pub fn select_gt(
+        self,
+        rhs: impl IntoArray<'g>,
+        pass: impl IntoArray<'g>,
+        fail: impl IntoArray<'g>,
+    ) -> Self {
         self.compare_and_select(CompareMode::Gt, rhs, pass, fail)
     }
 
@@ -223,73 +267,74 @@ impl<'g> Array<'g> {
     }
 }
 
-impl<'g> ops::Add for Array<'g> {
+impl<'g, T> ops::Add<T> for Array<'g>
+where
+    T: IntoArray<'g>,
+{
     type Output = Array<'g>;
-    fn add(self, rhs: Array) -> Self::Output {
+    fn add(self, rhs: T) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Add)
     }
 }
-impl<'g> ops::Add<f32> for Array<'g> {
+impl<'g> ops::Add<Array<'g>> for f32 {
     type Output = Array<'g>;
-    fn add(self, rhs: f32) -> Self::Output {
-        let rhs = self.graph.literal(rhs);
-        self.binary_op(rhs, BinaryOp::Add)
+    fn add(self, rhs: Array<'g>) -> Self::Output {
+        self.into_array(rhs.graph).binary_op(rhs, BinaryOp::Add)
     }
 }
 
-impl<'g> ops::Sub for Array<'g> {
+impl<'g, T> ops::Sub<T> for Array<'g>
+where
+    T: IntoArray<'g>,
+{
     type Output = Array<'g>;
-    fn sub(self, rhs: Array) -> Self::Output {
+    fn sub(self, rhs: T) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Sub)
     }
 }
 impl<'g> ops::Sub<Array<'g>> for f32 {
     type Output = Array<'g>;
     fn sub(self, rhs: Array<'g>) -> Self::Output {
-        let lhs = rhs.graph.literal(self);
-        lhs.binary_op(rhs, BinaryOp::Sub)
+        self.into_array(rhs.graph).binary_op(rhs, BinaryOp::Sub)
     }
 }
 
-impl<'g> ops::Mul for Array<'g> {
+impl<'g, T> ops::Mul<T> for Array<'g>
+where
+    T: IntoArray<'g>,
+{
     type Output = Array<'g>;
-    fn mul(self, rhs: Array) -> Self::Output {
+    fn mul(self, rhs: T) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Mul)
     }
 }
-impl<'g> ops::Mul<f32> for Array<'g> {
+impl<'g> ops::Mul<Array<'g>> for f32 {
     type Output = Array<'g>;
-    fn mul(self, rhs: f32) -> Self::Output {
-        let rhs = self.graph.literal(rhs);
-        self.binary_op(rhs, BinaryOp::Mul)
+    fn mul(self, rhs: Array<'g>) -> Self::Output {
+        self.into_array(rhs.graph).binary_op(rhs, BinaryOp::Mul)
     }
 }
 
-impl<'g> ops::Div for Array<'g> {
+impl<'g, T> ops::Div<T> for Array<'g>
+where
+    T: IntoArray<'g>,
+{
     type Output = Array<'g>;
-    fn div(self, rhs: Array) -> Self::Output {
+    fn div(self, rhs: T) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Div)
     }
 }
+impl<'g> ops::Div<Array<'g>> for f32 {
+    type Output = Array<'g>;
+    fn div(self, rhs: Array<'g>) -> Self::Output {
+        self.into_array(rhs.graph).binary_op(rhs, BinaryOp::Div)
+    }
+}
+
 impl<'g> ops::Neg for Array<'g> {
     type Output = Array<'g>;
     fn neg(self) -> Self::Output {
         self.unary_op(UnaryOp::Neg)
-    }
-}
-
-impl<'g> ops::Mul<Array<'g>> for f32 {
-    type Output = Array<'g>;
-    fn mul(self, rhs: Array<'g>) -> Self::Output {
-        let lhs = rhs.graph.literal(self);
-        lhs.binary_op(rhs, BinaryOp::Mul)
-    }
-}
-impl<'g> ops::Div<f32> for Array<'g> {
-    type Output = Array<'g>;
-    fn div(self, rhs: f32) -> Self::Output {
-        let rhs = self.graph.literal(rhs);
-        self.binary_op(rhs, BinaryOp::Div)
     }
 }
 
@@ -328,16 +373,17 @@ impl<'g> DualArray<'g> {
         let a = self.value();
         let da = self.grad();
 
-        let zero = self.graph.literal(0.0);
-        let b = a.select_gt(zero, a, a * leakiness);
+        let b = a.select_gt(0.0, a, a * leakiness);
 
         let db = self.graph.accumulator(b.shape());
-        da.accumulate(a.select_gt(zero, db, db * leakiness));
+        da.accumulate(a.select_gt(0.0, db, db * leakiness));
 
         Self::new(b, db)
     }
 
-    pub fn matmul(self, rhs: DualArray) -> Self {
+    pub fn matmul(self, rhs: impl IntoDualArray<'g>) -> Self {
+        let rhs = rhs.into_dual_array(self.graph);
+
         let a = self.value();
         let da = self.grad();
         let b = rhs.value();
@@ -353,9 +399,14 @@ impl<'g> DualArray<'g> {
     }
 }
 
-impl<'g> ops::Add for DualArray<'g> {
+impl<'g, T> ops::Add<T> for DualArray<'g>
+where
+    T: IntoDualArray<'g>,
+{
     type Output = DualArray<'g>;
-    fn add(self, rhs: DualArray<'g>) -> Self::Output {
+    fn add(self, rhs: T) -> Self::Output {
+        let rhs = rhs.into_dual_array(self.graph);
+
         let a = self.value();
         let da = self.grad();
         let b = rhs.value();

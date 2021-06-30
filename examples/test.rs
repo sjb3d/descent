@@ -75,8 +75,9 @@ fn unpack_labels(
     w.write_all(bytemuck::cast_slice(&labels))
 }
 
-fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: Array<'g>) -> Array<'g> {
+fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> Array<'g> {
     let (z, dz) = (z.value(), z.grad());
+    let y = y.into_array(z.graph());
 
     // softmax
     let t = (z - z.reduce_max(-1)).exp();
@@ -92,15 +93,15 @@ fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: Array<'g>) -> Array<'g> {
     loss
 }
 
-fn softmax_cross_entropy_accuracy<'g>(z: DualArray<'g>, y: Array<'g>) -> Array<'g> {
-    let graph = z.graph();
+fn softmax_cross_entropy_accuracy<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> Array<'g> {
     let z = z.value();
+    let y = y.into_array(z.graph());
 
     // index of most likely choice
     let pred = z.argmax(-1);
 
     // set to 1 when correct, 0 when incorrect
-    pred.select_eq(y, graph.literal(1.0), graph.literal(0.0))
+    pred.select_eq(y, 1.0, 0.0)
 }
 
 fn stochastic_gradient_descent_step(
@@ -134,8 +135,8 @@ fn adam_step(
     env.writer(&t_var).zero_fill();
 
     let t = graph.update_variable(&t_var, |t| t + 1.0);
-    let alpha = learning_rate * (1.0 - (graph.literal(beta2).log() * t).exp()).sqrt()
-        / (1.0 - (graph.literal(beta1).log() * t).exp());
+    let alpha =
+        learning_rate * (1.0 - (beta2.ln() * t).exp()).sqrt() / (1.0 - (beta1.ln() * t).exp());
 
     for var in variables.iter() {
         let shape = var.shape();
@@ -174,14 +175,12 @@ fn main() {
 
     let train_graph = {
         let graph = env.graph();
-        let x = graph.parameter(&x_var);
-        let y = graph.read_variable(&y_var);
 
         // emit all the layers of the network
-        let x = network.forward_pass(&graph, x);
+        let x = network.forward_pass(graph.parameter(&x_var));
 
         // loss function
-        let _loss = softmax_cross_entropy_loss(x, y);
+        let _loss = softmax_cross_entropy_loss(x, &y_var);
 
         // update parameters from gradients
         let mut parameters = Vec::new();
@@ -199,18 +198,16 @@ fn main() {
 
     let test_graph = {
         let graph = env.graph();
-        let x = graph.parameter(&x_var);
-        let y = graph.read_variable(&y_var);
 
         // emit all the layers of the network
-        let x = network.forward_pass(&graph, x);
+        let x = network.forward_pass(graph.parameter(&x_var));
 
         // accumulate loss  (into variable)
-        let loss = softmax_cross_entropy_loss(x, y);
+        let loss = softmax_cross_entropy_loss(x, &y_var);
         graph.update_variable(&loss_sum_var, |loss_sum| loss_sum + loss.reduce_sum(0));
 
         // accumulate accuracy (into variable)
-        let accuracy = softmax_cross_entropy_accuracy(x, y);
+        let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
         graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
             accuracy_sum + accuracy.reduce_sum(0)
         });

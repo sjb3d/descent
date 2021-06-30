@@ -533,10 +533,9 @@ impl Schedule {
                     )?;
                 } else {
                     let mut hasher = DefaultHasher::new();
-                    for _ in 0..4 {
-                        node.colour.hash(&mut hasher);
-                    }
-                    let col = ((hasher.finish() >> 40) as u32) | 0x404040;
+                    node.colour.hash(&mut hasher);
+                    let hash = hasher.finish();
+                    let col = ((((hash >> 48) ^ (hash >> 24) ^ hash) as u32) & 0xffffff) | 0x404040;
                     write!(
                         w,
                         "n{} [shape=box,style=filled,color=\"#{:06X}\",label=\"{:?}\\n",
