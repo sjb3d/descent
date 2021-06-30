@@ -1,5 +1,5 @@
 use arrayvec::ArrayVec;
-use std::{fmt, iter, mem, ops, convert::TryInto};
+use std::{convert::TryInto, fmt, iter, mem, ops};
 
 pub(crate) const MAX_DIM: usize = 4;
 pub(crate) type ShapeVec = ArrayVec<usize, MAX_DIM>;
@@ -93,8 +93,8 @@ impl Shape {
         let [n, in_c, in_h, in_w]: [usize; 4] = self.0.as_slice().try_into().unwrap();
         let [out_c, fc, fh, fw]: [usize; 4] = filters.0.as_slice().try_into().unwrap();
         assert_eq!(in_c, fc);
-        let out_w = 1 + in_w + 2*pad - fw;
-        let out_h = 1 + in_h + 2*pad - fh;
+        let out_w = 1 + in_w + 2 * pad - fw;
+        let out_h = 1 + in_h + 2 * pad - fh;
         Shape::from([n, out_c, out_h, out_w])
     }
 
@@ -105,10 +105,6 @@ impl Shape {
 
     pub(crate) fn identity_view(&self) -> View {
         View::identity(self)
-    }
-
-    pub(crate) fn identity_indexer(&self) -> ViewIndexer {
-        ViewIndexer::new(self, &View::identity(self))
     }
 
     pub(crate) fn axis(&self, index: isize) -> Axis {
@@ -187,106 +183,135 @@ impl<const N: usize> From<[usize; N]> for Shape {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct AxisRemap {
-    step: isize,
-    axis: Axis,
+struct ViewSource {
+    stride: usize,
+    offset: usize,
 }
 
-impl AxisRemap {
-    fn identity(axis: Axis, length: usize) -> Option<Self> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ViewMapping {
+    Source { axis: Axis, step: isize },
+    Broadcast,
+}
+
+impl ViewMapping {
+    fn identity(axis: Axis, length: usize) -> Self {
         if length > 1 {
-            Some(Self { step: 1, axis })
+            Self::Source { axis, step: 1 }
         } else {
-            None
+            Self::Broadcast
         }
     }
 
-    fn broadcast() -> Option<Self> {
-        None
+    fn stepped(&self, step_multiplier: isize) -> Self {
+        match *self {
+            Self::Source { axis, step } => Self::Source {
+                axis,
+                step: step * step_multiplier,
+            },
+            Self::Broadcast => Self::Broadcast,
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct View {
-    offsets: ArrayVec<isize, MAX_DIM>,
-    remap: ArrayVec<Option<AxisRemap>, MAX_DIM>,
-    pub(crate) shape: Shape,
+    input_shape: Shape,
+    input_offsets: ArrayVec<isize, MAX_DIM>,
+    output_mapping: ArrayVec<ViewMapping, MAX_DIM>,
+    pub(crate) output_shape: Shape,
 }
 
 impl View {
     fn identity(shape: &Shape) -> Self {
         Self {
-            offsets: iter::repeat(0).take(shape.len()).collect(),
-            remap: shape
+            input_shape: shape.clone(),
+            input_offsets: iter::repeat(0).take(shape.len()).collect(),
+            output_mapping: shape
                 .iter()
                 .copied()
                 .enumerate()
-                .map(|(index, shape)| AxisRemap::identity(Axis::from_index(index), shape))
+                .map(|(index, shape)| ViewMapping::identity(Axis::from_index(index), shape))
                 .collect(),
-            shape: shape.clone(),
+            output_shape: shape.clone(),
         }
     }
 
     pub(crate) fn is_identity(&self) -> bool {
-        Self::identity(&self.shape).eq(self)
+        Self::identity(&self.output_shape).eq(self)
     }
 
     pub(crate) fn through(&self, view: &View) -> Self {
-        assert_eq!(self.remap.len(), view.offsets.len());
-        let mut offsets = self.offsets.clone();
-        for (remap, offset) in self.remap.iter().copied().zip(view.offsets.iter().copied()) {
-            if let Some(remap) = remap {
-                offsets[remap.axis.index()] += remap.step * offset;
+        assert_eq!(&self.output_shape, &view.input_shape);
+        let mut input_offsets = self.input_offsets.clone();
+        for (mapping, offset) in self
+            .output_mapping
+            .iter()
+            .copied()
+            .zip(view.input_offsets.iter().copied())
+        {
+            match mapping {
+                ViewMapping::Source { axis, step } => input_offsets[axis.index()] += step * offset,
+                ViewMapping::Broadcast => {}
             }
         }
-        let remap = view
-            .remap
+        let output_mapping = view
+            .output_mapping
             .iter()
-            .map(|outer| {
-                outer.and_then(|outer| {
-                    self.remap[outer.axis.index()].map(|inner| AxisRemap {
-                        step: outer.step * inner.step,
-                        axis: inner.axis,
-                    })
-                })
+            .copied()
+            .map(|outer| match outer {
+                ViewMapping::Source { axis, step } => {
+                    self.output_mapping[axis.index()].stepped(step)
+                }
+                ViewMapping::Broadcast => ViewMapping::Broadcast,
             })
             .collect();
-        let shape = view.shape.clone();
         Self {
-            offsets,
-            remap,
-            shape,
+            input_shape: self.input_shape.clone(),
+            input_offsets,
+            output_mapping,
+            output_shape: view.output_shape.clone(),
         }
     }
 
     pub(crate) fn transposed(&self) -> Self {
-        assert_eq!(self.remap.len(), 2);
+        assert_eq!(self.output_mapping.len(), 2);
         Self {
-            offsets: self.offsets.clone(),
-            remap: self.remap.iter().copied().rev().collect(),
-            shape: self.shape.transposed(),
+            input_shape: self.input_shape.clone(),
+            input_offsets: self.input_offsets.clone(),
+            output_mapping: self.output_mapping.iter().copied().rev().collect(),
+            output_shape: self.output_shape.transposed(),
         }
     }
 
-    pub(crate) fn broadcast(from: &Shape, to: &Shape) -> Self {
-        assert!(from.len() <= to.len());
-        let offsets = iter::repeat(0).take(from.len()).collect();
-        let mut remap = ArrayVec::new();
-        while remap.len() + from.len() < to.len() {
-            remap.push(AxisRemap::broadcast());
+    pub(crate) fn broadcast(input_shape: &Shape, output_shape: &Shape) -> Self {
+        assert!(input_shape.len() <= output_shape.len());
+        let input_offsets = iter::repeat(0).take(input_shape.len()).collect();
+        let mut output_mapping = ArrayVec::new();
+        while output_mapping.len() + input_shape.len() < output_shape.len() {
+            output_mapping.push(ViewMapping::Broadcast);
         }
-        for (index, (&from, &to)) in from.iter().zip(to.iter().skip(remap.len())).enumerate() {
-            remap.push(if from == to {
-                AxisRemap::identity(Axis::from_index(index), from)
+        for (index, (&from, &to)) in input_shape
+            .iter()
+            .zip(output_shape.iter().skip(output_mapping.len()))
+            .enumerate()
+        {
+            output_mapping.push(if from == to {
+                ViewMapping::identity(Axis::from_index(index), from)
             } else {
-                AxisRemap::broadcast()
+                ViewMapping::Broadcast
             });
         }
         Self {
-            offsets,
-            remap,
-            shape: to.clone(),
+            input_shape: input_shape.clone(),
+            input_offsets,
+            output_mapping,
+            output_shape: output_shape.clone(),
         }
+    }
+
+    pub(crate) fn indexer(&self) -> ViewIndexer {
+        ViewIndexer::new(self)
     }
 }
 
@@ -297,24 +322,22 @@ pub(crate) struct ViewIndexer {
 }
 
 impl ViewIndexer {
-    pub(crate) fn new(shape: &Shape, view: &View) -> Self {
-        assert_eq!(shape.len(), view.offsets.len());
-        let strides = shape.strides();
+    fn new(view: &View) -> Self {
+        let input_strides = view.input_shape.strides();
 
         let scales = view
-            .remap
+            .output_mapping
             .iter()
-            .map(|remap| {
-                remap
-                    .map(|remap| strides[remap.axis.index()] * remap.step)
-                    .unwrap_or(0)
+            .map(|mapping| match mapping {
+                ViewMapping::Source { axis, step } => input_strides[axis.index()] * step,
+                ViewMapping::Broadcast => 0,
             })
             .collect();
         let offset = view
-            .offsets
+            .input_offsets
             .iter()
             .cloned()
-            .zip(strides.iter().cloned())
+            .zip(input_strides.iter().cloned())
             .map(|(offset, stride)| offset * stride)
             .sum();
 

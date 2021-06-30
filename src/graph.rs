@@ -226,10 +226,15 @@ impl<'g> Array<'g> {
 
     pub fn conv2d(self, filters: Array, pad: usize) -> Self {
         self.graph.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape.conv2d(
-                &state.ops.graph[filters.node_id].shape, pad);
+            let shape = state.ops.graph[self.node_id]
+                .shape
+                .conv2d(&state.ops.graph[filters.node_id].shape, pad);
             Array {
-                node_id: state.ops.new_node(shape, Op::Convolution2D { pad }, &[self.node_id, filters.node_id]),
+                node_id: state.ops.new_node(
+                    shape,
+                    Op::Convolution2D { pad },
+                    &[self.node_id, filters.node_id],
+                ),
                 graph: self.graph,
             }
         })

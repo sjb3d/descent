@@ -64,21 +64,9 @@ fn generate_coord(shape: &Shape, w: &mut impl Write) -> fmt::Result {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct KernelInput {
-    pub(crate) shape: Shape,
-    pub(crate) view: View,
-}
-
-impl KernelInput {
-    fn indexer(&self) -> ViewIndexer {
-        ViewIndexer::new(&self.shape, &self.view)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PerElementKernel {
     pub(crate) shape: Shape,
-    pub(crate) inputs: Vec<KernelInput>,
+    pub(crate) inputs: Vec<View>,
     pub(crate) outputs: Vec<usize>,
     pub(crate) ops: Vec<PerElementKernelOp>,
 }
@@ -104,7 +92,7 @@ impl PerElementKernel {
         writeln!(w, "void main() {{")?;
 
         generate_coord(&self.shape, w)?;
-        let coord_indexer = self.shape.identity_indexer();
+        let coord_indexer = self.shape.identity_view().indexer();
 
         for (op_index, op) in self.ops.iter().enumerate() {
             write!(w, "float tmp{} = ", op_index)?;
@@ -179,7 +167,7 @@ impl PerElementKernel {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct MatMulKernel {
     pub(crate) shape: Shape,
-    pub(crate) inputs: [KernelInput; 2],
+    pub(crate) inputs: [View; 2],
 }
 
 impl MatMulKernel {
@@ -198,7 +186,7 @@ impl MatMulKernel {
 
         generate_coord(&self.shape, w)?;
 
-        let k = self.inputs[0].view.shape.last().unwrap();
+        let k = self.inputs[0].output_shape.last().unwrap();
 
         let indexer0 = self.inputs[0].indexer();
         let (stride0, scales0) = indexer0.scales.split_last().unwrap();
@@ -240,7 +228,7 @@ impl MatMulKernel {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ReduceKernel {
     pub(crate) shape: Shape,
-    pub(crate) input: KernelInput,
+    pub(crate) input: View,
     pub(crate) reduce_op: ReduceOp,
     pub(crate) axis: Axis,
 }
@@ -260,7 +248,7 @@ impl ReduceKernel {
 
         generate_coord(&self.shape, w)?;
 
-        let k = self.input.view.shape[self.axis.index()];
+        let k = self.input.output_shape[self.axis.index()];
 
         let indexer = self.input.indexer();
         write!(w, "uint base = {}", indexer.offset)?;

@@ -391,10 +391,7 @@ impl Schedule {
                             let source_node = &graph[source.node_id];
                             assert_ne!(source_node.cluster_id, Some(cluster_id));
                             let input_index = kernel.inputs.len();
-                            kernel.inputs.push(KernelInput {
-                                shape: source_node.shape.clone(),
-                                view: source.view.clone(),
-                            });
+                            kernel.inputs.push(source.view.clone());
                             inputs.push(source.node_id);
                             let op_index = kernel.ops.len();
                             kernel.ops.push(PerElementKernelOp::Load { input_index });
@@ -444,10 +441,7 @@ impl Schedule {
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: Kernel::Reduce(ReduceKernel {
                                 shape: node.shape.clone(),
-                                input: KernelInput {
-                                    shape: self.ops[src0.node_id].shape.clone(),
-                                    view: src0.view.clone(),
-                                },
+                                input: src0.view.clone(),
                                 reduce_op,
                                 axis,
                             }),
@@ -461,10 +455,7 @@ impl Schedule {
                         assert_eq!(arg_sources.len(), 2);
                         let kernel_inputs = arg_sources
                             .iter()
-                            .map(|src| KernelInput {
-                                shape: self.ops[src.node_id].shape.clone(),
-                                view: src.view.clone(),
-                            })
+                            .map(|src| src.view.clone())
                             .collect::<ArrayVec<_, 2>>()
                             .into_inner()
                             .unwrap();
