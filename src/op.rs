@@ -52,9 +52,10 @@ pub(crate) enum Op {
     Unary(UnaryOp),
     Binary(BinaryOp),
     CompareAndSelect(CompareMode),
+    Accumulate, // accumulates grad from backprop
     MatMul,
     Reduce { reduce_op: ReduceOp, axis: Axis },
-    Accumulate, // accumulates grad from backprop
+    Convolution2D { pad: usize },
 }
 
 impl Op {

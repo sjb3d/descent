@@ -1,5 +1,5 @@
 use arrayvec::ArrayVec;
-use std::{fmt, iter, mem, ops};
+use std::{fmt, iter, mem, ops, convert::TryInto};
 
 pub(crate) const MAX_DIM: usize = 4;
 pub(crate) type ShapeVec = ArrayVec<usize, MAX_DIM>;
@@ -28,8 +28,7 @@ impl Shape {
         Self(v)
     }
 
-    pub(crate) fn prepend_ones_to_len(&self, len: usize) -> Self {
-        assert!(self.len() <= len);
+    pub(crate) fn prefix_ones_to_len(&self, len: usize) -> Self {
         let mut v = ShapeVec::new();
         while v.len() + self.len() < len {
             v.push(1);
@@ -41,8 +40,8 @@ impl Shape {
     pub(crate) fn match_with_broadcast(&self, rhs: &Shape) -> Self {
         // broadcast axes from 1 => n where necessary
         let len = self.0.len().max(rhs.0.len());
-        let a = self.prepend_ones_to_len(len);
-        let b = rhs.prepend_ones_to_len(len);
+        let a = self.prefix_ones_to_len(len);
+        let b = rhs.prefix_ones_to_len(len);
         Shape::new(
             a.iter()
                 .copied()
@@ -88,6 +87,15 @@ impl Shape {
         v.try_extend_from_slice(a_prefix).unwrap();
         v.try_extend_from_slice(b_suffix).unwrap();
         Shape::new(v)
+    }
+
+    pub(crate) fn conv2d(&self, filters: &Shape, pad: usize) -> Self {
+        let [n, in_c, in_h, in_w]: [usize; 4] = self.0.as_slice().try_into().unwrap();
+        let [out_c, fc, fh, fw]: [usize; 4] = filters.0.as_slice().try_into().unwrap();
+        assert_eq!(in_c, fc);
+        let out_w = 1 + in_w + 2*pad - fw;
+        let out_h = 1 + in_h + 2*pad - fh;
+        Shape::from([n, out_c, out_h, out_w])
     }
 
     pub(crate) fn transposed(&self) -> Self {
