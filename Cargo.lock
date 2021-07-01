@@ -71,6 +71,7 @@ dependencies = [
  "shaderc",
  "slotmap",
  "spark",
+ "tinyvec",
  "trait-set",
 ]
 
@@ -305,6 +306,12 @@ dependencies = [
  "quote",
  "unicode-xid",
 ]
+
+[[package]]
+name = "tinyvec"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b5220f05bb7de7f3f53c7c065e1199b3172696fe2db9f9c4d8ad9b4ee74c342"
 
 [[package]]
 name = "trait-set"

@@ -4,7 +4,7 @@ use shaderc::{Compiler, ShaderKind};
 use spark::{vk, Builder};
 use std::{collections::HashMap, ffi::CStr, fmt, fmt::Write, mem, slice};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum PerElementKernelOp {
     Load {
         input_index: usize,
@@ -53,19 +53,18 @@ fn generate_output_buffer(
     Ok(())
 }
 
-fn generate_coord(shape: &Shape, w: &mut impl Write) -> fmt::Result {
-    writeln!(w, "uint coord[{}];", shape.len())?;
-    write!(w, "if (!compute_grid_coord(coord")?;
+fn generate_coord(name: &str, shape: &Shape, w: &mut impl Write) -> fmt::Result {
+    writeln!(w, "uint {}[{}];", name, shape.len())?;
+    write!(w, "compute_grid_coord({}", name)?;
     for &n in shape.iter() {
         write!(w, ", {}", n)?;
     }
-    writeln!(w, ")) {{ return; }}")?;
-    Ok(())
+    writeln!(w, ");")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PerElementKernel {
-    pub(crate) shape: Shape,
+    pub(crate) element_count: usize,
     pub(crate) inputs: Vec<View>,
     pub(crate) outputs: Vec<usize>,
     pub(crate) ops: Vec<PerElementKernelOp>,
@@ -91,63 +90,104 @@ impl PerElementKernel {
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
 
-        generate_coord(&self.shape, w)?;
-        let coord_indexer = self.shape.identity_view().indexer();
+        writeln!(
+            w,
+            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
+            self.element_count
+        )?;
 
+        let mut coord_sets = HashMap::new();
         for (op_index, op) in self.ops.iter().enumerate() {
-            write!(w, "float tmp{} = ", op_index)?;
             match op {
                 PerElementKernelOp::Load { input_index } => {
                     let input = &self.inputs[*input_index];
-                    let indexer = input.indexer();
-                    if indexer == coord_indexer {
-                        write!(w, "input{}[gl_GlobalInvocationID.x]", input_index)?
+                    let coord_shape = &input.output_shape;
+                    let next_coord_index = coord_sets.len();
+                    let (coord_name, coord_indexer) =
+                        coord_sets.entry(coord_shape.clone()).or_insert_with(|| {
+                            let coord_indexer = coord_shape.identity_view().indexer();
+                            let coord_name = format!("coord{}", next_coord_index);
+                            generate_coord(&coord_name, coord_shape, w).unwrap();
+                            (coord_name, coord_indexer)
+                        });
+                    let input_indexer = input.indexer();
+                    write!(w, "float tmp{} = ", op_index)?;
+                    if &input_indexer == coord_indexer {
+                        write!(w, "input{}[gl_GlobalInvocationID.x];", input_index)?
                     } else {
-                        write!(w, "input{}[{}", input_index, indexer.offset)?;
-                        for (index, scale) in indexer.scales.iter().copied().enumerate() {
+                        write!(w, "input{}[{}", input_index, input_indexer.offset)?;
+                        for (index, scale) in input_indexer.scales.iter().copied().enumerate() {
                             if scale != 0 {
-                                write!(w, " + {}*coord[{}]", scale, index)?;
+                                write!(w, " + {}*{}[{}]", scale, coord_name, index)?;
                             }
                         }
-                        write!(w, "]")?;
+                        write!(w, "];")?;
                     }
+                    writeln!(w, ";")?;
                 }
-                PerElementKernelOp::Literal(value) => write!(w, "{:#?}", value.into_inner())?,
+                PerElementKernelOp::Literal(value) => {
+                    writeln!(w, "float tmp{} = {:#?};", op_index, value.into_inner())?
+                }
                 PerElementKernelOp::BuiltIn(op) => match op {
-                    BuiltInOp::Coord { axis } => write!(w, "float(coord[{}])", axis.index())?,
+                    BuiltInOp::Coord {
+                        shape: coord_shape,
+                        axis,
+                    } => {
+                        let next_coord_index = coord_sets.len();
+                        let (coord_name, _) =
+                            coord_sets.entry(coord_shape.clone()).or_insert_with(|| {
+                                let coord_indexer = coord_shape.identity_view().indexer();
+                                let coord_name = format!("coord{}", next_coord_index);
+                                generate_coord(&coord_name, coord_shape, w).unwrap();
+                                (coord_name, coord_indexer)
+                            });
+                        writeln!(
+                            w,
+                            "float tmp{} = float({}[{}]);",
+                            op_index,
+                            coord_name,
+                            axis.index()
+                        )?
+                    }
                 },
-                PerElementKernelOp::Unary { op, args } => match op {
-                    UnaryOp::Neg => write!(w, "-tmp{}", args)?,
-                    UnaryOp::Sqrt => write!(w, "sqrt(tmp{})", args)?,
-                    UnaryOp::Exp => write!(w, "exp(tmp{})", args)?,
-                    UnaryOp::Log => write!(w, "log(tmp{})", args)?,
-                    UnaryOp::OneHot => write!(
-                        w,
-                        "(coord[{}] == uint(tmp{})) ? 1.0 : 0.0",
-                        self.shape.len() - 1,
-                        args
-                    )?,
-                },
-                PerElementKernelOp::Binary { op, args } => match op {
-                    BinaryOp::Add => write!(w, "tmp{} + tmp{}", args[0], args[1])?,
-                    BinaryOp::Sub => write!(w, "tmp{} - tmp{}", args[0], args[1])?,
-                    BinaryOp::Mul => write!(w, "tmp{} * tmp{}", args[0], args[1])?,
-                    BinaryOp::Div => write!(w, "tmp{} / tmp{}", args[0], args[1])?,
-                },
-                PerElementKernelOp::CompareAndSelect { compare_mode, args } => match compare_mode {
-                    CompareMode::Eq => write!(
-                        w,
-                        "(tmp{} == tmp{}) ? tmp{} : tmp{}",
-                        args[0], args[1], args[2], args[3]
-                    )?,
-                    CompareMode::Gt => write!(
-                        w,
-                        "(tmp{} > tmp{}) ? tmp{} : tmp{}",
-                        args[0], args[1], args[2], args[3]
-                    )?,
-                },
+                PerElementKernelOp::Unary { op, args } => {
+                    write!(w, "float tmp{} = ", op_index)?;
+                    match op {
+                        UnaryOp::Mov => write!(w, "tmp{}", args)?,
+                        UnaryOp::Neg => write!(w, "-tmp{}", args)?,
+                        UnaryOp::Sqrt => write!(w, "sqrt(tmp{})", args)?,
+                        UnaryOp::Exp => write!(w, "exp(tmp{})", args)?,
+                        UnaryOp::Log => write!(w, "log(tmp{})", args)?,
+                    }
+                    writeln!(w, ";")?;
+                }
+                PerElementKernelOp::Binary { op, args } => {
+                    write!(w, "float tmp{} = ", op_index)?;
+                    match op {
+                        BinaryOp::Add => write!(w, "tmp{} + tmp{}", args[0], args[1])?,
+                        BinaryOp::Sub => write!(w, "tmp{} - tmp{}", args[0], args[1])?,
+                        BinaryOp::Mul => write!(w, "tmp{} * tmp{}", args[0], args[1])?,
+                        BinaryOp::Div => write!(w, "tmp{} / tmp{}", args[0], args[1])?,
+                    }
+                    writeln!(w, ";")?;
+                }
+                PerElementKernelOp::CompareAndSelect { compare_mode, args } => {
+                    write!(w, "float tmp{} = ", op_index)?;
+                    match compare_mode {
+                        CompareMode::Eq => write!(
+                            w,
+                            "(tmp{} == tmp{}) ? tmp{} : tmp{}",
+                            args[0], args[1], args[2], args[3]
+                        )?,
+                        CompareMode::Gt => write!(
+                            w,
+                            "(tmp{} > tmp{}) ? tmp{} : tmp{}",
+                            args[0], args[1], args[2], args[3]
+                        )?,
+                    }
+                    writeln!(w, ";")?;
+                }
             }
-            writeln!(w, ";")?;
         }
 
         for (output_index, src_index) in self.outputs.iter().enumerate() {
@@ -184,7 +224,12 @@ impl MatMulKernel {
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
 
-        generate_coord(&self.shape, w)?;
+        writeln!(
+            w,
+            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
+            self.shape.element_count()
+        )?;
+        generate_coord("coord", &self.shape, w)?;
 
         let k = self.inputs[0].output_shape.last().unwrap();
 
@@ -246,7 +291,12 @@ impl ReduceKernel {
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
 
-        generate_coord(&self.shape, w)?;
+        writeln!(
+            w,
+            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
+            self.shape.element_count()
+        )?;
+        generate_coord("coord", &self.shape, w)?;
 
         let k = self.input.output_shape[self.axis.index()];
 
@@ -315,12 +365,12 @@ impl Kernel {
     }
 
     fn group_count(&self) -> u32 {
-        let shape = match self {
-            Kernel::PerElement(kernel) => &kernel.shape,
-            Kernel::MatMul(kernel) => &kernel.shape,
-            Kernel::Reduce(kernel) => &kernel.shape,
+        let element_count = match self {
+            Kernel::PerElement(kernel) => kernel.element_count,
+            Kernel::MatMul(kernel) => kernel.shape.element_count(),
+            Kernel::Reduce(kernel) => kernel.shape.element_count(),
         };
-        ((shape.element_count() as u32) + 63) / 64
+        ((element_count as u32) + 63) / 64
     }
 }
 

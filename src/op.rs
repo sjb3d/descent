@@ -14,7 +14,7 @@ pub(crate) enum ReduceOp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BuiltInOp {
-    Coord { axis: Axis },
+    Coord { shape: Shape, axis: Axis },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -33,21 +33,20 @@ pub(crate) enum BinaryOp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum UnaryOp {
+    Mov,
     Neg,
     Sqrt,
     Exp,
     Log,
-    OneHot,
 }
 
 pub(crate) const MAX_OP_ARGS: usize = 4;
 
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Op {
     Input { variable_id: VariableId },
     Output { variable_id: VariableId },
     Literal(NotNan<f32>),
-    View(View),
     BuiltIn(BuiltInOp),
     Unary(UnaryOp),
     Binary(BinaryOp),

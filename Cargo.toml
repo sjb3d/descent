@@ -17,6 +17,7 @@ slotmap = "1.0"
 trait-set = "0.2"
 ordered-float = "2.0"
 bytemuck = "1.5"
+tinyvec = "1.2"
 
 [dev-dependencies]
 rand_chacha = "0.3"

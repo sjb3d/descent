@@ -1,26 +1,20 @@
 #version 460 core
 
-bool compute_grid_coord(out uint coord[1], uint shape0)
+void compute_grid_coord(out uint coord[1], uint /*shape0*/)
 {
-    uint tmp0 = gl_GlobalInvocationID.x;
-    if (tmp0 >= shape0) {
-        return false;
-    }
-
-    coord[0] = tmp0;
-    return true;
+    coord[0] = gl_GlobalInvocationID.x;
 }
 
-bool compute_grid_coord(out uint coord[2], uint shape0, uint shape1)
+void compute_grid_coord(out uint coord[2], uint /*shape0*/, uint shape1)
 {
-    uint tmp1 = gl_GlobalInvocationID.x;
-    if (tmp1 >= shape0*shape1) {
-        return false;
-    }
+    uint remain = gl_GlobalInvocationID.x;
 
-    uint tmp0 = tmp1/shape1;
+    uint tmp1 = remain;
+    remain /= shape1;
+    tmp1 -= remain*shape1;
+
+    uint tmp0 = remain;
 
     coord[0] = tmp0;
-    coord[1] = tmp1 - shape1*tmp0;
-    return true;
+    coord[1] = tmp1;
 }

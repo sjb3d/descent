@@ -1,8 +1,8 @@
-use arrayvec::ArrayVec;
 use std::{convert::TryInto, fmt, iter, mem, ops};
+use tinyvec::ArrayVec as TinyVec;
 
 pub(crate) const MAX_DIM: usize = 4;
-pub(crate) type ShapeVec = ArrayVec<usize, MAX_DIM>;
+pub(crate) type ShapeVec = TinyVec<[usize; MAX_DIM]>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Axis(u8);
@@ -18,7 +18,7 @@ impl Axis {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Shape(ShapeVec);
 
 impl Shape {
@@ -33,7 +33,7 @@ impl Shape {
         while v.len() + self.len() < len {
             v.push(1);
         }
-        v.try_extend_from_slice(self).unwrap();
+        v.extend_from_slice(self);
         Shape::new(v)
     }
 
@@ -83,9 +83,9 @@ impl Shape {
         let (a_last, a_prefix) = self.0.split_last().unwrap();
         let (b_first, b_suffix) = rhs.0.split_first().unwrap();
         assert_eq!(*a_last, *b_first);
-        let mut v = ArrayVec::new();
-        v.try_extend_from_slice(a_prefix).unwrap();
-        v.try_extend_from_slice(b_suffix).unwrap();
+        let mut v = TinyVec::new();
+        v.extend_from_slice(a_prefix);
+        v.extend_from_slice(b_suffix);
         Shape::new(v)
     }
 
@@ -128,15 +128,15 @@ impl Shape {
         // expand last axis (innermost dimension) from 1 to n
         let (last, prefix) = self.0.split_last().unwrap();
         assert_eq!(*last, 1);
-        let mut v = ArrayVec::new();
-        v.try_extend_from_slice(prefix).unwrap();
+        let mut v = TinyVec::new();
+        v.extend_from_slice(prefix);
         v.push(count);
         Shape::new(v)
     }
 
-    fn strides(&self) -> ArrayVec<isize, MAX_DIM> {
+    fn strides(&self) -> TinyVec<[isize; MAX_DIM]> {
         let mut stride = 1;
-        let v: ArrayVec<isize, MAX_DIM> = self
+        let v: TinyVec<[isize; MAX_DIM]> = self
             .0
             .iter()
             .copied()
@@ -194,6 +194,12 @@ enum ViewMapping {
     Broadcast,
 }
 
+impl Default for ViewMapping {
+    fn default() -> Self {
+        Self::Broadcast
+    }
+}
+
 impl ViewMapping {
     fn identity(axis: Axis, length: usize) -> Self {
         if length > 1 {
@@ -214,11 +220,11 @@ impl ViewMapping {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct View {
     input_shape: Shape,
-    input_offsets: ArrayVec<isize, MAX_DIM>,
-    output_mapping: ArrayVec<ViewMapping, MAX_DIM>,
+    input_offsets: TinyVec<[isize; MAX_DIM]>,
+    output_mapping: TinyVec<[ViewMapping; MAX_DIM]>,
     pub(crate) output_shape: Shape,
 }
 
@@ -287,7 +293,7 @@ impl View {
     pub(crate) fn broadcast(input_shape: &Shape, output_shape: &Shape) -> Self {
         assert!(input_shape.len() <= output_shape.len());
         let input_offsets = iter::repeat(0).take(input_shape.len()).collect();
-        let mut output_mapping = ArrayVec::new();
+        let mut output_mapping = TinyVec::new();
         while output_mapping.len() + input_shape.len() < output_shape.len() {
             output_mapping.push(ViewMapping::Broadcast);
         }
@@ -317,7 +323,7 @@ impl View {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ViewIndexer {
-    pub(crate) scales: ArrayVec<isize, MAX_DIM>,
+    pub(crate) scales: TinyVec<[isize; MAX_DIM]>,
     pub(crate) offset: isize,
 }
 

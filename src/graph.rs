@@ -55,22 +55,29 @@ impl<'g> Array<'g> {
         self.graph
     }
 
-    fn broadcast(self, shape: &Shape) -> Self {
-        self.graph.with_state(|state| {
-            let self_shape = state.ops.graph[self.node_id].shape.clone();
-            if &self_shape == shape {
-                self
-            } else {
+    fn view(self, view: View) -> Self {
+        if view.is_identity() {
+            self
+        } else {
+            self.graph.with_state(|state| {
+                let node_id =
+                    state
+                        .ops
+                        .new_node(view.output_shape.clone(), Op::Unary(UnaryOp::Mov), &[]);
+                state
+                    .ops
+                    .graph
+                    .add_edge(self.node_id, node_id, OpEdge { arg: 0, view });
                 Array {
-                    node_id: state.ops.new_node(
-                        shape.clone(),
-                        Op::View(View::broadcast(&self_shape, &shape)),
-                        &[self.node_id],
-                    ),
+                    node_id,
                     graph: self.graph,
                 }
-            }
-        })
+            })
+        }
+    }
+
+    fn broadcast(self, shape: &Shape) -> Self {
+        self.view(View::broadcast(&self.shape(), shape))
     }
 
     fn unary_op(self, op: UnaryOp) -> Self {
@@ -147,15 +154,8 @@ impl<'g> Array<'g> {
     }
 
     pub fn one_hot(self, count: usize) -> Self {
-        self.graph.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape.one_hot(count);
-            Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::Unary(UnaryOp::OneHot), &[self.node_id]),
-                graph: self.graph,
-            }
-        })
+        let shape = self.shape().one_hot(count);
+        self.graph.coord(shape, -1).select_eq(self, 1.0, 0.0)
     }
 
     pub fn reduce_max(self, axis: isize) -> Self {
@@ -241,17 +241,7 @@ impl<'g> Array<'g> {
     }
 
     pub fn transpose(self) -> Self {
-        self.graph.with_state(|state| {
-            let input_shape = &state.ops.graph[self.node_id].shape;
-            let view = input_shape.identity_view().transposed();
-            let output_shape = input_shape.transposed();
-            Array {
-                node_id: state
-                    .ops
-                    .new_node(output_shape, Op::View(view), &[self.node_id]),
-                graph: self.graph,
-            }
-        })
+        self.view(self.shape().identity_view().transposed())
     }
 
     pub fn shape(&self) -> Shape {
@@ -296,13 +286,13 @@ impl<'g> Array<'g> {
             );
             let one_shape = Shape::from([1]);
             let grad_shape = state.ops.graph[self.node_id].shape.clone();
-            state.ops.graph[self.node_id].op = Op::View(View::broadcast(&one_shape, &grad_shape));
+            state.ops.graph[self.node_id].op = Op::Unary(UnaryOp::Mov);
             state.ops.graph.add_edge(
                 one.node_id,
                 self.node_id,
                 OpEdge {
                     arg: 0,
-                    view: one_shape.identity_view(),
+                    view: View::broadcast(&one_shape, &grad_shape),
                 },
             );
         })
@@ -551,9 +541,11 @@ impl Graph {
             let shape = shape.into();
             let axis = shape.axis(axis);
             Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::BuiltIn(BuiltInOp::Coord { axis }), &[]),
+                node_id: state.ops.new_node(
+                    shape.clone(),
+                    Op::BuiltIn(BuiltInOp::Coord { shape, axis }),
+                    &[],
+                ),
                 graph: self,
             }
         })

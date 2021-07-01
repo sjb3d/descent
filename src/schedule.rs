@@ -13,8 +13,9 @@ use std::{
     hash::{Hash, Hasher},
     io, iter,
 };
+use tinyvec::ArrayVec as TinyVec;
 
-fn get_arg_edge_ids(ops: &OpGraph, node_id: OpNodeId) -> ArrayVec<OpEdgeId, MAX_OP_ARGS> {
+fn get_arg_edge_ids(ops: &OpGraph, node_id: OpNodeId) -> TinyVec<[OpEdgeId; MAX_OP_ARGS]> {
     let mut v = [None; MAX_OP_ARGS];
     let mut n = 0;
     for edge_ref in ops.edges_directed(node_id, Incoming) {
@@ -26,7 +27,7 @@ fn get_arg_edge_ids(ops: &OpGraph, node_id: OpNodeId) -> ArrayVec<OpEdgeId, MAX_
     v[..n].iter().copied().map(|id| id.unwrap()).collect()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ArgSource {
     pub(crate) node_id: OpNodeId,
     pub(crate) view: View,
@@ -35,7 +36,7 @@ pub(crate) struct ArgSource {
 pub(crate) fn get_arg_sources(
     ops: &OpGraph,
     node_id: OpNodeId,
-) -> ArrayVec<ArgSource, MAX_OP_ARGS> {
+) -> TinyVec<[ArgSource; MAX_OP_ARGS]> {
     get_arg_edge_ids(ops, node_id)
         .iter()
         .copied()
@@ -89,7 +90,7 @@ impl Schedule {
         sched.make_literals_unique();
 
         sched.rebuild_ordering();
-        sched.eliminate_view_nodes();
+        sched.eliminate_moves();
 
         sched.rebuild_ordering();
         sched.build_clusters();
@@ -202,10 +203,9 @@ impl Schedule {
         }
     }
 
-    fn eliminate_view_nodes(&mut self) {
+    fn eliminate_moves(&mut self) {
         for node_id in self.ops_sorted.iter().copied() {
-            if let Op::View(view) = &self.ops[node_id].op {
-                let view = view.clone();
+            if let Op::Unary(UnaryOp::Mov) = &self.ops[node_id].op {
                 assert_eq!(self.ops.neighbors_directed(node_id, Incoming).count(), 1);
                 let mut in_edges = self.ops.neighbors_directed(node_id, Incoming).detach();
                 let (in_edge_id, in_node_id) = in_edges.next(&self.ops).unwrap();
@@ -216,7 +216,7 @@ impl Schedule {
                     assert_eq!(in_edge.arg, 0);
                     let new_edge = OpEdge {
                         arg: out_edge.arg,
-                        view: in_edge.view.through(&view).through(&out_edge.view),
+                        view: in_edge.view.through(&out_edge.view),
                     };
                     self.ops.add_edge(in_node_id, out_node_id, new_edge);
                 }
@@ -274,11 +274,11 @@ impl Schedule {
                 continue;
             }
             if first_node.op.is_per_element() {
-                let shape = first_node.shape.clone();
+                let element_count = first_node.shape.element_count();
 
                 let cluster_id = Some(self.clusters.insert(Cluster {
                     kernel: Kernel::PerElement(PerElementKernel {
-                        shape: shape.clone(),
+                        element_count,
                         inputs: Vec::new(),
                         outputs: Vec::new(),
                         ops: Vec::new(),
@@ -293,9 +293,9 @@ impl Schedule {
                     'inner: for other_node_id in self.ops_sorted.iter().copied() {
                         let other_node = &self.ops[other_node_id];
 
-                        // check this node has no cluster and matches shape
-                        let is_matching_shape =
-                            other_node.op.is_per_element() && other_node.shape == shape;
+                        // check this node has no cluster and matches element count
+                        let is_matching_shape = other_node.op.is_per_element()
+                            && other_node.shape.element_count() == element_count;
                         let is_literal = matches!(other_node.op, Op::Literal(_));
                         let can_include =
                             other_node.cluster_id.is_none() && (is_matching_shape || is_literal);
@@ -384,7 +384,7 @@ impl Schedule {
             for node_id in members.iter().copied() {
                 // gather the arguments (loading as necessary)
                 let arg_sources = get_arg_sources(&graph, node_id);
-                let args: ArrayVec<usize, MAX_OP_ARGS> = arg_sources
+                let args: TinyVec<[usize; MAX_OP_ARGS]> = arg_sources
                     .iter()
                     .map(|source| {
                         *node_op_index.entry(source.node_id).or_insert_with(|| {
