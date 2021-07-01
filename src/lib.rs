@@ -27,10 +27,10 @@ mod tests {
         let a_var = env.variable([10], "a");
 
         let a_data = [0f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-        env.writer(a_var).write_all(cast_slice(&a_data)).unwrap();
+        env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let mut a_result = [0f32; 10];
-        env.reader(a_var)
+        env.reader(&a_var)
             .read_exact(cast_slice_mut(&mut a_result))
             .unwrap();
 
@@ -47,16 +47,16 @@ mod tests {
         let a_var = env.variable([10, 10], "a");
         let b_var = env.variable([10, 1], "b");
 
-        env.writer(a_var).write_all(cast_slice(&a_data)).unwrap();
+        env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.graph();
-        g.write_variable(b_var, g.parameter(a_var).value().reduce_sum(-1));
+        g.write_variable(&b_var, g.parameter(&a_var).value().reduce_sum(-1));
 
         let g = g.build_schedule();
         env.run(&g);
 
         let mut b_result = vec![0f32; 10];
-        env.reader(b_var)
+        env.reader(&b_var)
             .read_exact(cast_slice_mut(&mut b_result))
             .unwrap();
         assert_eq!(b_result, b_data);
