@@ -118,7 +118,7 @@ impl Shape {
         if index == 0 {
             Shape::new(self.0.iter().copied().skip(1).collect())
         } else {
-            let mut v = self.0.clone();
+            let mut v = self.0;
             v[index] = 1;
             Shape::new(v)
         }
@@ -231,7 +231,7 @@ pub(crate) struct View {
 impl View {
     fn identity(shape: &Shape) -> Self {
         Self {
-            input_shape: shape.clone(),
+            input_shape: *shape,
             input_offsets: iter::repeat(0).take(shape.len()).collect(),
             output_mapping: shape
                 .iter()
@@ -239,7 +239,7 @@ impl View {
                 .enumerate()
                 .map(|(index, shape)| ViewMapping::identity(Axis::from_index(index), shape))
                 .collect(),
-            output_shape: shape.clone(),
+            output_shape: *shape,
         }
     }
 
@@ -249,7 +249,7 @@ impl View {
 
     pub(crate) fn through(&self, view: &View) -> Self {
         assert_eq!(&self.output_shape, &view.input_shape);
-        let mut input_offsets = self.input_offsets.clone();
+        let mut input_offsets = self.input_offsets;
         for (mapping, offset) in self
             .output_mapping
             .iter()
@@ -273,18 +273,18 @@ impl View {
             })
             .collect();
         Self {
-            input_shape: self.input_shape.clone(),
+            input_shape: self.input_shape,
             input_offsets,
             output_mapping,
-            output_shape: view.output_shape.clone(),
+            output_shape: view.output_shape,
         }
     }
 
     pub(crate) fn transposed(&self) -> Self {
         assert_eq!(self.output_mapping.len(), 2);
         Self {
-            input_shape: self.input_shape.clone(),
-            input_offsets: self.input_offsets.clone(),
+            input_shape: self.input_shape,
+            input_offsets: self.input_offsets,
             output_mapping: self.output_mapping.iter().copied().rev().collect(),
             output_shape: self.output_shape.transposed(),
         }
@@ -309,10 +309,10 @@ impl View {
             });
         }
         Self {
-            input_shape: input_shape.clone(),
+            input_shape: *input_shape,
             input_offsets,
             output_mapping,
-            output_shape: output_shape.clone(),
+            output_shape: *output_shape,
         }
     }
 

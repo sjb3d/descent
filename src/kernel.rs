@@ -104,7 +104,7 @@ impl PerElementKernel {
                     let coord_shape = &input.output_shape;
                     let next_coord_index = coord_sets.len();
                     let (coord_name, coord_indexer) =
-                        coord_sets.entry(coord_shape.clone()).or_insert_with(|| {
+                        coord_sets.entry(coord_shape).or_insert_with(|| {
                             let coord_indexer = coord_shape.identity_view().indexer();
                             let coord_name = format!("coord{}", next_coord_index);
                             generate_coord(&coord_name, coord_shape, w).unwrap();
@@ -134,13 +134,12 @@ impl PerElementKernel {
                         axis,
                     } => {
                         let next_coord_index = coord_sets.len();
-                        let (coord_name, _) =
-                            coord_sets.entry(coord_shape.clone()).or_insert_with(|| {
-                                let coord_indexer = coord_shape.identity_view().indexer();
-                                let coord_name = format!("coord{}", next_coord_index);
-                                generate_coord(&coord_name, coord_shape, w).unwrap();
-                                (coord_name, coord_indexer)
-                            });
+                        let (coord_name, _) = coord_sets.entry(coord_shape).or_insert_with(|| {
+                            let coord_indexer = coord_shape.identity_view().indexer();
+                            let coord_name = format!("coord{}", next_coord_index);
+                            generate_coord(&coord_name, coord_shape, w).unwrap();
+                            (coord_name, coord_indexer)
+                        });
                         writeln!(
                             w,
                             "float tmp{} = float({}[{}]);",

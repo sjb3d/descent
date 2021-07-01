@@ -42,7 +42,7 @@ pub(crate) fn get_arg_sources(
         .copied()
         .map(|edge_id| ArgSource {
             node_id: ops.edge_endpoints(edge_id).unwrap().0,
-            view: ops[edge_id].view.clone(),
+            view: ops[edge_id].view,
         })
         .collect()
 }
@@ -391,7 +391,7 @@ impl Schedule {
                             let source_node = &graph[source.node_id];
                             assert_ne!(source_node.cluster_id, Some(cluster_id));
                             let input_index = kernel.inputs.len();
-                            kernel.inputs.push(source.view.clone());
+                            kernel.inputs.push(source.view);
                             inputs.push(source.node_id);
                             let op_index = kernel.ops.len();
                             kernel.ops.push(PerElementKernelOp::Load { input_index });
@@ -440,8 +440,8 @@ impl Schedule {
                         let src0 = &arg_sources[0];
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: Kernel::Reduce(ReduceKernel {
-                                shape: node.shape.clone(),
-                                input: src0.view.clone(),
+                                shape: node.shape,
+                                input: src0.view,
                                 reduce_op,
                                 axis,
                             }),
@@ -455,13 +455,13 @@ impl Schedule {
                         assert_eq!(arg_sources.len(), 2);
                         let kernel_inputs = arg_sources
                             .iter()
-                            .map(|src| src.view.clone())
+                            .map(|src| src.view)
                             .collect::<ArrayVec<_, 2>>()
                             .into_inner()
                             .unwrap();
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: Kernel::MatMul(MatMulKernel {
-                                shape: node.shape.clone(),
+                                shape: node.shape,
                                 inputs: kernel_inputs,
                             }),
                             inputs: arg_sources.iter().map(|src| src.node_id).collect(),

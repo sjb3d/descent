@@ -36,7 +36,7 @@ impl Variable {
     }
 
     pub fn shape(&self) -> Shape {
-        self.owner.borrow().get(self.id).unwrap().shape.clone()
+        self.owner.borrow().get(self.id).unwrap().shape
     }
 
     pub fn name(&self) -> String {

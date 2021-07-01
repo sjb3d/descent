@@ -60,10 +60,9 @@ impl<'g> Array<'g> {
             self
         } else {
             self.graph.with_state(|state| {
-                let node_id =
-                    state
-                        .ops
-                        .new_node(view.output_shape.clone(), Op::Unary(UnaryOp::Mov), &[]);
+                let node_id = state
+                    .ops
+                    .new_node(view.output_shape, Op::Unary(UnaryOp::Mov), &[]);
                 state
                     .ops
                     .graph
@@ -82,7 +81,7 @@ impl<'g> Array<'g> {
 
     fn unary_op(self, op: UnaryOp) -> Self {
         self.graph.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape.clone();
+            let shape = state.ops.graph[self.node_id].shape;
             Array {
                 node_id: state.ops.new_node(shape, Op::Unary(op), &[self.node_id]),
                 graph: self.graph,
@@ -246,7 +245,7 @@ impl<'g> Array<'g> {
 
     pub fn shape(&self) -> Shape {
         self.graph
-            .with_state(|state| state.ops.graph[self.node_id].shape.clone())
+            .with_state(|state| state.ops.graph[self.node_id].shape)
     }
 
     pub fn accumulate(&self, src: Array) {
@@ -285,7 +284,7 @@ impl<'g> Array<'g> {
                 0
             );
             let one_shape = Shape::from([1]);
-            let grad_shape = state.ops.graph[self.node_id].shape.clone();
+            let grad_shape = state.ops.graph[self.node_id].shape;
             state.ops.graph[self.node_id].op = Op::Unary(UnaryOp::Mov);
             state.ops.graph.add_edge(
                 one.node_id,
@@ -542,7 +541,7 @@ impl Graph {
             let axis = shape.axis(axis);
             Array {
                 node_id: state.ops.new_node(
-                    shape.clone(),
+                    shape,
                     Op::BuiltIn(BuiltInOp::Coord { shape, axis }),
                     &[],
                 ),
@@ -554,20 +553,14 @@ impl Graph {
     fn input(&self, variable: &Variable) -> GraphInput {
         self.with_state(|state| {
             let variable_id = variable.checked_id(&state.variables);
-            let shape = state
-                .variables
-                .borrow()
-                .get(variable_id)
-                .unwrap()
-                .shape
-                .clone();
+            let shape = state.variables.borrow().get(variable_id).unwrap().shape;
             let ops = &mut state.ops;
             *state
                 .inputs
                 .entry(variable_id)
                 .unwrap()
                 .or_insert_with(|| GraphInput {
-                    value_node_id: ops.new_node(shape.clone(), Op::Input { variable_id }, &[]),
+                    value_node_id: ops.new_node(shape, Op::Input { variable_id }, &[]),
                     grad_node_id: Some(ops.new_node(shape, Op::Accumulate, &[])),
                 })
         })
@@ -593,15 +586,9 @@ impl Graph {
     pub fn write_variable(&self, variable: &Variable, rhs: Array) {
         self.with_state(|state| {
             let variable_id = variable.checked_id(&state.variables);
-            let shape = state.ops.graph[rhs.node_id].shape.clone();
+            let shape = state.ops.graph[rhs.node_id].shape;
             assert_eq!(
-                state
-                    .variables
-                    .borrow()
-                    .get(variable_id)
-                    .unwrap()
-                    .shape
-                    .clone(),
+                state.variables.borrow().get(variable_id).unwrap().shape,
                 shape
             );
 
