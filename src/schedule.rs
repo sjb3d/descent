@@ -469,6 +469,26 @@ impl Schedule {
                             outputs: vec![node_id],
                         }));
                     }
+                    Op::Convolution2D { pad } => {
+                        let arg_sources = get_arg_sources(&self.ops, node_id);
+                        assert_eq!(arg_sources.len(), 2);
+                        let kernel_inputs = arg_sources
+                            .iter()
+                            .map(|src| src.view)
+                            .collect::<ArrayVec<_, 2>>()
+                            .into_inner()
+                            .unwrap();
+                        self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
+                            kernel: Kernel::Convolution2D(Convolution2DKernel {
+                                shape: node.shape,
+                                inputs: kernel_inputs,
+                                pad,
+                            }),
+                            inputs: arg_sources.iter().map(|src| src.node_id).collect(),
+                            members: vec![node_id],
+                            outputs: vec![node_id],
+                        }));
+                    }
                     Op::Input { .. } | Op::Output { .. } | Op::Literal(_) => {}
                     _ => panic!("unexpected op without a kernel"),
                 }

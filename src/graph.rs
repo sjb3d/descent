@@ -223,7 +223,8 @@ impl<'g> Array<'g> {
         })
     }
 
-    pub fn conv2d(self, filters: Array, pad: usize) -> Self {
+    pub fn conv2d(self, filters: impl IntoArray<'g>, pad: usize) -> Self {
+        let filters = filters.into_array(self.graph);
         self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape

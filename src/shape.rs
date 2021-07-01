@@ -321,7 +321,7 @@ impl View {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ViewIndexer {
     pub(crate) scales: TinyVec<[isize; MAX_DIM]>,
     pub(crate) offset: isize,

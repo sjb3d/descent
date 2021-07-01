@@ -54,7 +54,7 @@ fn generate_output_buffer(
 }
 
 fn generate_coord(name: &str, shape: &Shape, w: &mut impl Write) -> fmt::Result {
-    writeln!(w, "uint {}[{}];", name, shape.len())?;
+    writeln!(w, "int {}[{}];", name, shape.len())?;
     write!(w, "compute_grid_coord({}", name)?;
     for &n in shape.iter() {
         write!(w, ", {}", n)?;
@@ -234,33 +234,32 @@ impl MatMulKernel {
 
         let indexer0 = self.inputs[0].indexer();
         let (stride0, scales0) = indexer0.scales.split_last().unwrap();
-        write!(w, "uint base0 = {}", indexer0.offset)?;
+        write!(w, "int base0 = {}", indexer0.offset)?;
         for (index, scale) in scales0.iter().copied().enumerate() {
             if scale != 0 {
-                write!(w, " + {}*coord[{}]", scale, index)?;
+                write!(w, " + ({})*coord[{}]", scale, index)?;
             }
         }
         writeln!(w, ";")?;
-        writeln!(w, "uint stride0 = {};", stride0)?;
+        writeln!(w, "int stride0 = {};", stride0)?;
 
         let indexer1 = self.inputs[1].indexer();
         assert_eq!(indexer1.scales.len(), 2);
         writeln!(
             w,
-            "uint base1 = {} + {}*coord[{}];",
+            "int base1 = {} + ({})*coord[{}];",
             indexer1.offset,
             indexer1.scales[1],
             scales0.len()
         )?;
-        writeln!(w, "uint stride1 = {};", indexer1.scales[0])?;
+        writeln!(w, "int stride1 = {};", indexer1.scales[0])?;
 
         writeln!(w, "float sum = 0.f;")?;
-        writeln!(w, "for (uint k = 0; k < {}; ++k) {{", k)?;
+        writeln!(w, "for (int k = 0; k < {}; ++k) {{", k)?;
         writeln!(w, "float tmp0 = input0[base0 + k*stride0];")?;
         writeln!(w, "float tmp1 = input1[base1 + k*stride1];")?;
         writeln!(w, "sum += tmp0 * tmp1;")?;
         writeln!(w, "}}")?;
-
         writeln!(w, "output0[gl_GlobalInvocationID.x] = sum;")?;
 
         writeln!(w, "}}")?;
@@ -300,15 +299,15 @@ impl ReduceKernel {
         let k = self.input.output_shape[self.axis.index()];
 
         let indexer = self.input.indexer();
-        write!(w, "uint base = {}", indexer.offset)?;
+        write!(w, "int base = {}", indexer.offset)?;
         for (index, scale) in indexer.scales.iter().copied().enumerate() {
             if scale != 0 && index != self.axis.index() {
                 let offset = if self.axis.index() == 0 { 1 } else { 0 };
-                write!(w, " + {}*coord[{}]", scale, index - offset)?;
+                write!(w, " + ({})*coord[{}]", scale, index - offset)?;
             }
         }
         writeln!(w, ";")?;
-        writeln!(w, "uint stride = {};", indexer.scales[self.axis.index()])?;
+        writeln!(w, "int stride = {};", indexer.scales[self.axis.index()])?;
 
         writeln!(
             w,
@@ -318,7 +317,7 @@ impl ReduceKernel {
                 ReduceOp::Sum => "0.f",
             }
         )?;
-        writeln!(w, "for (uint k = 0; k < {}; ++k) {{", k)?;
+        writeln!(w, "for (int k = 0; k < {}; ++k) {{", k)?;
         writeln!(w, "float tmp = input0[base + k*stride];")?;
         writeln!(
             w,
@@ -338,12 +337,83 @@ impl ReduceKernel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Convolution2DKernel {
+    pub(crate) shape: Shape,
+    pub(crate) inputs: [View; 2],
+    pub(crate) pad: usize,
+}
+
+impl Convolution2DKernel {
+    fn generate_source(&self) -> Result<String, fmt::Error> {
+        let mut src = String::new();
+        let w = &mut src;
+
+        write!(w, "{}", include_str!("kernel_common.glsl"))?;
+
+        generate_input_buffer(0, 0, w)?;
+        generate_input_buffer(1, 1, w)?;
+        generate_output_buffer(2, 0, w)?;
+
+        writeln!(w, "layout(local_size_x = 64) in;")?;
+        writeln!(w, "void main() {{")?;
+
+        writeln!(
+            w,
+            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
+            self.shape.element_count()
+        )?;
+        generate_coord("coord", &self.shape, w)?;
+
+        let indexer0 = self.inputs[0].indexer();
+        let indexer1 = self.inputs[1].indexer();
+        writeln!(
+            w,
+            "int base0 = {} + ({})*coord[0];",
+            indexer0.offset, indexer0.scales[0]
+        )?;
+        writeln!(
+            w,
+            "ivec3 strides0 = ivec3({}, {}, {});",
+            indexer0.scales[1], indexer0.scales[2], indexer0.scales[3]
+        )?;
+        writeln!(
+            w,
+            "int base1 = {} + ({})*coord[0];",
+            indexer1.offset, indexer1.scales[0]
+        )?;
+        writeln!(
+            w,
+            "ivec3 strides1 = ivec3({}, {}, {});",
+            indexer1.scales[1], indexer1.scales[2], indexer1.scales[3]
+        )?;
+
+        writeln!(
+            w,
+            "int input_channels = {};",
+            self.inputs[0].output_shape[1]
+        )?;
+        writeln!(w, "int input_height = {};", self.inputs[0].output_shape[2])?;
+        writeln!(w, "int input_width = {};", self.inputs[0].output_shape[3])?;
+        writeln!(w, "int filter_height = {};", self.inputs[1].output_shape[2])?;
+        writeln!(w, "int filter_width = {};", self.inputs[1].output_shape[3])?;
+        writeln!(w, "int pad = {};", self.pad)?;
+
+        write!(w, "{}", include_str!("convolution_2d.glsl"))?;
+
+        writeln!(w, "}}")?;
+
+        Ok(src)
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Kernel {
     PerElement(PerElementKernel),
     Reduce(ReduceKernel),
     MatMul(MatMulKernel),
+    Convolution2D(Convolution2DKernel),
 }
 
 impl Kernel {
@@ -352,6 +422,7 @@ impl Kernel {
             Kernel::PerElement(kernel) => kernel.generate_source(),
             Kernel::MatMul(kernel) => kernel.generate_source(),
             Kernel::Reduce(kernel) => kernel.generate_source(),
+            Kernel::Convolution2D(kernel) => kernel.generate_source(),
         }
     }
 
@@ -360,6 +431,7 @@ impl Kernel {
             Kernel::PerElement(kernel) => kernel.inputs.len() + kernel.outputs.len(),
             Kernel::MatMul(..) => 3,
             Kernel::Reduce(..) => 2,
+            Kernel::Convolution2D(..) => 3,
         }
     }
 
@@ -368,6 +440,7 @@ impl Kernel {
             Kernel::PerElement(kernel) => kernel.element_count,
             Kernel::MatMul(kernel) => kernel.shape.element_count(),
             Kernel::Reduce(kernel) => kernel.shape.element_count(),
+            Kernel::Convolution2D(kernel) => kernel.shape.element_count(),
         };
         ((element_count as u32) + 63) / 64
     }

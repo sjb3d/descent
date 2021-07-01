@@ -18,7 +18,7 @@ pub mod variable;
 mod tests {
     use crate::prelude::*;
     use bytemuck::{cast_slice, cast_slice_mut};
-    use std::io::prelude::*;
+    use std::{io::prelude::*, iter};
 
     #[test]
     fn variables() {
@@ -50,15 +50,43 @@ mod tests {
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.graph();
-        g.write_variable(&b_var, g.parameter(&a_var).value().reduce_sum(-1));
+        g.write_variable(&b_var, g.read_variable(&a_var).reduce_sum(-1));
 
         let g = g.build_schedule();
         env.run(&g);
 
-        let mut b_result = vec![0f32; 10];
+        let mut b_result = vec![0f32; b_data.len()];
         env.reader(&b_var)
             .read_exact(cast_slice_mut(&mut b_result))
             .unwrap();
         assert_eq!(b_result, b_data);
+    }
+
+    #[test]
+    fn conv2d() {
+        let mut env = Environment::new();
+
+        let a_data: Vec<f32> = iter::repeat(1.0).take(100).collect();
+        let b_data: Vec<f32> = iter::repeat(1.0).take(9).collect();
+        let c_data: Vec<f32> = iter::repeat(9.0).take(64).collect();
+
+        let a_var = env.variable([1, 1, 10, 10], "a");
+        let b_var = env.variable([1, 1, 3, 3], "b");
+        let c_var = env.variable([1, 1, 8, 8], "c");
+
+        env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
+        env.writer(&b_var).write_all(cast_slice(&b_data)).unwrap();
+
+        let g = env.graph();
+        g.write_variable(&c_var, g.read_variable(&a_var).conv2d(&b_var, 0));
+
+        let g = g.build_schedule();
+        env.run(&g);
+
+        let mut c_result = vec![0f32; c_data.len()];
+        env.reader(&c_var)
+            .read_exact(cast_slice_mut(&mut c_result))
+            .unwrap();
+        assert_eq!(c_result, c_data);
     }
 }
