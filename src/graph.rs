@@ -2,7 +2,7 @@ use crate::common::*;
 use ordered_float::NotNan;
 use petgraph::prelude::*;
 use slotmap::SparseSecondaryMap;
-use std::{cell::RefCell, ops};
+use std::{cell::RefCell, convert::TryInto, ops};
 
 #[derive(Clone, Copy)]
 pub struct Array<'g> {
@@ -213,7 +213,7 @@ impl<'g> Array<'g> {
         self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape
-                .matrix_multiply(&state.ops.graph[rhs.node_id].shape);
+                .matmul(&state.ops.graph[rhs.node_id].shape);
             Array {
                 node_id: state
                     .ops
@@ -223,18 +223,62 @@ impl<'g> Array<'g> {
         })
     }
 
-    pub fn conv2d(self, filters: impl IntoArray<'g>, pad: usize) -> Self {
-        let filters = filters.into_array(self.graph);
+    fn windows2d(self, filter_w: usize, filter_h: usize, pad: usize) -> Self {
         self.graph.with_state(|state| {
-            let shape = state.ops.graph[self.node_id]
-                .shape
-                .conv2d(&state.ops.graph[filters.node_id].shape, pad);
+            let params = Windows2DParams {
+                filter_w,
+                filter_h,
+                pad,
+            };
+            let shape = state.ops.graph[self.node_id].shape.windows2d(&params);
             Array {
-                node_id: state.ops.new_node(
-                    shape,
-                    Op::Convolution2D { pad },
-                    &[self.node_id, filters.node_id],
-                ),
+                node_id: state
+                    .ops
+                    .new_node(shape, Op::Windows2D(params), &[self.node_id]),
+                graph: self.graph,
+            }
+        })
+    }
+
+    pub fn conv2d(self, filter: impl IntoArray<'g>, pad: usize) -> Self {
+        let filter = filter.into_array(self.graph);
+
+        let self_shape = self.shape();
+        let filter_shape = filter.shape();
+        assert_eq!(self_shape.len(), 4);
+        assert_eq!(filter_shape.len(), 4);
+        let [m, _input_h, _input_w, input_c]: [usize; 4] =
+            self_shape.as_slice().try_into().unwrap();
+        let [filter_oc, filter_h, filter_w, filter_ic]: [usize; 4] =
+            filter_shape.as_slice().try_into().unwrap();
+        assert_eq!(input_c, filter_ic);
+
+        let windows = self.windows2d(filter_w, filter_h, pad);
+        let windows_shape = windows.shape();
+        let [windows_m, output_h, output_w, windows_fh, windows_fw, windows_ic]: [usize; 6] =
+            windows_shape.as_slice().try_into().unwrap();
+        assert_eq!(m, windows_m);
+        assert_eq!(filter_h, windows_fh);
+        assert_eq!(filter_w, windows_fw);
+        assert_eq!(filter_ic, windows_ic);
+
+        let a = windows.reshape([m * output_h * output_w, filter_h * filter_w * filter_ic]);
+        let b = filter.reshape([filter_oc, filter_h * filter_w * filter_ic]);
+        let c = a.matmul(b.transpose());
+        c.reshape([m, output_h, output_w, filter_oc])
+    }
+
+    pub fn reshape(self, shape: impl Into<Shape>) -> Self {
+        self.graph.with_state(|state| {
+            let shape = shape.into();
+            assert_eq!(
+                state.ops.graph[self.node_id].shape.element_count(),
+                shape.element_count()
+            );
+            Array {
+                node_id: state
+                    .ops
+                    .new_node(shape, Op::Unary(UnaryOp::Mov), &[self.node_id]),
                 graph: self.graph,
             }
         })
@@ -393,6 +437,10 @@ impl<'g> DualArray<'g> {
         }
     }
 
+    pub fn into_inner(self) -> (Array<'g>, Array<'g>) {
+        (self.value(), self.grad())
+    }
+
     pub fn shape(&self) -> Shape {
         self.value().shape()
     }
@@ -402,8 +450,7 @@ impl<'g> DualArray<'g> {
     }
 
     pub fn leaky_relu(self, leakiness: f32) -> Self {
-        let a = self.value();
-        let da = self.grad();
+        let (a, da) = self.into_inner();
 
         let b = a.select_gt(0.0, a, a * leakiness);
 
@@ -416,10 +463,8 @@ impl<'g> DualArray<'g> {
     pub fn matmul(self, rhs: impl IntoDualArray<'g>) -> Self {
         let rhs = rhs.into_dual_array(self.graph);
 
-        let a = self.value();
-        let da = self.grad();
-        let b = rhs.value();
-        let db = rhs.grad();
+        let (a, da) = self.into_inner();
+        let (b, db) = rhs.into_inner();
 
         let c = a.matmul(b);
 
@@ -428,6 +473,20 @@ impl<'g> DualArray<'g> {
         db.accumulate(a.transpose().matmul(dc));
 
         Self::new(c, dc)
+    }
+
+    pub fn reshape(self, shape: impl Into<Shape>) -> Self {
+        let old_shape = self.shape();
+        let new_shape = shape.into();
+
+        let (a, da) = self.into_inner();
+
+        let b = a.reshape(new_shape);
+
+        let db = self.graph.accumulator(new_shape);
+        da.accumulate(db.reshape(old_shape));
+
+        Self::new(b, db)
     }
 
     pub fn set_loss(self) -> Array<'g> {
@@ -444,10 +503,8 @@ where
     fn add(self, rhs: T) -> Self::Output {
         let rhs = rhs.into_dual_array(self.graph);
 
-        let a = self.value();
-        let da = self.grad();
-        let b = rhs.value();
-        let db = rhs.grad();
+        let (a, da) = self.into_inner();
+        let (b, db) = rhs.into_inner();
 
         let c = a + b;
         let dc = self.graph.accumulator(c.shape());

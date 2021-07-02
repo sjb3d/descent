@@ -209,18 +209,28 @@ impl Schedule {
                 assert_eq!(self.ops.neighbors_directed(node_id, Incoming).count(), 1);
                 let mut in_edges = self.ops.neighbors_directed(node_id, Incoming).detach();
                 let (in_edge_id, in_node_id) = in_edges.next(&self.ops).unwrap();
-                let mut out_edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
-                while let Some((out_edge_id, out_node_id)) = out_edges.next(&self.ops) {
-                    let in_edge = &self.ops[in_edge_id];
-                    let out_edge = &self.ops[out_edge_id];
-                    assert_eq!(in_edge.arg, 0);
-                    let new_edge = OpEdge {
-                        arg: out_edge.arg,
-                        view: in_edge.view.through(&out_edge.view),
-                    };
-                    self.ops.add_edge(in_node_id, out_node_id, new_edge);
+                let can_eliminate =
+                    self.ops
+                        .edges_directed(node_id, Outgoing)
+                        .all(|out_edge_ref| {
+                            self.ops[in_edge_id]
+                                .view
+                                .can_view_through(&self.ops[out_edge_ref.id()].view)
+                        });
+                if can_eliminate {
+                    let mut out_edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
+                    while let Some((out_edge_id, out_node_id)) = out_edges.next(&self.ops) {
+                        let in_edge = &self.ops[in_edge_id];
+                        let out_edge = &self.ops[out_edge_id];
+                        assert_eq!(in_edge.arg, 0);
+                        let new_edge = OpEdge {
+                            arg: out_edge.arg,
+                            view: in_edge.view.through(&out_edge.view),
+                        };
+                        self.ops.add_edge(in_node_id, out_node_id, new_edge);
+                    }
+                    self.ops.remove_node(node_id);
                 }
-                self.ops.remove_node(node_id);
             }
         }
     }
@@ -469,22 +479,17 @@ impl Schedule {
                             outputs: vec![node_id],
                         }));
                     }
-                    Op::Convolution2D { pad } => {
+                    Op::Windows2D(params) => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
-                        assert_eq!(arg_sources.len(), 2);
-                        let kernel_inputs = arg_sources
-                            .iter()
-                            .map(|src| src.view)
-                            .collect::<ArrayVec<_, 2>>()
-                            .into_inner()
-                            .unwrap();
+                        assert_eq!(arg_sources.len(), 1);
+                        let src0 = &arg_sources[0];
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
-                            kernel: Kernel::Convolution2D(Convolution2DKernel {
+                            kernel: Kernel::Windows2D(Windows2DKernel {
                                 shape: node.shape,
-                                inputs: kernel_inputs,
-                                pad,
+                                input: src0.view,
+                                pad: params.pad,
                             }),
-                            inputs: arg_sources.iter().map(|src| src.node_id).collect(),
+                            inputs: vec![src0.node_id],
                             members: vec![node_id],
                             outputs: vec![node_id],
                         }));

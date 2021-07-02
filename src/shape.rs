@@ -1,7 +1,8 @@
+use crate::common::*;
 use std::{convert::TryInto, fmt, iter, mem, ops};
 use tinyvec::ArrayVec as TinyVec;
 
-pub(crate) const MAX_DIM: usize = 4;
+pub(crate) const MAX_DIM: usize = 6;
 pub(crate) type ShapeVec = TinyVec<[usize; MAX_DIM]>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -26,6 +27,10 @@ impl Shape {
         assert!(!v.is_empty());
         assert!(v.iter().all(|&a| a > 0));
         Self(v)
+    }
+
+    pub(crate) fn as_slice(&self) -> &[usize] {
+        self.0.as_slice()
     }
 
     pub(crate) fn prefix_ones_to_len(&self, len: usize) -> Self {
@@ -78,7 +83,7 @@ impl Shape {
         None
     }
 
-    pub(crate) fn matrix_multiply(&self, rhs: &Shape) -> Self {
+    pub(crate) fn matmul(&self, rhs: &Shape) -> Self {
         assert_eq!(rhs.0.len(), 2);
         let (a_last, a_prefix) = self.0.split_last().unwrap();
         let (b_first, b_suffix) = rhs.0.split_first().unwrap();
@@ -89,13 +94,16 @@ impl Shape {
         Shape::new(v)
     }
 
-    pub(crate) fn conv2d(&self, filters: &Shape, pad: usize) -> Self {
-        let [n, in_c, in_h, in_w]: [usize; 4] = self.0.as_slice().try_into().unwrap();
-        let [out_c, fc, fh, fw]: [usize; 4] = filters.0.as_slice().try_into().unwrap();
-        assert_eq!(in_c, fc);
-        let out_w = 1 + in_w + 2 * pad - fw;
-        let out_h = 1 + in_h + 2 * pad - fh;
-        Shape::from([n, out_c, out_h, out_w])
+    pub(crate) fn windows2d(&self, params: &Windows2DParams) -> Self {
+        assert!(self.0.len() >= 3);
+        let (prefix, suffix) = self.0.split_at(self.0.len() - 3);
+        let [in_h, in_w, in_c]: [usize; 3] = suffix.try_into().unwrap();
+        let out_w = 1 + in_w + 2 * params.pad - params.filter_w;
+        let out_h = 1 + in_h + 2 * params.pad - params.filter_h;
+        let mut v = TinyVec::new();
+        v.extend_from_slice(prefix);
+        v.extend_from_slice(&[out_h, out_w, params.filter_h, params.filter_w, in_c]);
+        Shape::new(v)
     }
 
     pub(crate) fn transposed(&self) -> Self {
@@ -182,6 +190,20 @@ impl<const N: usize> From<[usize; N]> for Shape {
     }
 }
 
+impl ops::Index<Axis> for Shape {
+    type Output = usize;
+    fn index(&self, axis: Axis) -> &Self::Output {
+        self.as_slice().index(axis.index())
+    }
+}
+impl ops::Index<isize> for Shape {
+    type Output = usize;
+    fn index(&self, index: isize) -> &Self::Output {
+        let axis = self.axis(index);
+        self.index(axis)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ViewSource {
     stride: usize,
@@ -222,7 +244,7 @@ impl ViewMapping {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct View {
-    input_shape: Shape,
+    pub(crate) input_shape: Shape,
     input_offsets: TinyVec<[isize; MAX_DIM]>,
     output_mapping: TinyVec<[ViewMapping; MAX_DIM]>,
     pub(crate) output_shape: Shape,
@@ -247,7 +269,15 @@ impl View {
         Self::identity(&self.output_shape).eq(self)
     }
 
+    pub(crate) fn can_view_through(&self, view: &View) -> bool {
+        self.is_identity() || self.output_shape == view.input_shape
+    }
+
     pub(crate) fn through(&self, view: &View) -> Self {
+        if self.is_identity() {
+            return *view;
+        }
+
         assert_eq!(&self.output_shape, &view.input_shape);
         let mut input_offsets = self.input_offsets;
         for (mapping, offset) in self

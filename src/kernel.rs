@@ -117,9 +117,7 @@ impl PerElementKernel {
                     } else {
                         write!(w, "input{}[{}", input_index, input_indexer.offset)?;
                         for (index, scale) in input_indexer.scales.iter().copied().enumerate() {
-                            if scale != 0 {
-                                write!(w, " + {}*{}[{}]", scale, coord_name, index)?;
-                            }
+                            write!(w, " + {}*{}[{}]", scale, coord_name, index)?;
                         }
                         write!(w, "];")?;
                     }
@@ -236,9 +234,7 @@ impl MatMulKernel {
         let (stride0, scales0) = indexer0.scales.split_last().unwrap();
         write!(w, "int base0 = {}", indexer0.offset)?;
         for (index, scale) in scales0.iter().copied().enumerate() {
-            if scale != 0 {
-                write!(w, " + ({})*coord[{}]", scale, index)?;
-            }
+            write!(w, " + ({})*coord[{}]", scale, index)?;
         }
         writeln!(w, ";")?;
         writeln!(w, "int stride0 = {};", stride0)?;
@@ -296,12 +292,12 @@ impl ReduceKernel {
         )?;
         generate_coord("coord", &self.shape, w)?;
 
-        let k = self.input.output_shape[self.axis.index()];
+        let k = self.input.output_shape[self.axis];
 
         let indexer = self.input.indexer();
         write!(w, "int base = {}", indexer.offset)?;
         for (index, scale) in indexer.scales.iter().copied().enumerate() {
-            if scale != 0 && index != self.axis.index() {
+            if index != self.axis.index() {
                 let offset = if self.axis.index() == 0 { 1 } else { 0 };
                 write!(w, " + ({})*coord[{}]", scale, index - offset)?;
             }
@@ -338,13 +334,13 @@ impl ReduceKernel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct Convolution2DKernel {
+pub(crate) struct Windows2DKernel {
     pub(crate) shape: Shape,
-    pub(crate) inputs: [View; 2],
+    pub(crate) input: View,
     pub(crate) pad: usize,
 }
 
-impl Convolution2DKernel {
+impl Windows2DKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
@@ -352,8 +348,7 @@ impl Convolution2DKernel {
         write!(w, "{}", include_str!("kernel_common.glsl"))?;
 
         generate_input_buffer(0, 0, w)?;
-        generate_input_buffer(1, 1, w)?;
-        generate_output_buffer(2, 0, w)?;
+        generate_output_buffer(1, 0, w)?;
 
         writeln!(w, "layout(local_size_x = 64) in;")?;
         writeln!(w, "void main() {{")?;
@@ -365,41 +360,39 @@ impl Convolution2DKernel {
         )?;
         generate_coord("coord", &self.shape, w)?;
 
-        let indexer0 = self.inputs[0].indexer();
-        let indexer1 = self.inputs[1].indexer();
-        writeln!(
-            w,
-            "int base0 = {} + ({})*coord[0];",
-            indexer0.offset, indexer0.scales[0]
-        )?;
-        writeln!(
-            w,
-            "ivec3 strides0 = ivec3({}, {}, {});",
-            indexer0.scales[1], indexer0.scales[2], indexer0.scales[3]
-        )?;
-        writeln!(
-            w,
-            "int base1 = {} + ({})*coord[0];",
-            indexer1.offset, indexer1.scales[0]
-        )?;
-        writeln!(
-            w,
-            "ivec3 strides1 = ivec3({}, {}, {});",
-            indexer1.scales[1], indexer1.scales[2], indexer1.scales[3]
-        )?;
+        let batch_dims = self.shape.len() - 5;
+        writeln!(w, "int out_y = coord[{}];", batch_dims)?;
+        writeln!(w, "int out_x = coord[{}];", batch_dims + 1)?;
+        writeln!(w, "int filter_y = coord[{}];", batch_dims + 2)?;
+        writeln!(w, "int filter_x = coord[{}];", batch_dims + 3)?;
+        writeln!(w, "int in_c = coord[{}];", batch_dims + 4)?;
 
-        writeln!(
-            w,
-            "int input_channels = {};",
-            self.inputs[0].output_shape[1]
-        )?;
-        writeln!(w, "int input_height = {};", self.inputs[0].output_shape[2])?;
-        writeln!(w, "int input_width = {};", self.inputs[0].output_shape[3])?;
-        writeln!(w, "int filter_height = {};", self.inputs[1].output_shape[2])?;
-        writeln!(w, "int filter_width = {};", self.inputs[1].output_shape[3])?;
-        writeln!(w, "int pad = {};", self.pad)?;
+        writeln!(w, "uint input_w = {};", self.input.output_shape[-2])?;
+        writeln!(w, "uint input_h = {};", self.input.output_shape[-3])?;
 
-        write!(w, "{}", include_str!("convolution_2d.glsl"))?;
+        writeln!(w, "int in_x = out_x + filter_x - {};", self.pad)?;
+        writeln!(w, "int in_y = out_y + filter_y - {};", self.pad)?;
+
+        writeln!(w, "float tmp = 0.f;")?;
+        writeln!(w, "if (uint(in_x) < input_w && uint(in_y) < input_h) {{")?;
+        let indexer = self.input.indexer();
+        write!(w, "tmp = input0[{}", indexer.offset)?;
+        for (index, scale) in indexer.scales.iter().copied().enumerate() {
+            if index < batch_dims {
+                write!(w, " + ({})*coord[{}]", scale, index)?;
+            } else {
+                write!(
+                    w,
+                    " + ({})*{}",
+                    scale,
+                    ["in_y", "in_x", "in_c"][index - batch_dims]
+                )?;
+            }
+        }
+        writeln!(w, "];")?;
+        writeln!(w, "}}")?;
+
+        writeln!(w, "output0[gl_GlobalInvocationID.x] = tmp;")?;
 
         writeln!(w, "}}")?;
 
@@ -413,7 +406,7 @@ pub(crate) enum Kernel {
     PerElement(PerElementKernel),
     Reduce(ReduceKernel),
     MatMul(MatMulKernel),
-    Convolution2D(Convolution2DKernel),
+    Windows2D(Windows2DKernel),
 }
 
 impl Kernel {
@@ -422,7 +415,7 @@ impl Kernel {
             Kernel::PerElement(kernel) => kernel.generate_source(),
             Kernel::MatMul(kernel) => kernel.generate_source(),
             Kernel::Reduce(kernel) => kernel.generate_source(),
-            Kernel::Convolution2D(kernel) => kernel.generate_source(),
+            Kernel::Windows2D(kernel) => kernel.generate_source(),
         }
     }
 
@@ -431,7 +424,7 @@ impl Kernel {
             Kernel::PerElement(kernel) => kernel.inputs.len() + kernel.outputs.len(),
             Kernel::MatMul(..) => 3,
             Kernel::Reduce(..) => 2,
-            Kernel::Convolution2D(..) => 3,
+            Kernel::Windows2D(..) => 2,
         }
     }
 
@@ -440,7 +433,7 @@ impl Kernel {
             Kernel::PerElement(kernel) => kernel.element_count,
             Kernel::MatMul(kernel) => kernel.shape.element_count(),
             Kernel::Reduce(kernel) => kernel.shape.element_count(),
-            Kernel::Convolution2D(kernel) => kernel.shape.element_count(),
+            Kernel::Windows2D(kernel) => kernel.shape.element_count(),
         };
         ((element_count as u32) + 63) / 64
     }

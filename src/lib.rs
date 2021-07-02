@@ -70,9 +70,9 @@ mod tests {
         let b_data: Vec<f32> = iter::repeat(1.0).take(9).collect();
         let c_data: Vec<f32> = iter::repeat(9.0).take(64).collect();
 
-        let a_var = env.variable([1, 1, 10, 10], "a");
-        let b_var = env.variable([1, 1, 3, 3], "b");
-        let c_var = env.variable([1, 1, 8, 8], "c");
+        let a_var = env.variable([1, 10, 10, 1], "a");
+        let b_var = env.variable([1, 3, 3, 1], "b");
+        let c_var = env.variable([1, 8, 8, 1], "c");
 
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
         env.writer(&b_var).write_all(cast_slice(&b_data)).unwrap();
