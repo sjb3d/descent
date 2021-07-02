@@ -76,7 +76,7 @@ fn unpack_labels(
 }
 
 fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> DualArray<'g> {
-    let (z, dz) = (z.value(), z.grad());
+    let (z, dz) = z.into_inner();
     let y = y.into_array(z.graph());
 
     // softmax
