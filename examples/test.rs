@@ -167,9 +167,13 @@ fn main() {
 
     let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
     let mut network = LayeredNetwork::new();
-    network.add_layer(Linear::new(&mut env, 28 * 28, 300, &mut rng));
-    network.add_layer(LeakyRelu::new(0.01));
-    network.add_layer(Linear::new(&mut env, 300, 10, &mut rng));
+    if false {
+        network.add_layer(Linear::new(&mut env, 28 * 28, 10, &mut rng));
+    } else {
+        network.add_layer(Linear::new(&mut env, 28 * 28, 300, &mut rng));
+        network.add_layer(LeakyRelu::new(0.01));
+        network.add_layer(Linear::new(&mut env, 300, 10, &mut rng));
+    }
 
     let loss_sum_var = env.variable([1], "loss");
     let accuracy_sum_var = env.variable([1], "accuracy");
@@ -180,6 +184,17 @@ fn main() {
         // emit the graph for the network
         let x = network.forward_pass(graph.parameter(&x_var));
         let loss = softmax_cross_entropy_loss(x, &y_var);
+
+        // accumulate loss (into variable)
+        graph.update_variable(&loss_sum_var, |loss_sum| {
+            loss_sum + loss.value().reduce_sum(0)
+        });
+
+        // accumulate accuracy (into variable)
+        let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
+        graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
+            accuracy_sum + accuracy.reduce_sum(0)
+        });
 
         // train using gradient of the loss
         let mut parameters = Vec::new();
@@ -220,8 +235,8 @@ fn main() {
     test_graph.write_dot(&mut f).unwrap();
 
     // load training data
-    let train_images = load_gz_bytes("data/train-images-idx3-ubyte.gz").unwrap();
-    let train_labels = load_gz_bytes("data/train-labels-idx1-ubyte.gz").unwrap();
+    let train_images = load_gz_bytes("data/fashion/train-images-idx3-ubyte.gz").unwrap();
+    let train_labels = load_gz_bytes("data/fashion/train-labels-idx1-ubyte.gz").unwrap();
     let ((train_image_count, train_image_rows, train_image_cols), _) =
         read_images_info(&train_images);
     let (train_label_count, _) = read_labels_info(&train_labels);
@@ -231,8 +246,8 @@ fn main() {
     assert_eq!(train_image_cols, 28);
 
     // load test data
-    let test_images = load_gz_bytes("data/t10k-images-idx3-ubyte.gz").unwrap();
-    let test_labels = load_gz_bytes("data/t10k-labels-idx1-ubyte.gz").unwrap();
+    let test_images = load_gz_bytes("data/fashion/t10k-images-idx3-ubyte.gz").unwrap();
+    let test_labels = load_gz_bytes("data/fashion/t10k-labels-idx1-ubyte.gz").unwrap();
     let ((test_image_count, test_image_rows, test_image_cols), _) = read_images_info(&test_images);
     let (test_label_count, _) = read_labels_info(&test_labels);
     assert_eq!(test_image_count, test_label_count);
@@ -245,12 +260,22 @@ fn main() {
         // loop over training mini-batches
         let mut batch_indices: Vec<_> = (0..(train_image_count / m)).collect();
         batch_indices.shuffle(&mut rng);
+        env.writer(&loss_sum_var).zero_fill();
+        env.writer(&accuracy_sum_var).zero_fill();
         for batch_index in batch_indices.iter().copied() {
             let first_index = batch_index * m;
             unpack_images(&mut env, &x_var, &train_images, first_index, m).unwrap();
             unpack_labels(&mut env, &y_var, &train_labels, first_index, m).unwrap();
             env.run(&train_graph);
         }
+        let mut train_loss = 0f32;
+        let mut train_accuracy = 0f32;
+        env.reader(&loss_sum_var)
+            .read_exact(bytemuck::bytes_of_mut(&mut train_loss))
+            .unwrap();
+        env.reader(&accuracy_sum_var)
+            .read_exact(bytemuck::bytes_of_mut(&mut train_accuracy))
+            .unwrap();
 
         // loop over test mini-batches to evaluate loss and accuracy
         env.writer(&loss_sum_var).zero_fill();
@@ -261,19 +286,21 @@ fn main() {
             unpack_labels(&mut env, &y_var, &test_labels, first_index, m).unwrap();
             env.run(&test_graph);
         }
-        let mut total_loss = 0f32;
-        let mut total_accuracy = 0f32;
+        let mut test_loss = 0f32;
+        let mut test_accuracy = 0f32;
         env.reader(&loss_sum_var)
-            .read_exact(bytemuck::bytes_of_mut(&mut total_loss))
+            .read_exact(bytemuck::bytes_of_mut(&mut test_loss))
             .unwrap();
         env.reader(&accuracy_sum_var)
-            .read_exact(bytemuck::bytes_of_mut(&mut total_accuracy))
+            .read_exact(bytemuck::bytes_of_mut(&mut test_accuracy))
             .unwrap();
         println!(
-            "epoch: {}, loss: {}, accuracy: {}",
+            "epoch: {}, loss: {}/{}, accuracy: {}/{}",
             epoch_index,
-            total_loss / (test_image_count as f32),
-            total_accuracy / (test_image_count as f32)
+            train_loss / (train_image_count as f32),
+            test_loss / (test_image_count as f32),
+            train_accuracy / (train_image_count as f32),
+            test_accuracy / (test_image_count as f32)
         );
     }
 }
