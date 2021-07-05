@@ -40,13 +40,6 @@ pub(crate) enum UnaryOp {
     Log,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct Windows2DParams {
-    pub(crate) filter_w: usize,
-    pub(crate) filter_h: usize,
-    pub(crate) pad: usize,
-}
-
 pub(crate) const MAX_OP_ARGS: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,7 +54,8 @@ pub(crate) enum Op {
     Accumulate, // accumulates grad from backprop
     MatMul,
     Reduce { reduce_op: ReduceOp, axis: Axis },
-    Windows2D(Windows2DParams),
+    ImageToWindows { pad: usize },
+    WindowsToImage { pad: usize },
 }
 
 impl Op {

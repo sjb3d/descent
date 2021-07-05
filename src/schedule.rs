@@ -479,15 +479,30 @@ impl Schedule {
                             outputs: vec![node_id],
                         }));
                     }
-                    Op::Windows2D(params) => {
+                    Op::ImageToWindows { pad } => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
                         assert_eq!(arg_sources.len(), 1);
                         let src0 = &arg_sources[0];
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
-                            kernel: Kernel::Windows2D(Windows2DKernel {
+                            kernel: Kernel::ImageToWindows(ImageToWindowsKernel {
                                 shape: node.shape,
                                 input: src0.view,
-                                pad: params.pad,
+                                pad,
+                            }),
+                            inputs: vec![src0.node_id],
+                            members: vec![node_id],
+                            outputs: vec![node_id],
+                        }));
+                    }
+                    Op::WindowsToImage { pad } => {
+                        let arg_sources = get_arg_sources(&self.ops, node_id);
+                        assert_eq!(arg_sources.len(), 1);
+                        let src0 = &arg_sources[0];
+                        self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
+                            kernel: Kernel::WindowsToImage(WindowsToImageKernel {
+                                shape: node.shape,
+                                input: src0.view,
+                                pad,
                             }),
                             inputs: vec![src0.node_id],
                             members: vec![node_id],

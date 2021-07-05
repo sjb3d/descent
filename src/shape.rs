@@ -1,4 +1,3 @@
-use crate::common::*;
 use std::{convert::TryInto, fmt, iter, mem, ops};
 use tinyvec::ArrayVec as TinyVec;
 
@@ -31,6 +30,10 @@ impl Shape {
 
     pub(crate) fn as_slice(&self) -> &[usize] {
         self.0.as_slice()
+    }
+
+    pub(crate) fn rsplit_at(&self, rmid: usize) -> (&[usize], &[usize]) {
+        self.0.split_at(self.0.len() - rmid)
     }
 
     pub(crate) fn prefix_ones_to_len(&self, len: usize) -> Self {
@@ -94,15 +97,27 @@ impl Shape {
         Shape::new(v)
     }
 
-    pub(crate) fn windows2d(&self, params: &Windows2DParams) -> Self {
+    pub(crate) fn image_to_windows(&self, filter_w: usize, filter_h: usize, pad: usize) -> Self {
         assert!(self.0.len() >= 3);
-        let (prefix, suffix) = self.0.split_at(self.0.len() - 3);
-        let [in_h, in_w, in_c]: [usize; 3] = suffix.try_into().unwrap();
-        let out_w = 1 + in_w + 2 * params.pad - params.filter_w;
-        let out_h = 1 + in_h + 2 * params.pad - params.filter_h;
+        let (prefix, suffix) = self.rsplit_at(3);
+        let [in_h, in_w, in_nc]: [usize; 3] = suffix.try_into().unwrap();
+        let out_w = 1 + in_w + 2 * pad - filter_w;
+        let out_h = 1 + in_h + 2 * pad - filter_h;
         let mut v = TinyVec::new();
         v.extend_from_slice(prefix);
-        v.extend_from_slice(&[out_h, out_w, params.filter_h, params.filter_w, in_c]);
+        v.extend_from_slice(&[out_h, out_w, filter_h, filter_w, in_nc]);
+        Shape::new(v)
+    }
+
+    pub(crate) fn windows_to_image(&self, pad: usize) -> Self {
+        assert!(self.0.len() >= 5);
+        let (prefix, suffix) = self.rsplit_at(5);
+        let [out_h, out_w, filter_h, filter_w, in_nc]: [usize; 5] = suffix.try_into().unwrap();
+        let in_w = out_w + filter_w - 1 - 2 * pad;
+        let in_h = out_h + filter_h - 1 - 2 * pad;
+        let mut v = TinyVec::new();
+        v.extend_from_slice(prefix);
+        v.extend_from_slice(&[in_h, in_w, in_nc]);
         Shape::new(v)
     }
 

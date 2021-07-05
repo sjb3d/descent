@@ -78,7 +78,7 @@ mod tests {
         env.writer(&b_var).write_all(cast_slice(&b_data)).unwrap();
 
         let g = env.graph();
-        g.write_variable(&c_var, g.read_variable(&a_var).conv2d(&b_var, 0));
+        g.write_variable(&c_var, g.parameter(&a_var).conv2d(&b_var, 0).value());
 
         let g = g.build_schedule();
         env.run(&g);

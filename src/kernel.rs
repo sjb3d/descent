@@ -2,7 +2,7 @@ use crate::{common::*, device::common::*};
 use ordered_float::NotNan;
 use shaderc::{Compiler, ShaderKind};
 use spark::{vk, Builder};
-use std::{collections::HashMap, ffi::CStr, fmt, fmt::Write, mem, slice};
+use std::{collections::HashMap, convert::TryInto, ffi::CStr, fmt, fmt::Write, mem, slice};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum PerElementKernelOp {
@@ -334,13 +334,13 @@ impl ReduceKernel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct Windows2DKernel {
+pub(crate) struct ImageToWindowsKernel {
     pub(crate) shape: Shape,
     pub(crate) input: View,
     pub(crate) pad: usize,
 }
 
-impl Windows2DKernel {
+impl ImageToWindowsKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
@@ -400,13 +400,95 @@ impl Windows2DKernel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct WindowsToImageKernel {
+    pub(crate) shape: Shape,
+    pub(crate) input: View,
+    pub(crate) pad: usize,
+}
+
+impl WindowsToImageKernel {
+    fn generate_source(&self) -> Result<String, fmt::Error> {
+        let mut src = String::new();
+        let w = &mut src;
+
+        write!(w, "{}", include_str!("kernel_common.glsl"))?;
+
+        generate_input_buffer(0, 0, w)?;
+        generate_output_buffer(1, 0, w)?;
+
+        writeln!(w, "layout(local_size_x = 64) in;")?;
+        writeln!(w, "void main() {{")?;
+
+        writeln!(
+            w,
+            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
+            self.shape.element_count()
+        )?;
+        generate_coord("coord", &self.shape, w)?;
+
+        let (_, suffix) = self.input.output_shape.rsplit_at(5);
+        let [out_h, out_w, filter_h, filter_w, _in_nc]: [usize; 5] = suffix.try_into().unwrap();
+
+        let batch_dims = self.shape.len() - 3;
+        writeln!(w, "int in_y = coord[{}];", batch_dims)?;
+        writeln!(w, "int in_x = coord[{}];", batch_dims + 1)?;
+        writeln!(w, "int in_c = coord[{}];", batch_dims + 2)?;
+
+        writeln!(w, "uint out_w = {};", out_w)?;
+        writeln!(w, "uint out_h = {};", out_h)?;
+
+        writeln!(w, "float tmp = 0.f;")?;
+        writeln!(
+            w,
+            "for (int filter_y = 0; filter_y < {}; ++filter_y)",
+            filter_h
+        )?;
+        writeln!(
+            w,
+            "for (int filter_x = 0; filter_x < {}; ++filter_x) {{",
+            filter_w
+        )?;
+        writeln!(w, "int out_x = in_x + {} - filter_x;", self.pad)?;
+        writeln!(w, "int out_y = in_y + {} - filter_y;", self.pad)?;
+        writeln!(w, "if (uint(out_x) < out_w && uint(out_y) < out_w) {{")?;
+
+        let indexer = self.input.indexer();
+        writeln!(w, "tmp += input0[{}", indexer.offset)?;
+        for (index, scale) in indexer.scales.iter().copied().enumerate() {
+            if index < batch_dims {
+                write!(w, " + ({})*coord[{}]", scale, index)?;
+            } else {
+                write!(
+                    w,
+                    " + ({})*{}",
+                    scale,
+                    ["out_y", "out_x", "filter_y", "filter_x", "in_c"][index - batch_dims]
+                )?;
+            }
+        }
+        writeln!(w, "];")?;
+
+        writeln!(w, "")?;
+        writeln!(w, "}}")?;
+        writeln!(w, "}}")?;
+
+        writeln!(w, "output0[gl_GlobalInvocationID.x] = tmp;")?;
+
+        writeln!(w, "}}")?;
+
+        Ok(src)
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Kernel {
     PerElement(PerElementKernel),
     Reduce(ReduceKernel),
     MatMul(MatMulKernel),
-    Windows2D(Windows2DKernel),
+    ImageToWindows(ImageToWindowsKernel),
+    WindowsToImage(WindowsToImageKernel),
 }
 
 impl Kernel {
@@ -415,7 +497,8 @@ impl Kernel {
             Kernel::PerElement(kernel) => kernel.generate_source(),
             Kernel::MatMul(kernel) => kernel.generate_source(),
             Kernel::Reduce(kernel) => kernel.generate_source(),
-            Kernel::Windows2D(kernel) => kernel.generate_source(),
+            Kernel::ImageToWindows(kernel) => kernel.generate_source(),
+            Kernel::WindowsToImage(kernel) => kernel.generate_source(),
         }
     }
 
@@ -424,7 +507,8 @@ impl Kernel {
             Kernel::PerElement(kernel) => kernel.inputs.len() + kernel.outputs.len(),
             Kernel::MatMul(..) => 3,
             Kernel::Reduce(..) => 2,
-            Kernel::Windows2D(..) => 2,
+            Kernel::ImageToWindows(..) => 2,
+            Kernel::WindowsToImage(..) => 2,
         }
     }
 
@@ -433,7 +517,8 @@ impl Kernel {
             Kernel::PerElement(kernel) => kernel.element_count,
             Kernel::MatMul(kernel) => kernel.shape.element_count(),
             Kernel::Reduce(kernel) => kernel.shape.element_count(),
-            Kernel::Windows2D(kernel) => kernel.shape.element_count(),
+            Kernel::ImageToWindows(kernel) => kernel.shape.element_count(),
+            Kernel::WindowsToImage(kernel) => kernel.shape.element_count(),
         };
         ((element_count as u32) + 63) / 64
     }
