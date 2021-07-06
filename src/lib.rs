@@ -41,8 +41,8 @@ mod tests {
     fn reduce() {
         let mut env = Environment::new();
 
-        let a_data: Vec<_> = (0..100).map(|i| i as f32).collect();
-        let b_data: Vec<_> = a_data.chunks(10).map(|v| v.iter().sum::<f32>()).collect();
+        let a_data: Vec<f32> = (0..100).map(|i| i as f32).collect();
+        let b_data: Vec<f32> = a_data.chunks(10).map(|v| v.iter().sum::<f32>()).collect();
 
         let a_var = env.variable([10, 10], "a");
         let b_var = env.variable([10, 1], "b");
@@ -88,5 +88,35 @@ mod tests {
             .read_exact(cast_slice_mut(&mut c_result))
             .unwrap();
         assert_eq!(c_result, c_data);
+    }
+
+    #[test]
+    fn max_pool() {
+        let mut env = Environment::new();
+
+        let a_data: Vec<_> = (0..100).map(|i| i as f32).collect();
+        let b_data: Vec<f32> = (0..25)
+            .map(|i| (11 + 2 * (i % 5) + 20 * (i / 5)) as f32)
+            .collect();
+
+        let a_var = env.variable([10, 10], "a");
+        let b_var = env.variable([5, 5], "b");
+
+        env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
+
+        let g = env.graph();
+        g.write_variable(
+            &b_var,
+            g.read_variable(&a_var).max_pool(0, 2).max_pool(1, 2),
+        );
+
+        let g = g.build_schedule();
+        env.run(&g);
+
+        let mut b_result = vec![0f32; b_data.len()];
+        env.reader(&b_var)
+            .read_exact(cast_slice_mut(&mut b_result))
+            .unwrap();
+        assert_eq!(b_result, b_data);
     }
 }

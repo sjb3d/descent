@@ -8,13 +8,17 @@ pub(crate) type ShapeVec = TinyVec<[usize; MAX_DIM]>;
 pub struct Axis(u8);
 
 impl Axis {
-    pub(crate) fn from_index(index: usize) -> Axis {
+    pub(crate) fn from_index(index: usize) -> Self {
         assert!(index < MAX_DIM);
         Self(index as u8)
     }
 
     pub(crate) fn index(&self) -> usize {
         self.0 as usize
+    }
+
+    pub(crate) fn inner(&self) -> Self {
+        Self(self.0 + 1)
     }
 }
 
@@ -30,6 +34,10 @@ impl Shape {
 
     pub(crate) fn as_slice(&self) -> &[usize] {
         self.0.as_slice()
+    }
+
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [usize] {
+        self.0.as_mut_slice()
     }
 
     pub(crate) fn rsplit_at(&self, rmid: usize) -> (&[usize], &[usize]) {
@@ -118,6 +126,20 @@ impl Shape {
         let mut v = TinyVec::new();
         v.extend_from_slice(prefix);
         v.extend_from_slice(&[in_h, in_w, in_nc]);
+        Shape::new(v)
+    }
+
+    pub(crate) fn pool(&self, axis: isize, size: usize) -> Self {
+        let axis = self.axis(axis);
+        let (prefix, suffix) = self.0.split_at(axis.index());
+        let (src_size, suffix) = suffix.split_first().unwrap();
+        let src_size = *src_size;
+        assert_eq!(src_size % size, 0, "pooling must exactly divide the axis");
+        let mut v = ShapeVec::new();
+        v.extend_from_slice(prefix);
+        v.push(src_size / size);
+        v.push(size);
+        v.extend_from_slice(suffix);
         Shape::new(v)
     }
 
@@ -211,33 +233,36 @@ impl ops::Index<Axis> for Shape {
         self.as_slice().index(axis.index())
     }
 }
+impl ops::IndexMut<Axis> for Shape {
+    fn index_mut(&mut self, axis: Axis) -> &mut Self::Output {
+        self.as_mut_slice().index_mut(axis.index())
+    }
+}
 impl ops::Index<isize> for Shape {
     type Output = usize;
     fn index(&self, index: isize) -> &Self::Output {
-        let axis = self.axis(index);
-        self.index(axis)
+        self.index(self.axis(index))
+    }
+}
+impl ops::IndexMut<isize> for Shape {
+    fn index_mut(&mut self, index: isize) -> &mut Self::Output {
+        self.index_mut(self.axis(index))
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct ViewSource {
-    stride: usize,
-    offset: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum ViewMapping {
+enum AxisMapping {
     Source { axis: Axis, step: isize },
     Broadcast,
 }
 
-impl Default for ViewMapping {
+impl Default for AxisMapping {
     fn default() -> Self {
         Self::Broadcast
     }
 }
 
-impl ViewMapping {
+impl AxisMapping {
     fn identity(axis: Axis, length: usize) -> Self {
         if length > 1 {
             Self::Source { axis, step: 1 }
@@ -261,7 +286,7 @@ impl ViewMapping {
 pub(crate) struct View {
     pub(crate) input_shape: Shape,
     input_offsets: TinyVec<[isize; MAX_DIM]>,
-    output_mapping: TinyVec<[ViewMapping; MAX_DIM]>,
+    output_mapping: TinyVec<[AxisMapping; MAX_DIM]>,
     pub(crate) output_shape: Shape,
 }
 
@@ -274,7 +299,7 @@ impl View {
                 .iter()
                 .copied()
                 .enumerate()
-                .map(|(index, shape)| ViewMapping::identity(Axis::from_index(index), shape))
+                .map(|(index, shape)| AxisMapping::identity(Axis::from_index(index), shape))
                 .collect(),
             output_shape: *shape,
         }
@@ -302,8 +327,8 @@ impl View {
             .zip(view.input_offsets.iter().copied())
         {
             match mapping {
-                ViewMapping::Source { axis, step } => input_offsets[axis.index()] += step * offset,
-                ViewMapping::Broadcast => {}
+                AxisMapping::Source { axis, step } => input_offsets[axis.index()] += step * offset,
+                AxisMapping::Broadcast => {}
             }
         }
         let output_mapping = view
@@ -311,10 +336,10 @@ impl View {
             .iter()
             .copied()
             .map(|outer| match outer {
-                ViewMapping::Source { axis, step } => {
+                AxisMapping::Source { axis, step } => {
                     self.output_mapping[axis.index()].stepped(step)
                 }
-                ViewMapping::Broadcast => ViewMapping::Broadcast,
+                AxisMapping::Broadcast => AxisMapping::Broadcast,
             })
             .collect();
         Self {
@@ -340,7 +365,7 @@ impl View {
         let input_offsets = iter::repeat(0).take(input_shape.len()).collect();
         let mut output_mapping = TinyVec::new();
         while output_mapping.len() + input_shape.len() < output_shape.len() {
-            output_mapping.push(ViewMapping::Broadcast);
+            output_mapping.push(AxisMapping::Broadcast);
         }
         for (index, (&from, &to)) in input_shape
             .iter()
@@ -348,9 +373,9 @@ impl View {
             .enumerate()
         {
             output_mapping.push(if from == to {
-                ViewMapping::identity(Axis::from_index(index), from)
+                AxisMapping::identity(Axis::from_index(index), from)
             } else {
-                ViewMapping::Broadcast
+                AxisMapping::Broadcast
             });
         }
         Self {
@@ -380,8 +405,8 @@ impl ViewIndexer {
             .output_mapping
             .iter()
             .map(|mapping| match mapping {
-                ViewMapping::Source { axis, step } => input_strides[axis.index()] * step,
-                ViewMapping::Broadcast => 0,
+                AxisMapping::Source { axis, step } => input_strides[axis.index()] * step,
+                AxisMapping::Broadcast => 0,
             })
             .collect();
         let offset = view

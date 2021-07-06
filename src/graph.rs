@@ -274,6 +274,21 @@ impl<'g> Array<'g> {
             .with_state(|state| state.ops.graph[self.node_id].shape)
     }
 
+    pub fn max_pool(&self, axis: isize, size: usize) -> Self {
+        let self_shape = self.shape();
+        let self_axis = self_shape.axis(axis);
+
+        let pool_shape = self_shape.pool(axis, size);
+        let pool_axis = self_axis.inner();
+
+        let mut output_shape = self_shape;
+        output_shape[self_axis] /= size;
+
+        self.reshape(pool_shape)
+            .reduce_op(ReduceOp::Max, pool_axis)
+            .reshape(output_shape)
+    }
+
     pub fn accumulate(&self, src: Array) {
         self.graph.with_state(|state| {
             assert_eq!(state.ops.graph[self.node_id].op, Op::Accumulate);
@@ -495,6 +510,7 @@ impl<'g> DualArray<'g> {
     pub fn conv2d(self, filter: impl IntoDualArray<'g>, pad: usize) -> Self {
         let filter = filter.into_dual_array(self.graph);
 
+        // copy and pad the input into windows that match the filter size
         let self_shape = self.shape();
         let filter_shape = filter.shape();
         assert_eq!(self_shape.len(), 4);
@@ -504,8 +520,9 @@ impl<'g> DualArray<'g> {
         let [filter_oc, filter_h, filter_w, filter_ic]: [usize; 4] =
             filter_shape.as_slice().try_into().unwrap();
         assert_eq!(input_c, filter_ic);
-
         let windows = self.image_to_windows(filter_w, filter_h, pad);
+
+        // apply the filter using a matrix multiplication
         let windows_shape = windows.shape();
         let [windows_m, output_h, output_w, windows_fh, windows_fw, windows_ic]: [usize; 6] =
             windows_shape.as_slice().try_into().unwrap();
@@ -513,10 +530,11 @@ impl<'g> DualArray<'g> {
         assert_eq!(filter_h, windows_fh);
         assert_eq!(filter_w, windows_fw);
         assert_eq!(filter_ic, windows_ic);
-
         let a = windows.reshape([m * output_h * output_w, filter_h * filter_w * filter_ic]);
         let b = filter.reshape([filter_oc, filter_h * filter_w * filter_ic]);
         let c = a.matmul(b.transpose());
+
+        // reshape output back to 4D
         c.reshape([m, output_h, output_w, filter_oc])
     }
 
