@@ -538,6 +538,30 @@ impl<'g> DualArray<'g> {
         c.reshape([m, output_h, output_w, filter_oc])
     }
 
+    pub fn max_pool(self, axis: isize, pool_size: usize) -> Self {
+        let input_shape = self.shape();
+        let input_axis = input_shape.axis(axis);
+
+        let reduce_input_shape = input_shape.pool(axis, pool_size);
+        let reduce_axis = input_axis.inner();
+
+        let mut output_shape = input_shape;
+        output_shape[input_axis] /= pool_size;
+
+        let (a, da) = self.into_inner();
+
+        let reduce_input = a.reshape(reduce_input_shape);
+        let reduce_output = reduce_input.reduce_op(ReduceOp::Max, reduce_axis);
+        let b = reduce_output.reshape(output_shape);
+
+        let db = self.graph.accumulator(b.shape());
+        let reduce_output_grad = db.reshape(reduce_output.shape());
+        let reduce_input_grad = reduce_input.select_eq(reduce_output, reduce_output_grad, 0.0);
+        da.accumulate(reduce_input_grad.reshape(input_shape));
+
+        Self::new(b, db)
+    }
+
     pub fn set_loss(self) -> Array<'g> {
         self.grad().set_loss_grad();
         self.value()

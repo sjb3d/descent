@@ -107,7 +107,7 @@ mod tests {
         let g = env.graph();
         g.write_variable(
             &b_var,
-            g.read_variable(&a_var).max_pool(0, 2).max_pool(1, 2),
+            g.parameter(&a_var).max_pool(0, 2).max_pool(1, 2).value(),
         );
 
         let g = g.build_schedule();
