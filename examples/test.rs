@@ -156,24 +156,43 @@ fn adam_step(
     }
 }
 
+enum Test {
+    Linear,
+    Hidden300,
+    ConvNet,
+}
+
 fn main() {
     let epoch_count = 40;
     let m = 1000; // mini-batch size
+    let test = Test::Hidden300;
 
     let mut env = Environment::new();
 
-    let x_var = env.variable([m, 28 * 28], "x");
-    let y_var = env.variable([m, 1], "y");
-
+    let network = Network::builder();
+    let network = match test {
+        Test::Linear => network
+            .with_layer(Layer::Flatten)
+            .with_layer(Layer::Linear(Linear::new(10))),
+        Test::Hidden300 => network
+            .with_layer(Layer::Flatten)
+            .with_layer(Layer::Linear(Linear::new(300)))
+            .with_layer(Layer::LeakyRelu(0.01))
+            .with_layer(Layer::Linear(Linear::new(10))),
+        Test::ConvNet => network
+            .with_layer(Layer::Conv2D(Conv2D::new(32, 3, 3, 0)))
+            .with_layer(Layer::LeakyRelu(0.01))
+            .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2)))
+            .with_layer(Layer::Flatten)
+            .with_layer(Layer::Linear(Linear::new(128)))
+            .with_layer(Layer::LeakyRelu(0.01))
+            .with_layer(Layer::Linear(Linear::new(10))),
+    };
     let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
-    let mut network = LayeredNetwork::new();
-    if false {
-        network.add_layer(Linear::new(&mut env, 28 * 28, 10, &mut rng));
-    } else {
-        network.add_layer(Linear::new(&mut env, 28 * 28, 300, &mut rng));
-        network.add_layer(LeakyRelu::new(0.01));
-        network.add_layer(Linear::new(&mut env, 300, 10, &mut rng));
-    }
+    let network = network.finish([28, 28, 1], &mut env, &mut rng);
+
+    let x_var = env.variable([m, 28, 28, 1], "x");
+    let y_var = env.variable([m, 1], "y");
 
     let loss_sum_var = env.variable([1], "loss");
     let accuracy_sum_var = env.variable([1], "accuracy");
@@ -197,13 +216,12 @@ fn main() {
         });
 
         // train using gradient of the loss
-        let mut parameters = Vec::new();
-        network.collect_parameters(&mut parameters);
         loss.set_loss();
+        let parameters = network.parameters();
         if false {
-            stochastic_gradient_descent_step(&graph, &parameters, m, 0.1);
+            stochastic_gradient_descent_step(&graph, parameters, m, 0.1);
         } else {
-            adam_step(&mut env, &graph, &parameters, m, 0.001, 0.9, 0.999, 1.0E-8);
+            adam_step(&mut env, &graph, parameters, m, 0.001, 0.9, 0.999, 1.0E-8);
         }
 
         graph.build_schedule()

@@ -75,6 +75,41 @@ void compute_grid_coord(
 }
 
 void compute_grid_coord(
+    out int coord[5],
+    uint /*shape0*/,
+    uint shape1,
+    uint shape2,
+    uint shape3,
+    uint shape4)
+{
+    uint remain = gl_GlobalInvocationID.x;
+
+    uint tmp4 = remain;
+    remain /= shape4;
+    tmp4 -= remain*shape4;
+
+    uint tmp3 = remain;
+    remain /= shape3;
+    tmp3 -= remain*shape3;
+
+    uint tmp2 = remain;
+    remain /= shape2;
+    tmp2 -= remain*shape2;
+
+    uint tmp1 = remain;
+    remain /= shape1;
+    tmp1 -= remain*shape1;
+
+    uint tmp0 = remain;
+
+    coord[0] = int(tmp0);
+    coord[1] = int(tmp1);
+    coord[2] = int(tmp2);
+    coord[3] = int(tmp3);
+    coord[4] = int(tmp4);
+}
+
+void compute_grid_coord(
     out int coord[6],
     uint /*shape0*/,
     uint shape1,
