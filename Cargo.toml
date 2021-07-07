@@ -22,3 +22,5 @@ tinyvec = "1.2"
 [dev-dependencies]
 rand_chacha = "0.3"
 flate2 = "1.0"
+structopt = { version = "0.3", default-features = false }
+strum = { version = "0.21", features = ["derive"] }

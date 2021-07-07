@@ -7,6 +7,8 @@ use std::{
     io::{self, prelude::*, BufReader, BufWriter},
     path::Path,
 };
+use structopt::StructOpt;
+use strum::{EnumString, EnumVariantNames, VariantNames};
 
 fn load_gz_bytes(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
     let reader = BufReader::new(File::open(path).unwrap());
@@ -156,31 +158,47 @@ fn adam_step(
     }
 }
 
-enum Test {
+#[derive(Debug, EnumString, EnumVariantNames)]
+#[strum(serialize_all = "kebab_case")]
+enum TestNetwork {
     Linear,
     Hidden300,
     ConvNet,
 }
 
+#[derive(Debug, StructOpt)]
+#[structopt(no_version)]
+struct AppParams {
+    #[structopt(possible_values=&TestNetwork::VARIANTS, default_value="hidden300")]
+    network: TestNetwork,
+
+    #[structopt(short, long, global = true, default_value = "1000")]
+    mini_batch_size: usize,
+
+    #[structopt(short, long, global = true, default_value = "40")]
+    epoch_count: usize,
+}
+
 fn main() {
-    let epoch_count = 40;
-    let m = 1000; // mini-batch size
-    let test = Test::Hidden300;
+    let app_params = AppParams::from_args();
 
     let mut env = Environment::new();
 
     let network = Network::builder();
-    let network = match test {
-        Test::Linear => network
+    let network = match app_params.network {
+        TestNetwork::Linear => network
             .with_layer(Layer::Flatten)
             .with_layer(Layer::Linear(Linear::new(10))),
-        Test::Hidden300 => network
+        TestNetwork::Hidden300 => network
             .with_layer(Layer::Flatten)
             .with_layer(Layer::Linear(Linear::new(300)))
             .with_layer(Layer::LeakyRelu(0.01))
             .with_layer(Layer::Linear(Linear::new(10))),
-        Test::ConvNet => network
-            .with_layer(Layer::Conv2D(Conv2D::new(32, 3, 3, 0)))
+        TestNetwork::ConvNet => network
+            .with_layer(Layer::Conv2D(Conv2D::new(32, 3, 3, 1)))
+            .with_layer(Layer::LeakyRelu(0.01))
+            .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2)))
+            .with_layer(Layer::Conv2D(Conv2D::new(64, 3, 3, 1)))
             .with_layer(Layer::LeakyRelu(0.01))
             .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2)))
             .with_layer(Layer::Flatten)
@@ -191,6 +209,7 @@ fn main() {
     let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
     let network = network.finish([28, 28, 1], &mut env, &mut rng);
 
+    let m = app_params.mini_batch_size;
     let x_var = env.variable([m, 28, 28, 1], "x");
     let y_var = env.variable([m, 1], "y");
 
@@ -226,8 +245,9 @@ fn main() {
 
         graph.build_schedule()
     };
-    let mut f = BufWriter::new(File::create("train.dot").unwrap());
-    train_graph.write_dot(&mut f).unwrap();
+    train_graph
+        .write_dot(&mut BufWriter::new(File::create("train.dot").unwrap()))
+        .unwrap();
 
     let test_graph = {
         let graph = env.graph();
@@ -249,8 +269,9 @@ fn main() {
 
         graph.build_schedule()
     };
-    let mut f = BufWriter::new(File::create("test.dot").unwrap());
-    test_graph.write_dot(&mut f).unwrap();
+    test_graph
+        .write_dot(&mut BufWriter::new(File::create("test.dot").unwrap()))
+        .unwrap();
 
     // load training data
     let train_images = load_gz_bytes("data/fashion/train-images-idx3-ubyte.gz").unwrap();
@@ -274,7 +295,7 @@ fn main() {
     assert_eq!(test_image_cols, 28);
 
     // run epochs
-    for epoch_index in 0..epoch_count {
+    for epoch_index in 0..app_params.epoch_count {
         // loop over training mini-batches
         let mut batch_indices: Vec<_> = (0..(train_image_count / m)).collect();
         batch_indices.shuffle(&mut rng);
