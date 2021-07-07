@@ -1,3 +1,4 @@
+use bytemuck::{Pod, Zeroable};
 use descent::{layer::*, prelude::*};
 use flate2::bufread::GzDecoder;
 use rand::{prelude::SliceRandom, SeedableRng};
@@ -9,6 +10,22 @@ use std::{
 };
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames, VariantNames};
+
+trait ReadValue<T> {
+    fn read_value(&mut self) -> io::Result<T>;
+}
+
+impl<R, T> ReadValue<T> for R
+where
+    R: io::Read,
+    T: Pod + Zeroable,
+{
+    fn read_value(&mut self) -> io::Result<T> {
+        let mut res = T::zeroed();
+        self.read_exact(bytemuck::bytes_of_mut(&mut res))?;
+        Ok(res)
+    }
+}
 
 fn load_gz_bytes(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
     let reader = BufReader::new(File::open(path).unwrap());
@@ -307,14 +324,8 @@ fn main() {
             unpack_labels(&mut env, &y_var, &train_labels, first_index, m).unwrap();
             env.run(&train_graph);
         }
-        let mut train_loss = 0f32;
-        let mut train_accuracy = 0f32;
-        env.reader(&loss_sum_var)
-            .read_exact(bytemuck::bytes_of_mut(&mut train_loss))
-            .unwrap();
-        env.reader(&accuracy_sum_var)
-            .read_exact(bytemuck::bytes_of_mut(&mut train_accuracy))
-            .unwrap();
+        let train_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
+        let train_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();
 
         // loop over test mini-batches to evaluate loss and accuracy
         env.writer(&loss_sum_var).zero_fill();
@@ -325,14 +336,9 @@ fn main() {
             unpack_labels(&mut env, &y_var, &test_labels, first_index, m).unwrap();
             env.run(&test_graph);
         }
-        let mut test_loss = 0f32;
-        let mut test_accuracy = 0f32;
-        env.reader(&loss_sum_var)
-            .read_exact(bytemuck::bytes_of_mut(&mut test_loss))
-            .unwrap();
-        env.reader(&accuracy_sum_var)
-            .read_exact(bytemuck::bytes_of_mut(&mut test_accuracy))
-            .unwrap();
+        let test_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
+        let test_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();
+
         println!(
             "epoch: {}, loss: {}/{}, accuracy: {}/{}",
             epoch_index,
