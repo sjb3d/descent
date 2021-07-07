@@ -1,4 +1,4 @@
-use spark::{vk, Builder, Device, Instance, Loader};
+use spark::{vk, Builder, Device, Instance, InstanceExtensions, Loader};
 use std::rc::Rc;
 use std::{ffi::CStr, slice};
 
@@ -35,12 +35,26 @@ impl Context {
         let instance = {
             let loader = Loader::new().unwrap();
 
+            let available_extensions = {
+                let extension_properties =
+                    unsafe { loader.enumerate_instance_extension_properties_to_vec(None) }.unwrap();
+                InstanceExtensions::from_properties(version, &extension_properties)
+            };
+
+            let mut extensions = InstanceExtensions::new(version);
+            if available_extensions.supports_ext_debug_utils() {
+                extensions.enable_ext_debug_utils();
+            }
+            let extension_names = extensions.to_name_vec();
+
             let app_info = vk::ApplicationInfo::builder()
                 .p_application_name(Some(CStr::from_bytes_with_nul(b"caldera\0").unwrap()))
                 .api_version(version);
 
-            let instance_create_info =
-                vk::InstanceCreateInfo::builder().p_application_info(Some(&app_info));
+            let extension_name_ptrs: Vec<_> = extension_names.iter().map(|s| s.as_ptr()).collect();
+            let instance_create_info = vk::InstanceCreateInfo::builder()
+                .p_application_info(Some(&app_info))
+                .pp_enabled_extension_names(&extension_name_ptrs);
             unsafe { loader.create_instance(&instance_create_info, None) }.unwrap()
         };
 

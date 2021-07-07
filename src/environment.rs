@@ -2,7 +2,7 @@ use crate::{common::*, device::common::*};
 use petgraph::visit::{IntoNodeReferences, NodeIndexable, NodeRef};
 use slotmap::SlotMap;
 use spark::{vk, Builder};
-use std::{cell::RefCell, collections::HashSet, io, rc::Rc, slice};
+use std::{cell::RefCell, collections::HashSet, ffi::CString, io, rc::Rc, slice};
 
 pub struct VariableWriter<'a>(StagingWriter<'a>);
 
@@ -201,6 +201,7 @@ impl Environment {
         }
 
         // run kernels in order, lazily allocate/free buffers
+        let instance = &self.context.instance;
         let device = &self.context.device;
         let cmd = self.command_buffers.acquire(&self.fences);
         let descriptor_pool = self.descriptor_pools.acquire(&self.fences);
@@ -257,6 +258,16 @@ impl Environment {
             }
 
             unsafe {
+                if instance.extensions.ext_debug_utils {
+                    let output_node = &schedule.ops[cluster.outputs[0]];
+                    let name = format!("{:?} {}", output_node.op, output_node.shape);
+                    let c_name = CString::new(name).unwrap();
+                    let label = vk::DebugUtilsLabelEXT {
+                        p_label_name: c_name.as_bytes_with_nul().as_ptr() as *const i8,
+                        ..Default::default()
+                    };
+                    instance.cmd_begin_debug_utils_label_ext(cmd.get(), &label);
+                }
                 device.cmd_bind_pipeline(
                     cmd.get(),
                     vk::PipelineBindPoint::COMPUTE,
@@ -289,7 +300,10 @@ impl Environment {
                         slice::from_ref(&memory_barrier),
                         &[],
                         &[],
-                    )
+                    );
+                    if instance.extensions.ext_debug_utils {
+                        instance.cmd_end_debug_utils_label_ext(cmd.get());
+                    }
                 }
             }
             for node_id in cluster.inputs.iter().copied() {
