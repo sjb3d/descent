@@ -259,11 +259,9 @@ impl Environment {
 
             unsafe {
                 if instance.extensions.ext_debug_utils {
-                    let output_node = &schedule.ops[cluster.outputs[0]];
-                    let name = format!("{:?} {}", output_node.op, output_node.shape);
-                    let c_name = CString::new(name).unwrap();
+                    let name = CString::new(cluster.kernel.label_name()).unwrap();
                     let label = vk::DebugUtilsLabelEXT {
-                        p_label_name: c_name.as_bytes_with_nul().as_ptr() as *const i8,
+                        p_label_name: name.as_bytes_with_nul().as_ptr() as *const i8,
                         ..Default::default()
                     };
                     instance.cmd_begin_debug_utils_label_ext(cmd.get(), &label);

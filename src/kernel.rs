@@ -213,6 +213,10 @@ impl MatMulKernel {
     const TILE_K: usize = 16;
     const GROUP_SIZE: usize = 64;
 
+    fn k(&self) -> usize {
+        self.inputs[0].output_shape[1]
+    }
+
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
@@ -229,7 +233,7 @@ impl MatMulKernel {
         let indexer1 = self.inputs[1].indexer();
 
         let [m, n]: [usize; 2] = self.shape.as_slice().try_into().unwrap();
-        let k = self.inputs[0].output_shape[1];
+        let k = self.k();
 
         writeln!(
             w,
@@ -290,6 +294,10 @@ pub(crate) struct ReduceKernel {
 }
 
 impl ReduceKernel {
+    fn k(&self) -> usize {
+        self.input.output_shape[self.axis]
+    }
+
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
@@ -309,7 +317,7 @@ impl ReduceKernel {
         )?;
         generate_coord("coord", &self.shape, w)?;
 
-        let k = self.input.output_shape[self.axis];
+        let k = self.k();
 
         let indexer = self.input.indexer();
         write!(w, "int base = {}", indexer.offset)?;
@@ -549,6 +557,20 @@ impl Kernel {
             Kernel::Reduce(kernel) => kernel.shape.element_count().div_round_up(64),
             Kernel::ImageToWindows(kernel) => kernel.shape.element_count().div_round_up(64),
             Kernel::WindowsToImage(kernel) => kernel.shape.element_count().div_round_up(64),
+        }
+    }
+
+    pub(crate) fn label_name(&self) -> String {
+        match self {
+            Kernel::PerElement(kernel) => format!(
+                "PerElement ({} ops) [{}]",
+                kernel.ops.len(),
+                kernel.element_count
+            ),
+            Kernel::MatMul(kernel) => format!("MatMul (k={}) {}", kernel.k(), kernel.shape),
+            Kernel::Reduce(kernel) => format!("Reduce (k={}) {}", kernel.k(), kernel.shape),
+            Kernel::ImageToWindows(kernel) => format!("ImageToWindows {}", kernel.shape),
+            Kernel::WindowsToImage(kernel) => format!("WindowsToImage {}", kernel.shape),
         }
     }
 }
