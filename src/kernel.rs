@@ -266,6 +266,8 @@ impl MatMulKernel {
             n, m, n
         )?;
 
+        writeln!(w, "const uint M = {};", m)?;
+        writeln!(w, "const uint N = {};", n)?;
         writeln!(w, "const uint K = {};", k)?;
         writeln!(w, "const uint TILE_M = {};", Self::TILE_M)?;
         writeln!(w, "const uint TILE_N = {};", Self::TILE_N)?;
@@ -537,19 +539,16 @@ impl Kernel {
         }
     }
 
-    fn group_count(&self) -> (usize, usize) {
+    fn group_count(&self) -> usize {
         match self {
-            Kernel::PerElement(kernel) => (kernel.element_count.div_round_up(64), 1),
+            Kernel::PerElement(kernel) => kernel.element_count.div_round_up(64),
             Kernel::MatMul(kernel) => {
                 let [m, n]: [usize; 2] = kernel.shape.as_slice().try_into().unwrap();
-                (
-                    n.div_round_up(MatMulKernel::TILE_N),
-                    m.div_round_up(MatMulKernel::TILE_M),
-                )
+                m.div_round_up(MatMulKernel::TILE_M) * n.div_round_up(MatMulKernel::TILE_N)
             }
-            Kernel::Reduce(kernel) => (kernel.shape.element_count().div_round_up(64), 1),
-            Kernel::ImageToWindows(kernel) => (kernel.shape.element_count().div_round_up(64), 1),
-            Kernel::WindowsToImage(kernel) => (kernel.shape.element_count().div_round_up(64), 1),
+            Kernel::Reduce(kernel) => kernel.shape.element_count().div_round_up(64),
+            Kernel::ImageToWindows(kernel) => kernel.shape.element_count().div_round_up(64),
+            Kernel::WindowsToImage(kernel) => kernel.shape.element_count().div_round_up(64),
         }
     }
 }
@@ -560,7 +559,7 @@ pub(crate) struct KernelModule {
     pub(crate) descriptor_set_layout: vk::DescriptorSetLayout,
     pub(crate) pipeline_layout: vk::PipelineLayout,
     pub(crate) pipeline: vk::Pipeline,
-    pub(crate) group_count: (usize, usize),
+    pub(crate) group_count: usize,
 }
 
 struct KernelCacheWorker {

@@ -1,6 +1,8 @@
 // float load_a(uvec2 coord);
 // float load_b(uvec2 coord);
 // void store_c(uvec2 coord, float value);
+// const uint M
+// const uint N
 // const uint K
 // const uint TILE_M
 // const uint TILE_N
@@ -26,13 +28,16 @@ const uint C_TILE_H = TILE_M;
 const uint C_TILE_SIZE = C_TILE_W * C_TILE_H;
 const uint C_VALUES_PER_THREAD = C_TILE_SIZE / GROUP_SIZE; // must divide exactly!
 
+const uint N_TILE_COUNT = (N + (TILE_N - 1))/TILE_N;
 const uint K_TILE_COUNT = (K + (TILE_K - 1))/TILE_K;
 
 shared float s_a[A_TILE_H * A_TILE_STRIDE];
 shared float s_b[B_TILE_H * B_TILE_STRIDE];
 
 void main() {
-    uvec2 c_tile_coord = gl_WorkGroupID.xy;
+    uint c_tile_index = gl_WorkGroupID.x;
+    uvec2 c_tile_coord = uvec2(c_tile_index, c_tile_index / N_TILE_COUNT);
+    c_tile_coord.x -= N_TILE_COUNT*c_tile_coord.y;
     uint thread_index = gl_LocalInvocationID.x;
 
     float result[C_VALUES_PER_THREAD];

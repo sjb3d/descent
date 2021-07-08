@@ -281,12 +281,7 @@ impl Environment {
                     slice::from_ref(&descriptor_set),
                     &[],
                 );
-                device.cmd_dispatch(
-                    cmd.get(),
-                    module.group_count.0 as u32,
-                    module.group_count.1 as u32,
-                    1,
-                );
+                device.cmd_dispatch(cmd.get(), module.group_count as u32, 1, 1);
             }
 
             {
