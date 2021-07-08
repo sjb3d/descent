@@ -95,14 +95,10 @@ impl Shape {
     }
 
     pub(crate) fn matmul(&self, rhs: &Shape) -> Self {
-        assert_eq!(rhs.0.len(), 2);
-        let (a_last, a_prefix) = self.0.split_last().unwrap();
-        let (b_first, b_suffix) = rhs.0.split_first().unwrap();
-        assert_eq!(*a_last, *b_first);
-        let mut v = TinyVec::new();
-        v.extend_from_slice(a_prefix);
-        v.extend_from_slice(b_suffix);
-        Shape::new(v)
+        let [m, k0]: [usize; 2] = self.as_slice().try_into().unwrap();
+        let [k1, n]: [usize; 2] = rhs.as_slice().try_into().unwrap();
+        assert_eq!(k0, k1);
+        Shape::from([m, n])
     }
 
     pub(crate) fn image_to_windows(&self, filter_w: usize, filter_h: usize, pad: usize) -> Self {
@@ -144,8 +140,8 @@ impl Shape {
     }
 
     pub(crate) fn transposed(&self) -> Self {
-        assert_eq!(self.0.len(), 2);
-        Shape::new(self.0.iter().copied().rev().collect())
+        let [a, b]: [usize; 2] = self.as_slice().try_into().unwrap();
+        Shape::from([b, a])
     }
 
     pub(crate) fn identity_view(&self) -> View {

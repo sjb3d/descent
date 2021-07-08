@@ -208,6 +208,11 @@ pub(crate) struct MatMulKernel {
 }
 
 impl MatMulKernel {
+    const TILE_M: usize = 16;
+    const TILE_N: usize = 16;
+    const TILE_K: usize = 16;
+    const GROUP_SIZE: usize = 64;
+
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
@@ -218,47 +223,57 @@ impl MatMulKernel {
         generate_input_buffer(1, 1, w)?;
         generate_output_buffer(2, 0, w)?;
 
-        writeln!(w, "layout(local_size_x = 64) in;")?;
-        writeln!(w, "void main() {{")?;
-
-        writeln!(
-            w,
-            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
-            self.shape.element_count()
-        )?;
-        generate_coord("coord", &self.shape, w)?;
-
-        let k = self.inputs[0].output_shape.last().unwrap();
-
+        assert_eq!(self.inputs[0].output_shape.len(), 2);
+        assert_eq!(self.inputs[1].output_shape.len(), 2);
         let indexer0 = self.inputs[0].indexer();
-        let (stride0, scales0) = indexer0.scales.split_last().unwrap();
-        write!(w, "int base0 = {}", indexer0.offset)?;
-        for (index, scale) in scales0.iter().copied().enumerate() {
-            write!(w, " + ({})*coord[{}]", scale, index)?;
-        }
-        writeln!(w, ";")?;
-        writeln!(w, "int stride0 = {};", stride0)?;
-
         let indexer1 = self.inputs[1].indexer();
-        assert_eq!(indexer1.scales.len(), 2);
+
+        let [m, n]: [usize; 2] = self.shape.as_slice().try_into().unwrap();
+        let k = self.inputs[0].output_shape[1];
+
         writeln!(
             w,
-            "int base1 = {} + ({})*coord[{}];",
-            indexer1.offset,
-            indexer1.scales[1],
-            scales0.len()
+            "\
+            float load_a(uvec2 coord) {{
+                float tmp = 0.f;
+                if (coord.x < {} && coord.y < {}) {{
+                    tmp = input0[{} + ({})*coord.x + ({})*coord.y];
+                }}
+                return tmp;
+            }}",
+            k, m, indexer0.offset, indexer0.scales[1], indexer0.scales[0],
         )?;
-        writeln!(w, "int stride1 = {};", indexer1.scales[0])?;
+        writeln!(
+            w,
+            "\
+            float load_b(uvec2 coord) {{
+                float tmp = 0.f;
+                if (coord.x < {} && coord.y < {}) {{
+                    tmp = input1[{} + ({})*coord.x + ({})*coord.y];
+                }}
+                return tmp;
+            }}",
+            n, k, indexer1.offset, indexer1.scales[1], indexer1.scales[0],
+        )?;
+        writeln!(
+            w,
+            "\
+            void store_c(uvec2 coord, float value) {{
+                if (coord.x < {} && coord.y < {}) {{
+                    output0[coord.y*{} + coord.x] = value;
+                }}
+            }}",
+            n, m, n
+        )?;
 
-        writeln!(w, "float sum = 0.f;")?;
-        writeln!(w, "for (int k = 0; k < {}; ++k) {{", k)?;
-        writeln!(w, "float tmp0 = input0[base0 + k*stride0];")?;
-        writeln!(w, "float tmp1 = input1[base1 + k*stride1];")?;
-        writeln!(w, "sum += tmp0 * tmp1;")?;
-        writeln!(w, "}}")?;
-        writeln!(w, "output0[gl_GlobalInvocationID.x] = sum;")?;
+        writeln!(w, "const uint K = {};", k)?;
+        writeln!(w, "const uint TILE_M = {};", Self::TILE_M)?;
+        writeln!(w, "const uint TILE_N = {};", Self::TILE_N)?;
+        writeln!(w, "const uint TILE_K = {};", Self::TILE_K)?;
+        writeln!(w, "const uint GROUP_SIZE = {};", Self::GROUP_SIZE)?;
 
-        writeln!(w, "}}")?;
+        assert_eq!((Self::TILE_M * Self::TILE_N) % Self::GROUP_SIZE, 0);
+        write!(w, "{}", include_str!("kernel_matmul.glsl"))?;
 
         Ok(src)
     }
@@ -491,6 +506,16 @@ pub(crate) enum Kernel {
     WindowsToImage(WindowsToImageKernel),
 }
 
+trait DivRoundUp {
+    fn div_round_up(self, x: Self) -> Self;
+}
+
+impl DivRoundUp for usize {
+    fn div_round_up(self, x: Self) -> Self {
+        (self + x - 1) / x
+    }
+}
+
 impl Kernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         match self {
@@ -512,15 +537,20 @@ impl Kernel {
         }
     }
 
-    fn group_count(&self) -> u32 {
-        let element_count = match self {
-            Kernel::PerElement(kernel) => kernel.element_count,
-            Kernel::MatMul(kernel) => kernel.shape.element_count(),
-            Kernel::Reduce(kernel) => kernel.shape.element_count(),
-            Kernel::ImageToWindows(kernel) => kernel.shape.element_count(),
-            Kernel::WindowsToImage(kernel) => kernel.shape.element_count(),
-        };
-        ((element_count as u32) + 63) / 64
+    fn group_count(&self) -> (usize, usize) {
+        match self {
+            Kernel::PerElement(kernel) => (kernel.element_count.div_round_up(64), 1),
+            Kernel::MatMul(kernel) => {
+                let [m, n]: [usize; 2] = kernel.shape.as_slice().try_into().unwrap();
+                (
+                    n.div_round_up(MatMulKernel::TILE_N),
+                    m.div_round_up(MatMulKernel::TILE_M),
+                )
+            }
+            Kernel::Reduce(kernel) => (kernel.shape.element_count().div_round_up(64), 1),
+            Kernel::ImageToWindows(kernel) => (kernel.shape.element_count().div_round_up(64), 1),
+            Kernel::WindowsToImage(kernel) => (kernel.shape.element_count().div_round_up(64), 1),
+        }
     }
 }
 
@@ -530,7 +560,7 @@ pub(crate) struct KernelModule {
     pub(crate) descriptor_set_layout: vk::DescriptorSetLayout,
     pub(crate) pipeline_layout: vk::PipelineLayout,
     pub(crate) pipeline: vk::Pipeline,
-    pub(crate) group_count: u32,
+    pub(crate) group_count: (usize, usize),
 }
 
 struct KernelCacheWorker {
