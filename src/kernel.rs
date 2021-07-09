@@ -55,7 +55,7 @@ fn generate_output_buffer(
 
 fn generate_coord(name: &str, shape: &Shape, w: &mut impl Write) -> fmt::Result {
     writeln!(w, "int {}[{}];", name, shape.len())?;
-    write!(w, "compute_grid_coord({}", name)?;
+    write!(w, "compute_grid_coord(gl_GlobalInvocationID.x, {}", name)?;
     for &n in shape.iter() {
         write!(w, ", {}", n)?;
     }
@@ -232,8 +232,9 @@ impl MatMulKernel {
         let indexer0 = self.inputs[0].indexer();
         let indexer1 = self.inputs[1].indexer();
 
-        let [m, n]: [usize; 2] = self.shape.as_slice().try_into().unwrap();
+        let [r, m, n]: [usize; 3] = self.shape.as_slice().try_into().unwrap();
         let k = self.k();
+        let k_chunk_size_in_tiles = k.div_round_up(Self::TILE_K).div_round_up(r);
 
         writeln!(
             w,
@@ -262,12 +263,15 @@ impl MatMulKernel {
         writeln!(
             w,
             "\
-            void store_c(uvec2 coord, float value) {{
+            void store_c(uint k_chunk_index, uvec2 coord, float value) {{
                 if (coord.x < {} && coord.y < {}) {{
-                    output0[coord.y*{} + coord.x] = value;
+                    output0[k_chunk_index*{} + coord.y*{} + coord.x] = value;
                 }}
             }}",
-            n, m, n
+            n,
+            m,
+            m * n,
+            n
         )?;
 
         writeln!(w, "const uint M = {};", m)?;
@@ -277,6 +281,11 @@ impl MatMulKernel {
         writeln!(w, "const uint TILE_N = {};", Self::TILE_N)?;
         writeln!(w, "const uint TILE_K = {};", Self::TILE_K)?;
         writeln!(w, "const uint GROUP_SIZE = {};", Self::GROUP_SIZE)?;
+        writeln!(
+            w,
+            "const uint K_CHUNK_SIZE_IN_TILES = {};",
+            k_chunk_size_in_tiles
+        )?;
 
         assert_eq!((Self::TILE_M * Self::TILE_N) % Self::GROUP_SIZE, 0);
         write!(w, "{}", include_str!("kernel_matmul.glsl"))?;
@@ -516,16 +525,6 @@ pub(crate) enum Kernel {
     WindowsToImage(WindowsToImageKernel),
 }
 
-trait DivRoundUp {
-    fn div_round_up(self, x: Self) -> Self;
-}
-
-impl DivRoundUp for usize {
-    fn div_round_up(self, x: Self) -> Self {
-        (self + x - 1) / x
-    }
-}
-
 impl Kernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         match self {
@@ -551,8 +550,8 @@ impl Kernel {
         match self {
             Kernel::PerElement(kernel) => kernel.element_count.div_round_up(64),
             Kernel::MatMul(kernel) => {
-                let [m, n]: [usize; 2] = kernel.shape.as_slice().try_into().unwrap();
-                m.div_round_up(MatMulKernel::TILE_M) * n.div_round_up(MatMulKernel::TILE_N)
+                let [r, m, n]: [usize; 3] = kernel.shape.as_slice().try_into().unwrap();
+                r * m.div_round_up(MatMulKernel::TILE_M) * n.div_round_up(MatMulKernel::TILE_N)
             }
             Kernel::Reduce(kernel) => kernel.shape.element_count().div_round_up(64),
             Kernel::ImageToWindows(kernel) => kernel.shape.element_count().div_round_up(64),

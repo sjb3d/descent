@@ -210,7 +210,7 @@ impl<'g> Array<'g> {
     }
 
     pub fn matmul(self, rhs: Array) -> Self {
-        self.graph.with_state(|state| {
+        let result = self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape
                 .matmul(&state.ops.graph[rhs.node_id].shape);
@@ -220,7 +220,13 @@ impl<'g> Array<'g> {
                     .new_node(shape, Op::MatMul, &[self.node_id, rhs.node_id]),
                 graph: self.graph,
             }
-        })
+        });
+        let [r, m, n]: [usize; 3] = result.shape().as_slice().try_into().unwrap();
+        if r == 1 {
+            result.reshape([m, n])
+        } else {
+            result.reduce_sum(0)
+        }
     }
 
     fn image_to_windows(self, filter_w: usize, filter_h: usize, pad: usize) -> Self {

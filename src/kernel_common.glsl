@@ -1,17 +1,19 @@
 #version 460 core
 
-void compute_grid_coord(out int coord[1], uint /*shape0*/)
+void compute_grid_coord(
+    uint remain,
+    out int coord[1],
+    uint /*shape0*/)
 {
-    coord[0] = int(gl_GlobalInvocationID.x);
+    coord[0] = int(remain);
 }
 
 void compute_grid_coord(
+    uint remain,
     out int coord[2],
     uint /*shape0*/,
     uint shape1)
 {
-    uint remain = gl_GlobalInvocationID.x;
-
     uint tmp1 = remain;
     remain /= shape1;
     tmp1 -= remain*shape1;
@@ -23,13 +25,12 @@ void compute_grid_coord(
 }
 
 void compute_grid_coord(
+    uint remain,
     out int coord[3],
     uint /*shape0*/,
     uint shape1,
     uint shape2)
 {
-    uint remain = gl_GlobalInvocationID.x;
-
     uint tmp2 = remain;
     remain /= shape2;
     tmp2 -= remain*shape2;
@@ -46,14 +47,13 @@ void compute_grid_coord(
 }
 
 void compute_grid_coord(
+    uint remain,
     out int coord[4],
     uint /*shape0*/,
     uint shape1,
     uint shape2,
     uint shape3)
 {
-    uint remain = gl_GlobalInvocationID.x;
-
     uint tmp3 = remain;
     remain /= shape3;
     tmp3 -= remain*shape3;
@@ -75,6 +75,7 @@ void compute_grid_coord(
 }
 
 void compute_grid_coord(
+    uint remain,
     out int coord[5],
     uint /*shape0*/,
     uint shape1,
@@ -82,8 +83,6 @@ void compute_grid_coord(
     uint shape3,
     uint shape4)
 {
-    uint remain = gl_GlobalInvocationID.x;
-
     uint tmp4 = remain;
     remain /= shape4;
     tmp4 -= remain*shape4;
@@ -110,6 +109,7 @@ void compute_grid_coord(
 }
 
 void compute_grid_coord(
+    uint remain,
     out int coord[6],
     uint /*shape0*/,
     uint shape1,
@@ -118,8 +118,6 @@ void compute_grid_coord(
     uint shape4,
     uint shape5)
 {
-    uint remain = gl_GlobalInvocationID.x;
-
     uint tmp5 = remain;
     remain /= shape5;
     tmp5 -= remain*shape5;

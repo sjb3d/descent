@@ -8,6 +8,7 @@
 // const uint TILE_N
 // const uint TILE_K
 // const uint GROUP_SIZE
+// const uint K_CHUNK_SIZE_IN_TILES
 
 layout(local_size_x = GROUP_SIZE) in;
 
@@ -28,6 +29,7 @@ const uint C_TILE_H = TILE_M;
 const uint C_TILE_SIZE = C_TILE_W * C_TILE_H;
 const uint C_VALUES_PER_THREAD = C_TILE_SIZE / GROUP_SIZE; // must divide exactly!
 
+const uint M_TILE_COUNT = (M + (TILE_M - 1))/TILE_M;
 const uint N_TILE_COUNT = (N + (TILE_N - 1))/TILE_N;
 const uint K_TILE_COUNT = (K + (TILE_K - 1))/TILE_K;
 
@@ -35,9 +37,11 @@ shared float s_a[A_TILE_H * A_TILE_STRIDE];
 shared float s_b[B_TILE_H * B_TILE_STRIDE];
 
 void main() {
-    uint c_tile_index = gl_WorkGroupID.x;
-    uvec2 c_tile_coord = uvec2(c_tile_index, c_tile_index / N_TILE_COUNT);
-    c_tile_coord.x -= N_TILE_COUNT*c_tile_coord.y;
+    int c_output_coord[3];
+    compute_grid_coord(gl_WorkGroupID.x, c_output_coord, 0, M_TILE_COUNT, N_TILE_COUNT);
+    uvec2 c_tile_coord = uvec2(c_output_coord[2], c_output_coord[1]);
+    uint k_chunk_index = c_output_coord[0];
+
     uint thread_index = gl_LocalInvocationID.x;
 
     float result[C_VALUES_PER_THREAD];
@@ -45,7 +49,9 @@ void main() {
         result[i] = 0.f;
     }
 
-    for (uint k_tile_index = 0; k_tile_index < K_TILE_COUNT; ++k_tile_index) {
+    uint k_tile_begin = k_chunk_index * K_CHUNK_SIZE_IN_TILES;
+    uint k_tile_end = min(k_tile_begin + K_CHUNK_SIZE_IN_TILES, K_TILE_COUNT);
+    for (uint k_tile_index = k_tile_begin; k_tile_index != k_tile_end; ++k_tile_index) {
         barrier();
         for (uint load_index = thread_index; load_index < A_TILE_SIZE; load_index += GROUP_SIZE) {
             uvec2 a_coord_in_tile = uvec2(load_index % A_TILE_W, load_index/A_TILE_W);
@@ -77,6 +83,6 @@ void main() {
     for (uint i = 0; i < C_VALUES_PER_THREAD; ++i) {
         uint c_index = i*GROUP_SIZE + thread_index;
         uvec2 c_coord_in_tile = uvec2(c_index % C_TILE_W, c_index / C_TILE_W);
-        store_c(c_tile_coord*uvec2(C_TILE_W, C_TILE_H) + c_coord_in_tile, result[i]);
+        store_c(k_chunk_index, c_tile_coord*uvec2(C_TILE_W, C_TILE_H) + c_coord_in_tile, result[i]);
     }   
 }

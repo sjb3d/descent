@@ -1,3 +1,4 @@
+use crate::common::*;
 use std::{convert::TryInto, fmt, iter, mem, ops};
 use tinyvec::ArrayVec as TinyVec;
 
@@ -19,6 +20,16 @@ impl Axis {
 
     pub(crate) fn inner(&self) -> Self {
         Self(self.0 + 1)
+    }
+}
+
+pub(crate) trait DivRoundUp {
+    fn div_round_up(self, x: Self) -> Self;
+}
+
+impl DivRoundUp for usize {
+    fn div_round_up(self, x: Self) -> Self {
+        (self + x - 1) / x
     }
 }
 
@@ -98,7 +109,8 @@ impl Shape {
         let [m, k0]: [usize; 2] = self.as_slice().try_into().unwrap();
         let [k1, n]: [usize; 2] = rhs.as_slice().try_into().unwrap();
         assert_eq!(k0, k1);
-        Shape::from([m, n])
+        let r = k0.div_round_up(MATMUL_MAX_K_SIZE);
+        Shape::from([r, m, n])
     }
 
     pub(crate) fn image_to_windows(&self, filter_w: usize, filter_h: usize, pad: usize) -> Self {

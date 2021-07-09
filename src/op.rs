@@ -42,6 +42,8 @@ pub(crate) enum UnaryOp {
 
 pub(crate) const MAX_OP_ARGS: usize = 4;
 
+pub(crate) const MATMUL_MAX_K_SIZE: usize = 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Op {
     Input { variable_id: VariableId },
