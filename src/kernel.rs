@@ -10,7 +10,10 @@ pub(crate) enum PerElementKernelOp {
         input_index: usize,
     },
     Literal(NotNan<f32>),
-    BuiltIn(BuiltInOp),
+    BuiltIn {
+        op: BuiltInOp,
+        view: View,
+    },
     Unary {
         op: UnaryOp,
         args: usize,
@@ -111,42 +114,70 @@ impl PerElementKernel {
                             (coord_name, coord_indexer)
                         });
                     let input_indexer = input.indexer();
-                    write!(w, "float tmp{} = ", op_index)?;
+                    write!(w, "float tmp{} = input{}[", op_index, input_index)?;
                     if &input_indexer == coord_indexer {
-                        write!(w, "input{}[gl_GlobalInvocationID.x];", input_index)?
+                        write!(w, "gl_GlobalInvocationID.x")?
                     } else {
-                        write!(w, "input{}[{}", input_index, input_indexer.offset)?;
+                        write!(w, "{}", input_indexer.offset)?;
                         for (index, scale) in input_indexer.scales.iter().copied().enumerate() {
-                            write!(w, " + {}*{}[{}]", scale, coord_name, index)?;
+                            write!(w, " + ({})*{}[{}]", scale, coord_name, index)?;
                         }
-                        write!(w, "];")?;
                     }
-                    writeln!(w, ";")?;
+                    writeln!(w, "];")?;
                 }
                 PerElementKernelOp::Literal(value) => {
                     writeln!(w, "float tmp{} = {:#?};", op_index, value.into_inner())?
                 }
-                PerElementKernelOp::BuiltIn(op) => match op {
-                    BuiltInOp::Coord {
-                        shape: coord_shape,
-                        axis,
-                    } => {
-                        let next_coord_index = coord_sets.len();
-                        let (coord_name, _) = coord_sets.entry(coord_shape).or_insert_with(|| {
+                PerElementKernelOp::BuiltIn { op, view } => {
+                    let coord_shape = &view.output_shape;
+                    let next_coord_index = coord_sets.len();
+                    let (coord_name, coord_indexer) =
+                        coord_sets.entry(coord_shape).or_insert_with(|| {
                             let coord_indexer = coord_shape.identity_view().indexer();
                             let coord_name = format!("coord{}", next_coord_index);
                             generate_coord(&coord_name, coord_shape, w).unwrap();
                             (coord_name, coord_indexer)
                         });
-                        writeln!(
-                            w,
-                            "float tmp{} = float({}[{}]);",
-                            op_index,
-                            coord_name,
-                            axis.index()
-                        )?
+                    let input_indexer = view.indexer();
+                    match op {
+                        BuiltInOp::Coord { axis } => {
+                            write!(w, "float tmp{} = float(", op_index)?;
+                            if &input_indexer == coord_indexer {
+                                write!(w, "{}[{}]", coord_name, axis.index())?;
+                            } else {
+                                write!(w, "{}", view.input_offsets[axis.index()])?;
+                                for (index, mapping) in
+                                    view.output_mapping.iter().copied().enumerate()
+                                {
+                                    match mapping {
+                                        AxisMapping::Source {
+                                            axis: source_axis,
+                                            step,
+                                        } if &source_axis == axis => {
+                                            write!(w, " + ({})*{}[{}]", step, coord_name, index)?;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            writeln!(w, ");")?;
+                        }
+                        BuiltInOp::Rand { uid } => {
+                            write!(w, "float tmp{} = rand_from_index({}, ", op_index, uid)?;
+                            if &input_indexer == coord_indexer {
+                                write!(w, "int(gl_GlobalInvocationID.x)")?
+                            } else {
+                                write!(w, "{}", input_indexer.offset)?;
+                                for (index, scale) in
+                                    input_indexer.scales.iter().copied().enumerate()
+                                {
+                                    write!(w, " + ({})*{}[{}]", scale, coord_name, index)?;
+                                }
+                            }
+                            writeln!(w, ");")?;
+                        }
                     }
-                },
+                }
                 PerElementKernelOp::Unary { op, args } => {
                     write!(w, "float tmp{} = ", op_index)?;
                     match op {
@@ -643,8 +674,14 @@ impl KernelCacheWorker {
         };
 
         let pipeline_layout = {
+            let push_constant_range = vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 0,
+                size: 4,
+            };
             let create_info = vk::PipelineLayoutCreateInfo::builder()
-                .p_set_layouts(slice::from_ref(&descriptor_set_layout));
+                .p_set_layouts(slice::from_ref(&descriptor_set_layout))
+                .p_push_constant_ranges(slice::from_ref(&push_constant_range));
             unsafe { device.create_pipeline_layout(&create_info, None) }.unwrap()
         };
 

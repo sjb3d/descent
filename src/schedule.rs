@@ -59,6 +59,17 @@ slotmap::new_key_type! {
     pub(crate) struct ClusterId;
 }
 
+trait Only: Iterator {
+    fn only(&mut self) -> Option<Self::Item>;
+}
+
+impl<I: Iterator> Only for I {
+    fn only(&mut self) -> Option<Self::Item> {
+        let first = self.next();
+        first.filter(|_| self.next().is_none())
+    }
+}
+
 pub struct Schedule {
     pub(crate) variables: SharedVariables,
     pub(crate) ops: OpGraph,
@@ -84,13 +95,13 @@ impl Schedule {
         sched.eliminate_accumulate_nodes();
 
         sched.rebuild_ordering();
+        sched.eliminate_moves();
+
+        sched.rebuild_ordering();
         sched.eliminate_common_subgraphs();
 
         sched.rebuild_ordering();
-        sched.make_literals_unique();
-
-        sched.rebuild_ordering();
-        sched.eliminate_moves();
+        sched.make_built_ins_and_literals_unique();
 
         sched.rebuild_ordering();
         sched.build_clusters();
@@ -140,10 +151,7 @@ impl Schedule {
                 hasher.finish()
             };
             hashes[node_id.index()] = hash;
-            if matches!(
-                node.op,
-                Op::Literal(_) | Op::Unary(_) | Op::Binary(_) | Op::MatMul | Op::Reduce { .. }
-            ) {
+            if node.op.can_merge() {
                 let ids = ids_from_hash.entry(hash).or_insert_with(Vec::new);
                 if let Some(other_id) = ids.iter().copied().find(|&id| {
                     let other_node = &self.ops[id];
@@ -165,10 +173,10 @@ impl Schedule {
         }
     }
 
-    fn make_literals_unique(&mut self) {
+    fn make_built_ins_and_literals_unique(&mut self) {
         for node_id in self.ops_sorted.iter().copied() {
             let node = &self.ops[node_id];
-            if matches!(&node.op, Op::Literal(_)) {
+            if matches!(&node.op, Op::Literal(_) | Op::BuiltIn { .. }) {
                 let orig_node = node.clone();
                 let mut out_edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
                 while let Some((out_edge_id, out_node_id)) = out_edges.next(&self.ops) {
@@ -184,9 +192,10 @@ impl Schedule {
     fn eliminate_accumulate_nodes(&mut self) {
         for node_id in self.ops_sorted.iter().copied() {
             if matches!(self.ops[node_id].op, Op::Accumulate) {
-                assert_eq!(self.ops.edges_directed(node_id, Incoming).count(), 1); // TODO: generate adds
-                let mut in_edges = self.ops.neighbors_directed(node_id, Incoming).detach();
-                let (in_edge_id, in_node_id) = in_edges.next(&self.ops).unwrap();
+                // TODO: generate adds (assume only one incoming edge for now)
+                let in_edge_ref = self.ops.edges_directed(node_id, Incoming).only().unwrap();
+                let in_edge_id = in_edge_ref.id();
+                let in_node_id = in_edge_ref.source();
                 let mut out_edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
                 while let Some((out_edge_id, out_node_id)) = out_edges.next(&self.ops) {
                     let in_edge = &self.ops[in_edge_id];
@@ -194,7 +203,7 @@ impl Schedule {
                     assert_eq!(in_edge.arg, 0);
                     let new_edge = OpEdge {
                         arg: out_edge.arg,
-                        view: in_edge.view.through(&out_edge.view),
+                        view: in_edge.view.through(false, &out_edge.view),
                     };
                     self.ops.add_edge(in_node_id, out_node_id, new_edge);
                 }
@@ -206,16 +215,17 @@ impl Schedule {
     fn eliminate_moves(&mut self) {
         for node_id in self.ops_sorted.iter().copied() {
             if let Op::Unary(UnaryOp::Mov) = &self.ops[node_id].op {
-                assert_eq!(self.ops.neighbors_directed(node_id, Incoming).count(), 1);
-                let mut in_edges = self.ops.neighbors_directed(node_id, Incoming).detach();
-                let (in_edge_id, in_node_id) = in_edges.next(&self.ops).unwrap();
+                let in_edge_ref = self.ops.edges_directed(node_id, Incoming).only().unwrap();
+                let in_edge_id = in_edge_ref.id();
+                let in_node_id = in_edge_ref.source();
+                let can_reshape = self.ops[in_node_id].op.can_reshape();
                 let can_eliminate =
                     self.ops
                         .edges_directed(node_id, Outgoing)
                         .all(|out_edge_ref| {
                             self.ops[in_edge_id]
                                 .view
-                                .can_view_through(&self.ops[out_edge_ref.id()].view)
+                                .can_view_through(can_reshape, &self.ops[out_edge_ref.id()].view)
                         });
                 if can_eliminate {
                     let mut out_edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
@@ -225,7 +235,7 @@ impl Schedule {
                         assert_eq!(in_edge.arg, 0);
                         let new_edge = OpEdge {
                             arg: out_edge.arg,
-                            view: in_edge.view.through(&out_edge.view),
+                            view: in_edge.view.through(can_reshape, &out_edge.view),
                         };
                         self.ops.add_edge(in_node_id, out_node_id, new_edge);
                     }
@@ -304,11 +314,9 @@ impl Schedule {
                         let other_node = &self.ops[other_node_id];
 
                         // check this node has no cluster and matches element count
-                        let is_matching_shape = other_node.op.is_per_element()
+                        let can_include = other_node.cluster_id.is_none()
+                            && other_node.op.is_per_element()
                             && other_node.shape.element_count() == element_count;
-                        let is_literal = matches!(other_node.op, Op::Literal(_));
-                        let can_include =
-                            other_node.cluster_id.is_none() && (is_matching_shape || is_literal);
                         if !can_include {
                             continue 'inner;
                         }
@@ -330,7 +338,7 @@ impl Schedule {
                             ))
                         {
                             has_kernel_neighbor = true;
-                            if !is_literal && !edge_ref.weight().view.is_identity() {
+                            if !edge_ref.weight().view.is_identity() {
                                 continue 'inner;
                             }
                         }
@@ -388,7 +396,8 @@ impl Schedule {
             let inputs = &mut cluster.inputs;
             let outputs = &mut cluster.outputs;
 
-            let mut node_op_index = HashMap::new();
+            let mut arg_op_index = HashMap::new();
+            let mut member_op_index = HashMap::new();
 
             let graph = &self.ops;
             for node_id in members.iter().copied() {
@@ -397,23 +406,38 @@ impl Schedule {
                 let args: TinyVec<[usize; MAX_OP_ARGS]> = arg_sources
                     .iter()
                     .map(|source| {
-                        *node_op_index.entry(source.node_id).or_insert_with(|| {
-                            let source_node = &graph[source.node_id];
-                            assert_ne!(source_node.cluster_id, Some(cluster_id));
-                            let input_index = kernel.inputs.len();
-                            kernel.inputs.push(source.view);
-                            inputs.push(source.node_id);
-                            let op_index = kernel.ops.len();
-                            kernel.ops.push(PerElementKernelOp::Load { input_index });
-                            op_index
-                        })
+                        if let Some(op_index) = member_op_index.get(&source.node_id) {
+                            *op_index
+                        } else {
+                            *arg_op_index.entry(*source).or_insert_with(|| {
+                                let source_node = &graph[source.node_id];
+                                assert_ne!(source_node.cluster_id, Some(cluster_id));
+                                let op_index = kernel.ops.len();
+                                match source_node.op {
+                                    Op::Literal(value) => {
+                                        kernel.ops.push(PerElementKernelOp::Literal(value));
+                                    }
+                                    Op::BuiltIn(op) => {
+                                        kernel.ops.push(PerElementKernelOp::BuiltIn {
+                                            op,
+                                            view: source.view,
+                                        });
+                                    }
+                                    _ => {
+                                        let input_index = kernel.inputs.len();
+                                        kernel.inputs.push(source.view);
+                                        inputs.push(source.node_id);
+                                        kernel.ops.push(PerElementKernelOp::Load { input_index });
+                                    }
+                                }
+                                op_index
+                            })
+                        }
                     })
                     .collect();
 
                 // emit the op
-                let op_index = kernel.ops.len();
-                kernel.ops.push(match graph[node_id].op {
-                    Op::BuiltIn(op) => PerElementKernelOp::BuiltIn(op),
+                let op = match graph[node_id].op {
                     Op::Unary(op) => PerElementKernelOp::Unary { op, args: args[0] },
                     Op::Binary(op) => PerElementKernelOp::Binary {
                         op,
@@ -423,10 +447,11 @@ impl Schedule {
                         compare_mode,
                         args: args[..4].try_into().unwrap(),
                     },
-                    Op::Literal(value) => PerElementKernelOp::Literal(value),
                     _ => panic!("unexpected op type"),
-                });
-                node_op_index.insert(node_id, op_index);
+                };
+                let op_index = kernel.ops.len();
+                kernel.ops.push(op);
+                member_op_index.insert(node_id, op_index);
 
                 // store the result if necessary
                 if graph
@@ -509,7 +534,7 @@ impl Schedule {
                             outputs: vec![node_id],
                         }));
                     }
-                    Op::Input { .. } | Op::Output { .. } | Op::Literal(_) => {}
+                    Op::Input { .. } | Op::Output { .. } | Op::Literal(_) | Op::BuiltIn(_) => {}
                     _ => panic!("unexpected op without a kernel"),
                 }
             }

@@ -14,7 +14,8 @@ pub(crate) enum ReduceOp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BuiltInOp {
-    Coord { shape: Shape, axis: Axis },
+    Coord { axis: Axis },
+    Rand { uid: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -78,7 +79,25 @@ impl Op {
     pub(crate) fn is_per_element(&self) -> bool {
         matches!(
             self,
-            Self::BuiltIn(..) | Self::Unary(..) | Self::Binary(..) | Self::CompareAndSelect(..)
+            Self::Unary(_) | Self::Binary(_) | Self::CompareAndSelect(_)
+        )
+    }
+
+    pub(crate) fn can_reshape(&self) -> bool {
+        !matches!(self, Self::BuiltIn(_))
+    }
+
+    pub(crate) fn can_merge(&self) -> bool {
+        matches!(
+            self,
+            Self::Literal(_)
+                | Self::BuiltIn(_)
+                | Self::Unary(_)
+                | Self::Binary(_)
+                | Self::MatMul
+                | Self::Reduce { .. }
+                | Self::ImageToWindows { .. }
+                | Self::WindowsToImage { .. }
         )
     }
 }

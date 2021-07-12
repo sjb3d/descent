@@ -64,6 +64,7 @@ pub enum Layer {
     Conv2D(Conv2D),
     MaxPool2D(MaxPool2D),
     Flatten,
+    Dropout(f32),
 }
 
 pub struct NetworkBuilder {
@@ -96,6 +97,7 @@ impl NetworkBuilder {
                 Layer::Conv2D(params) => Box::new(Conv2DInstance::new(&mut ctx, params)),
                 Layer::MaxPool2D(params) => Box::new(MaxPool2DInstance::new(&mut ctx, params)),
                 Layer::Flatten => Box::new(FlattenInstance::new(&mut ctx)),
+                Layer::Dropout(amount) => Box::new(DropoutInstance::new(amount)),
             });
         }
         Network {
@@ -115,11 +117,21 @@ impl Network {
         NetworkBuilder { layers: Vec::new() }
     }
 
-    pub fn forward_pass<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    pub fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
         let mut x = input;
         for layer in self.layers.iter() {
             x.graph().next_colour();
-            x = layer.forward_pass(x);
+            x = layer.train(x);
+        }
+        x.graph().next_colour();
+        x
+    }
+
+    pub fn test<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+        let mut x = input;
+        for layer in self.layers.iter() {
+            x.graph().next_colour();
+            x = layer.test(x);
         }
         x.graph().next_colour();
         x
@@ -138,7 +150,11 @@ struct NetworkContext<'c, R: Rng> {
 }
 
 trait LayerInstance {
-    fn forward_pass<'g>(&self, input: DualArray<'g>) -> DualArray<'g>;
+    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g>;
+
+    fn test<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+        self.train(input)
+    }
 }
 
 struct LinearInstance {
@@ -166,7 +182,7 @@ impl LinearInstance {
 }
 
 impl LayerInstance for LinearInstance {
-    fn forward_pass<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
         input.matmul(&self.w) + &self.b
     }
 }
@@ -182,7 +198,7 @@ impl LeakyReluInstance {
 }
 
 impl LayerInstance for LeakyReluInstance {
-    fn forward_pass<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
         input.leaky_relu(self.amount)
     }
 }
@@ -222,7 +238,7 @@ impl Conv2DInstance {
 }
 
 impl LayerInstance for Conv2DInstance {
-    fn forward_pass<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
         input.conv2d(&self.f, self.pad) + &self.b
     }
 }
@@ -244,7 +260,7 @@ impl MaxPool2DInstance {
 }
 
 impl LayerInstance for MaxPool2DInstance {
-    fn forward_pass<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
         input.max_pool(-3, self.pool_h).max_pool(-2, self.pool_w)
     }
 }
@@ -260,12 +276,44 @@ impl FlattenInstance {
 }
 
 impl LayerInstance for FlattenInstance {
-    fn forward_pass<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
         let input_shape = input.shape();
 
         let (first, remain) = input_shape.split_first().unwrap();
         let m = *first;
         let element_count = remain.iter().copied().product();
         input.reshape([m, element_count])
+    }
+}
+
+struct DropoutInstance {
+    amount: f32,
+}
+
+impl DropoutInstance {
+    fn new(amount: f32) -> Self {
+        Self { amount }
+    }
+}
+
+impl LayerInstance for DropoutInstance {
+    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+        let graph = input.graph();
+        let shape = input.shape();
+
+        let rv = graph.rand(shape);
+
+        let (a, da) = input.into_inner();
+
+        let survivor_scale = 1.0 / (1.0 - self.amount);
+        let b = rv.select_gt(self.amount, survivor_scale * a, 0.0);
+        let db = graph.accumulator(shape);
+        da.accumulate(rv.select_gt(self.amount, survivor_scale * db, 0.0));
+
+        DualArray::new(b, db)
+    }
+
+    fn test<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+        input
     }
 }

@@ -598,6 +598,7 @@ where
 struct OpGraphState {
     graph: OpGraph,
     next_colour: usize,
+    next_rand_uid: usize,
 }
 
 impl OpGraphState {
@@ -647,6 +648,7 @@ impl Graph {
                 ops: OpGraphState {
                     graph: Default::default(),
                     next_colour: 0,
+                    next_rand_uid: 0,
                 },
                 variables,
                 inputs: SparseSecondaryMap::new(),
@@ -677,11 +679,23 @@ impl Graph {
             let shape = shape.into();
             let axis = shape.axis(axis);
             Array {
-                node_id: state.ops.new_node(
-                    shape,
-                    Op::BuiltIn(BuiltInOp::Coord { shape, axis }),
-                    &[],
-                ),
+                node_id: state
+                    .ops
+                    .new_node(shape, Op::BuiltIn(BuiltInOp::Coord { axis }), &[]),
+                graph: self,
+            }
+        })
+    }
+
+    pub fn rand(&self, shape: impl Into<Shape>) -> Array {
+        self.with_state(|state| {
+            let shape = shape.into();
+            let uid = state.ops.next_rand_uid;
+            state.ops.next_rand_uid += 1;
+            Array {
+                node_id: state
+                    .ops
+                    .new_node(shape, Op::BuiltIn(BuiltInOp::Rand { uid }), &[]),
                 graph: self,
             }
         })

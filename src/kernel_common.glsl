@@ -152,3 +152,21 @@ int dot(ivec3 a, ivec3 b)
 {
     return a.x*b.x + a.y*b.y + a.z*b.z;
 }
+
+layout(push_constant) uniform constants
+{
+	uint rand_seed;
+};
+
+uint pcg(uint v)
+{
+    uint state = v*747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state)*277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float rand_from_index(uint uid, int index)
+{
+    uint hash = pcg(pcg(index) + rand_seed + uid);
+    return float(hash)/float(0xffffffffu);
+}

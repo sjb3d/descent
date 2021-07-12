@@ -2,7 +2,15 @@ use crate::{common::*, device::common::*};
 use petgraph::visit::{IntoNodeReferences, NodeIndexable, NodeRef};
 use slotmap::SlotMap;
 use spark::{vk, Builder};
-use std::{cell::RefCell, collections::HashSet, ffi::CString, io, rc::Rc, slice};
+use std::{
+    cell::RefCell,
+    collections::{hash_map::DefaultHasher, HashSet},
+    ffi::CString,
+    hash::{Hash, Hasher},
+    io,
+    rc::Rc,
+    slice,
+};
 
 pub struct VariableWriter<'a>(StagingWriter<'a>);
 
@@ -56,6 +64,7 @@ pub struct Environment {
     variables: SharedVariables,
     kernel_cache: KernelCache,
     descriptor_pools: DescriptorPoolSet,
+    run_counter: usize,
 }
 
 impl Default for Environment {
@@ -82,6 +91,7 @@ impl Environment {
             variables: Rc::new(RefCell::new(SlotMap::with_key())),
             kernel_cache,
             descriptor_pools,
+            run_counter: 0,
         }
     }
 
@@ -205,6 +215,13 @@ impl Environment {
         let device = &self.context.device;
         let cmd = self.command_buffers.acquire(&self.fences);
         let descriptor_pool = self.descriptor_pools.acquire(&self.fences);
+        let rand_seed: u32 = {
+            let mut hasher = DefaultHasher::new();
+            self.run_counter.hash(&mut hasher);
+            self.run_counter += 1;
+            let hash = hasher.finish();
+            ((hash >> 32) ^ hash) as u32
+        };
         for cluster_id in schedule.clusters_sorted.iter().copied() {
             let cluster = &schedule.clusters[cluster_id];
             for node_id in cluster.outputs.iter().copied() {
@@ -278,6 +295,13 @@ impl Environment {
                     0,
                     slice::from_ref(&descriptor_set),
                     &[],
+                );
+                device.cmd_push_constants(
+                    cmd.get(),
+                    module.pipeline_layout,
+                    vk::ShaderStageFlags::COMPUTE,
+                    0,
+                    slice::from_ref(&rand_seed),
                 );
                 device.cmd_dispatch(cmd.get(), module.group_count as u32, 1, 1);
             }

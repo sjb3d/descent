@@ -219,6 +219,7 @@ fn main() {
             .with_layer(Layer::LeakyRelu(0.01))
             .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2)))
             .with_layer(Layer::Flatten)
+            .with_layer(Layer::Dropout(0.5))
             .with_layer(Layer::Linear(Linear::new(128)))
             .with_layer(Layer::LeakyRelu(0.01))
             .with_layer(Layer::Linear(Linear::new(10))),
@@ -237,7 +238,7 @@ fn main() {
         let graph = env.graph();
 
         // emit the graph for the network
-        let x = network.forward_pass(graph.parameter(&x_var));
+        let x = network.train(graph.parameter(&x_var));
         let loss = softmax_cross_entropy_loss(x, &y_var);
 
         // accumulate loss (into variable)
@@ -270,7 +271,7 @@ fn main() {
         let graph = env.graph();
 
         // emit the graph for the network
-        let x = network.forward_pass(graph.parameter(&x_var));
+        let x = network.test(graph.parameter(&x_var));
         let loss = softmax_cross_entropy_loss(x, &y_var);
 
         // accumulate loss (into variable)

@@ -259,7 +259,7 @@ impl ops::IndexMut<isize> for Shape {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum AxisMapping {
+pub(crate) enum AxisMapping {
     Source { axis: Axis, step: isize },
     Broadcast,
 }
@@ -293,8 +293,8 @@ impl AxisMapping {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct View {
     pub(crate) input_shape: Shape,
-    input_offsets: TinyVec<[isize; MAX_DIM]>,
-    output_mapping: TinyVec<[AxisMapping; MAX_DIM]>,
+    pub(crate) input_offsets: TinyVec<[isize; MAX_DIM]>,
+    pub(crate) output_mapping: TinyVec<[AxisMapping; MAX_DIM]>,
     pub(crate) output_shape: Shape,
 }
 
@@ -317,16 +317,24 @@ impl View {
         Self::identity(&self.output_shape).eq(self)
     }
 
-    pub(crate) fn can_view_through(&self, view: &View) -> bool {
-        self.is_identity() || self.output_shape == view.input_shape
+    pub(crate) fn can_view_through(&self, can_reshape: bool, view: &View) -> bool {
+        self.output_shape == view.input_shape
+            || (can_reshape
+                && self.is_identity()
+                && self.output_shape.element_count() == view.input_shape.element_count())
     }
 
-    pub(crate) fn through(&self, view: &View) -> Self {
-        if self.is_identity() {
+    pub(crate) fn through(&self, can_reshape: bool, view: &View) -> Self {
+        if self.output_shape != view.input_shape {
+            assert!(can_reshape);
+            assert!(self.is_identity());
+            assert_eq!(
+                self.output_shape.element_count(),
+                view.input_shape.element_count()
+            );
             return *view;
         }
 
-        assert_eq!(&self.output_shape, &view.input_shape);
         let mut input_offsets = self.input_offsets;
         for (mapping, offset) in self
             .output_mapping
@@ -383,6 +391,7 @@ impl View {
             output_mapping.push(if from == to {
                 AxisMapping::identity(Axis::from_index(index), from)
             } else {
+                assert_eq!(from, 1);
                 AxisMapping::Broadcast
             });
         }
