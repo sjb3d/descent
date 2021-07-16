@@ -318,6 +318,12 @@ impl MatMulKernel {
             k_chunk_size_in_tiles
         )?;
 
+        let load_a_column_major = indexer0.scales[0].abs() < indexer0.scales[1].abs();
+        let load_b_column_major = indexer1.scales[0].abs() < indexer1.scales[1].abs();
+        let bool_value = |b| if b { "true" } else { "false" };
+        writeln!(w, "const bool LOAD_A_COLUMN_MAJOR = {};", bool_value(load_a_column_major))?;
+        writeln!(w, "const bool LOAD_B_COLUMN_MAJOR = {};", bool_value(load_b_column_major))?;
+
         assert_eq!((Self::TILE_M * Self::TILE_N) % Self::GROUP_SIZE, 0);
         write!(w, "{}", include_str!("kernel_matmul.glsl"))?;
 
