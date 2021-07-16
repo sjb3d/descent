@@ -22,7 +22,7 @@ pub(crate) struct Context {
     pub(crate) physical_device_properties: vk::PhysicalDeviceProperties,
     pub(crate) physical_device_memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub(crate) queue_family_index: u32,
-    pub(crate) _queue_family_properties: vk::QueueFamilyProperties,
+    pub(crate) queue_family_properties: vk::QueueFamilyProperties,
     pub(crate) queue: vk::Queue,
     pub(crate) device: Device,
 }
@@ -124,7 +124,7 @@ impl Context {
             physical_device_properties,
             physical_device_memory_properties,
             queue_family_index,
-            _queue_family_properties: queue_family_properties,
+            queue_family_properties,
             queue,
             device,
         })

@@ -106,6 +106,11 @@ impl<T> Fenced<T> {
         Self { value, fence_id }
     }
 
+    pub(crate) fn get_mut_when_signaled(&mut self, set: &FenceSet) -> &mut T {
+        set.wait_for_signal(self.fence_id);
+        &mut self.value
+    }
+
     pub(crate) fn take_when_signaled(self, set: &FenceSet) -> T {
         set.wait_for_signal(self.fence_id);
         self.value

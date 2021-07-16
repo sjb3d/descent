@@ -16,7 +16,7 @@ pub struct VariableWriter<'a>(StagingWriter<'a>);
 
 impl<'a> VariableWriter<'a> {
     pub fn zero_fill(self) {
-        // will zero on drop
+        // consume self, will zero to the end on drop
     }
 }
 
@@ -58,12 +58,13 @@ struct OpNodeStorage {
 pub struct Environment {
     context: SharedContext,
     fences: FenceSet,
-    command_buffers: CommandBufferSet,
+    command_buffers: CommandBuffers,
     buffer_heap: BufferHeap,
     staging_buffer: StagingBuffer,
     variables: SharedVariables,
     kernel_cache: KernelCache,
-    descriptor_pools: DescriptorPoolSet,
+    descriptor_pools: DescriptorPools,
+    timestamps: TimestampSets,
     run_counter: usize,
 }
 
@@ -77,11 +78,12 @@ impl Environment {
     pub fn new() -> Self {
         let context = Context::new();
         let fences = FenceSet::new(&context);
-        let command_buffers = CommandBufferSet::new(&context, &fences);
+        let command_buffers = CommandBuffers::new(&context, &fences);
         let buffer_heap = BufferHeap::new(&context);
         let staging_buffer = StagingBuffer::new(&context, &fences);
         let kernel_cache = KernelCache::new(&context);
-        let descriptor_pools = DescriptorPoolSet::new(&context, &fences);
+        let descriptor_pools = DescriptorPools::new(&context, &fences);
+        let timestamps = TimestampSets::new(&context, &fences);
         Self {
             context,
             fences,
@@ -91,6 +93,7 @@ impl Environment {
             variables: Rc::new(RefCell::new(SlotMap::with_key())),
             kernel_cache,
             descriptor_pools,
+            timestamps,
             run_counter: 0,
         }
     }
@@ -215,6 +218,7 @@ impl Environment {
         let device = &self.context.device;
         let cmd = self.command_buffers.acquire(&self.fences);
         let descriptor_pool = self.descriptor_pools.acquire(&self.fences);
+        let mut timestamps = self.timestamps.acquire(cmd.get(), &self.fences);
         let rand_seed: u32 = {
             let mut hasher = DefaultHasher::new();
             self.run_counter.hash(&mut hasher);
@@ -275,10 +279,12 @@ impl Environment {
             }
 
             unsafe {
+                let label_name = cluster.kernel.label_name();
+                timestamps.write_timestamp(cmd.get(), &label_name);
                 if instance.extensions.ext_debug_utils {
-                    let name = CString::new(cluster.kernel.label_name()).unwrap();
+                    let label_name = CString::new(label_name).unwrap();
                     let label = vk::DebugUtilsLabelEXT {
-                        p_label_name: name.as_bytes_with_nul().as_ptr() as *const i8,
+                        p_label_name: label_name.as_bytes_with_nul().as_ptr() as *const i8,
                         ..Default::default()
                     };
                     instance.cmd_begin_debug_utils_label_ext(cmd.get(), &label);
@@ -336,8 +342,10 @@ impl Environment {
                 }
             }
         }
+        timestamps.end(cmd.get());
         let fence_id = cmd.submit(&mut self.fences);
         descriptor_pool.recycle(fence_id);
+        timestamps.recycle(fence_id);
 
         // assign buffers to outputs
         for node_id in outputs.iter().copied() {
@@ -350,6 +358,10 @@ impl Environment {
             assert!(source_storage.buffer_id.is_some());
             var.buffer_id = source_storage.buffer_id.take();
         }
+    }
+
+    pub fn print_timings(&mut self) {
+        self.timestamps.print_timings(&self.fences);
     }
 }
 

@@ -58,7 +58,7 @@ impl BufferCursor {
 
 pub(crate) struct StagingWriter<'a> {
     owner: &'a mut StagingBuffer,
-    command_buffers: &'a mut CommandBufferSet,
+    command_buffers: &'a mut CommandBuffers,
     fences: &'a mut FenceSet,
     staging: Option<StagingCursor>,
     buffer: BufferCursor,
@@ -67,7 +67,7 @@ pub(crate) struct StagingWriter<'a> {
 impl<'a> StagingWriter<'a> {
     pub(crate) fn new(
         owner: &'a mut StagingBuffer,
-        command_buffers: &'a mut CommandBufferSet,
+        command_buffers: &'a mut CommandBuffers,
         fences: &'a mut FenceSet,
         buffer_info: BufferInfo,
     ) -> Self {
@@ -188,7 +188,7 @@ impl<'a> Drop for StagingWriter<'a> {
 
 pub(crate) struct StagingReader<'a> {
     owner: &'a mut StagingBuffer,
-    command_buffers: &'a mut CommandBufferSet,
+    command_buffers: &'a mut CommandBuffers,
     fences: &'a mut FenceSet,
     buffer: BufferCursor,
     pending: VecDeque<Fenced<StagingCursor>>,
@@ -198,7 +198,7 @@ pub(crate) struct StagingReader<'a> {
 impl<'a> StagingReader<'a> {
     pub(crate) fn new(
         owner: &'a mut StagingBuffer,
-        command_buffers: &'a mut CommandBufferSet,
+        command_buffers: &'a mut CommandBuffers,
         fences: &'a mut FenceSet,
         buffer_info: BufferInfo,
     ) -> Self {

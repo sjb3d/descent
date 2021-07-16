@@ -43,7 +43,7 @@ impl CommandBuffer {
 
 pub(crate) struct ScopedCommandBuffer<'a> {
     buffer: CommandBuffer,
-    set: &'a mut CommandBufferSet,
+    owner: &'a mut CommandBuffers,
 }
 
 impl<'a> ScopedCommandBuffer<'a> {
@@ -52,16 +52,16 @@ impl<'a> ScopedCommandBuffer<'a> {
     }
 
     pub(crate) fn submit(self, fences: &mut FenceSet) -> FenceId {
-        self.set.submit(self.buffer, fences)
+        self.owner.submit(self.buffer, fences)
     }
 }
 
-pub(crate) struct CommandBufferSet {
+pub(crate) struct CommandBuffers {
     context: SharedContext,
     buffers: VecDeque<Fenced<CommandBuffer>>,
 }
 
-impl CommandBufferSet {
+impl CommandBuffers {
     const COUNT: usize = 2;
 
     pub(crate) fn new(context: &SharedContext, fences: &FenceSet) -> Self {
@@ -98,7 +98,7 @@ impl CommandBufferSet {
 
         ScopedCommandBuffer {
             buffer: active,
-            set: self,
+            owner: self,
         }
     }
 
@@ -123,7 +123,7 @@ impl CommandBufferSet {
     }
 }
 
-impl Drop for CommandBufferSet {
+impl Drop for CommandBuffers {
     fn drop(&mut self) {
         for buffer in self.buffers.iter() {
             unsafe {

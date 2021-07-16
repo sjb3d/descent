@@ -2,12 +2,12 @@ use super::common::*;
 use spark::{vk, Builder};
 use std::collections::VecDeque;
 
-pub(crate) struct DescriptorPoolSet {
+pub(crate) struct DescriptorPools {
     context: SharedContext,
     pools: VecDeque<Fenced<vk::DescriptorPool>>,
 }
 
-impl DescriptorPoolSet {
+impl DescriptorPools {
     const COUNT: usize = 2;
 
     const MAX_SETS: u32 = 512;
@@ -43,11 +43,11 @@ impl DescriptorPoolSet {
                 .reset_descriptor_pool(pool, vk::DescriptorPoolResetFlags::empty())
                 .unwrap();
         }
-        ScopedDescriptorPool { pool, set: self }
+        ScopedDescriptorPool { pool, owner: self }
     }
 }
 
-impl Drop for DescriptorPoolSet {
+impl Drop for DescriptorPools {
     fn drop(&mut self) {
         let device = &self.context.device;
         for pool in self.pools.iter() {
@@ -61,7 +61,7 @@ impl Drop for DescriptorPoolSet {
 
 pub(crate) struct ScopedDescriptorPool<'a> {
     pool: vk::DescriptorPool,
-    set: &'a mut DescriptorPoolSet,
+    owner: &'a mut DescriptorPools,
 }
 
 impl<'a> ScopedDescriptorPool<'a> {
@@ -70,6 +70,6 @@ impl<'a> ScopedDescriptorPool<'a> {
     }
 
     pub(crate) fn recycle(self, fence: FenceId) {
-        self.set.pools.push_back(Fenced::new(self.pool, fence));
+        self.owner.pools.push_back(Fenced::new(self.pool, fence));
     }
 }
