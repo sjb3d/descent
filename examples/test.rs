@@ -325,7 +325,9 @@ fn main() {
             unpack_labels(&mut env, &y_var, &train_labels, first_index, m).unwrap();
             env.run(&train_graph);
         }
-        env.print_timings();
+        if epoch_index < 2 {
+            env.print_timings();
+        }
         let train_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
         let train_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();
 
@@ -338,7 +340,9 @@ fn main() {
             unpack_labels(&mut env, &y_var, &test_labels, first_index, m).unwrap();
             env.run(&test_graph);
         }
-        env.print_timings();
+        if epoch_index < 2 {
+            env.print_timings();
+        }
         let test_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
         let test_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();
 

@@ -1,11 +1,12 @@
 use super::common::*;
+use ordered_float::NotNan;
 use spark::vk;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BinaryHeap, HashMap, VecDeque},
     mem,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
 struct NameId {
     index: u32,
 }
@@ -52,11 +53,26 @@ impl TimestampSet {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
+struct TimestampEntry {
+    total: NotNan<f32>,
+    id: NameId,
+}
+
+impl TimestampEntry {
+    fn new(id: NameId, time: f32) -> Self {
+        Self {
+            total: NotNan::new(time).unwrap(),
+            id,
+        }
+    }
+}
+
 struct TimestampAccumulator {
     context: SharedContext,
-    timings_total: f32,
-    timings_sum: Vec<(NameId, f32)>,
-    timings_counter: u32,
+    time_total: f32,
+    time_per_id: Vec<TimestampEntry>,
+    counter: u32,
     timestamp_valid_mask: u64,
     timestamp_period: f32,
 }
@@ -65,9 +81,9 @@ impl TimestampAccumulator {
     fn new(context: &SharedContext) -> Self {
         Self {
             context: SharedContext::clone(context),
-            timings_total: 0.0,
-            timings_sum: Vec::new(),
-            timings_counter: 0,
+            time_total: 0.0,
+            time_per_id: Vec::new(),
+            counter: 0,
             timestamp_valid_mask: 1u64
                 .checked_shl(context.queue_family_properties.timestamp_valid_bits)
                 .unwrap_or(0)
@@ -107,28 +123,29 @@ impl TimestampAccumulator {
             let total_time =
                 (query_deltas.iter().copied().sum::<u64>() as f32) * self.timestamp_period;
 
-            if self.timings_sum.len() == query_times.len()
+            if self.time_per_id.len() == query_times.len()
                 && self
-                    .timings_sum
+                    .time_per_id
                     .iter()
                     .zip(set.timestamp_ids.iter().copied())
-                    .all(|(a, b)| a.0 == b)
+                    .all(|(entry, id)| entry.id == id)
             {
-                self.timings_total += total_time;
-                for ((_, time_sum), time) in self.timings_sum.iter_mut().zip(query_times.iter()) {
-                    *time_sum += time;
+                self.time_total += total_time;
+                for (entry, time) in self.time_per_id.iter_mut().zip(query_times.iter()) {
+                    entry.total += time;
                 }
-                self.timings_counter += 1;
+                self.counter += 1;
             } else {
-                self.timings_total = total_time;
-                self.timings_sum.clear();
-                self.timings_sum.extend(
+                self.time_total = total_time;
+                self.time_per_id.clear();
+                self.time_per_id.extend(
                     set.timestamp_ids
                         .iter()
                         .copied()
-                        .zip(query_times.iter().copied()),
+                        .zip(query_times.iter().copied())
+                        .map(|(id, time)| TimestampEntry::new(id, time)),
                 );
-                self.timings_counter = 1;
+                self.counter = 1;
             }
 
             set.timestamp_ids.clear();
@@ -136,24 +153,34 @@ impl TimestampAccumulator {
     }
 
     fn print_timings(&self, names: &[String]) {
-        if self.timings_counter != 0 {
-            let norm = 1.0 / (self.timings_counter as f32);
+        if self.counter != 0 {
+            let norm = 1.0 / (self.counter as f32);
             println!(
-                "total ({} runs): {} us",
-                self.timings_counter,
-                norm * self.timings_total * 1_000_000.0
+                "total time: {:.2} ms (average of {} runs)",
+                norm * self.time_total * 1000.0,
+                self.counter,
             );
-            for (id, time) in self.timings_sum.iter() {
-                let name = &names[id.index as usize];
-                println!("{}: {} us", name, norm * time * 1_000_000.0);
+            let mut heap: BinaryHeap<TimestampEntry> = self.time_per_id.iter().copied().collect();
+            for i in 0..5 {
+                if let Some(entry) = heap.pop() {
+                    let name = &names[entry.id.index as usize];
+                    let total = entry.total.into_inner();
+                    println!(
+                        "({}) {:>6.2} ms ({:>4.1}%): {}",
+                        i + 1,
+                        norm * total * 1000.0,
+                        100.0 * total / self.time_total,
+                        name
+                    );
+                }
             }
         }
     }
 
     fn reset_timings(&mut self) {
-        self.timings_total = 0.0;
-        self.timings_sum.clear();
-        self.timings_counter = 0;
+        self.time_total = 0.0;
+        self.time_per_id.clear();
+        self.counter = 0;
     }
 }
 
