@@ -1,9 +1,10 @@
 use crate::common::*;
-use rand::{
-    distributions::{Distribution, Uniform},
-    Rng,
-};
-use std::{convert::TryInto, io::Write};
+use rand::{distributions::Open01, Rng};
+use std::{convert::TryInto, f32::consts::PI, io::Write};
+
+fn normal_from_uniform(u1: f32, u2: f32) -> f32 {
+    (-2.0 * u1.ln()).sqrt() * (2.0 * PI * u2).cos()
+}
 
 fn write_rand_uniform(
     mut writer: impl Write,
@@ -11,11 +12,12 @@ fn write_rand_uniform(
     element_count: usize,
     rng: &mut impl Rng,
 ) {
-    let a = (6.0 / (fan_in as f32)).sqrt();
-    let dist = Uniform::new(-a, a);
+    let a = (2.0 / (fan_in as f32)).sqrt();
     for _ in 0..element_count {
-        let x: f32 = dist.sample(rng);
-        writer.write_all(bytemuck::bytes_of(&x)).unwrap();
+        let u1: f32 = rng.sample(Open01);
+        let u2: f32 = rng.sample(Open01);
+        let n: f32 = a * normal_from_uniform(u1, u2);
+        writer.write_all(bytemuck::bytes_of(&n)).unwrap();
     }
 }
 
