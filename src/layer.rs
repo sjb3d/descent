@@ -107,6 +107,10 @@ impl NetworkBuilder {
     }
 }
 
+struct EvalContext {
+    is_training: bool,
+}
+
 pub struct Network {
     layers: Vec<Box<dyn LayerInstance>>,
     parameters: Vec<Variable>,
@@ -117,24 +121,22 @@ impl Network {
         NetworkBuilder { layers: Vec::new() }
     }
 
-    pub fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn eval<'g>(&self, ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
         let mut x = input;
         for layer in self.layers.iter() {
             x.graph().next_colour();
-            x = layer.train(x);
+            x = layer.eval(ctx, x);
         }
         x.graph().next_colour();
         x
     }
 
+    pub fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+        self.eval(&EvalContext { is_training: true }, input)
+    }
+
     pub fn test<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
-        let mut x = input;
-        for layer in self.layers.iter() {
-            x.graph().next_colour();
-            x = layer.test(x);
-        }
-        x.graph().next_colour();
-        x
+        self.eval(&EvalContext { is_training: false }, input)
     }
 
     pub fn parameters(&self) -> &[Variable] {
@@ -150,11 +152,7 @@ struct NetworkContext<'c, R: Rng> {
 }
 
 trait LayerInstance {
-    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g>;
-
-    fn test<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
-        self.train(input)
-    }
+    fn eval<'g>(&self, ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g>;
 }
 
 struct LinearInstance {
@@ -182,7 +180,7 @@ impl LinearInstance {
 }
 
 impl LayerInstance for LinearInstance {
-    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
         input.matmul(&self.w) + &self.b
     }
 }
@@ -198,7 +196,7 @@ impl LeakyReluInstance {
 }
 
 impl LayerInstance for LeakyReluInstance {
-    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
         input.leaky_relu(self.amount)
     }
 }
@@ -238,7 +236,7 @@ impl Conv2DInstance {
 }
 
 impl LayerInstance for Conv2DInstance {
-    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
         input.conv2d(&self.f, self.pad) + &self.b
     }
 }
@@ -260,7 +258,7 @@ impl MaxPool2DInstance {
 }
 
 impl LayerInstance for MaxPool2DInstance {
-    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
         input.max_pool(-3, self.pool_h).max_pool(-2, self.pool_w)
     }
 }
@@ -276,7 +274,7 @@ impl FlattenInstance {
 }
 
 impl LayerInstance for FlattenInstance {
-    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
         let input_shape = input.shape();
 
         let (first, remain) = input_shape.split_first().unwrap();
@@ -297,7 +295,11 @@ impl DropoutInstance {
 }
 
 impl LayerInstance for DropoutInstance {
-    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn eval<'g>(&self, ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
+        if !ctx.is_training {
+            return input;
+        }
+
         let graph = input.graph();
         let shape = input.shape();
 
@@ -311,9 +313,5 @@ impl LayerInstance for DropoutInstance {
         da.accumulate(rv.select_gt(self.amount, survivor_scale * db, 0.0));
 
         DualArray::new(b, db)
-    }
-
-    fn test<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
-        input
     }
 }
