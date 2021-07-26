@@ -177,11 +177,21 @@ enum TestNetwork {
     ConvNet,
 }
 
+#[derive(Debug, EnumString, EnumVariantNames)]
+#[strum(serialize_all = "kebab_case")]
+enum Optimizer {
+    Descent,
+    Adam,
+}
+
 #[derive(Debug, StructOpt)]
 #[structopt(no_version)]
 struct AppParams {
     #[structopt(possible_values=&TestNetwork::VARIANTS, default_value="hidden300")]
     network: TestNetwork,
+
+    #[structopt(short, long, possible_values=&Optimizer::VARIANTS, default_value="adam")]
+    optimizer: Optimizer,
 
     #[structopt(short, long, global = true, default_value = "1000")]
     mini_batch_size: usize,
@@ -249,10 +259,11 @@ fn main() {
         // train using gradient of the loss
         loss.set_loss();
         let parameters = network.parameters();
-        if false {
-            stochastic_gradient_descent_step(&graph, parameters, m, 0.1);
-        } else {
-            adam_step(&mut env, &graph, parameters, m, 0.001, 0.9, 0.999, 1.0E-8);
+        match app_params.optimizer {
+            Optimizer::Descent => stochastic_gradient_descent_step(&graph, parameters, m, 0.1),
+            Optimizer::Adam => {
+                adam_step(&mut env, &graph, parameters, m, 0.001, 0.9, 0.999, 1.0E-8)
+            }
         }
 
         graph.build_schedule()
