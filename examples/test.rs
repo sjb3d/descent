@@ -60,16 +60,14 @@ fn unpack_images(
     env: &mut Environment,
     variable: &Variable,
     bytes: &[u8],
-    image_base: usize,
-    image_count: usize,
+    indices: &[usize],
 ) -> io::Result<()> {
-    let ((image_end, rows, cols), bytes) = read_images_info(bytes);
-    assert!(image_base + image_count <= image_end);
+    let ((_, rows, cols), bytes) = read_images_info(bytes);
     let pixel_count = rows * cols;
     let mut w = env.writer(variable);
     let mut image = Vec::<f32>::with_capacity(pixel_count);
-    for image_index in 0..image_count {
-        let begin = (image_base + image_index) * pixel_count;
+    for index in indices.iter().copied() {
+        let begin = index * pixel_count;
         let end = begin + pixel_count;
         image.clear();
         image.extend(bytes[begin..end].iter().map(|&c| (c as f32) / 255.0));
@@ -82,14 +80,10 @@ fn unpack_labels(
     env: &mut Environment,
     variable: &Variable,
     bytes: &[u8],
-    label_base: usize,
-    label_count: usize,
+    indices: &[usize],
 ) -> io::Result<()> {
-    let (label_end, bytes) = read_labels_info(bytes);
-    assert!(label_base + label_count <= label_end);
-    let begin = label_base;
-    let end = begin + label_count;
-    let labels: Vec<f32> = bytes[begin..end].iter().map(|&n| n as f32).collect();
+    let (_, bytes) = read_labels_info(bytes);
+    let labels: Vec<f32> = indices.iter().map(|&index| bytes[index] as f32).collect();
     let mut w = env.writer(variable);
     w.write_all(bytemuck::cast_slice(&labels))
 }
@@ -313,16 +307,17 @@ fn main() {
     assert_eq!(test_image_cols, 28);
 
     // run epochs
+    let mut indices = Vec::new();
     for epoch_index in 0..app_params.epoch_count {
         // loop over training mini-batches
-        let mut batch_indices: Vec<_> = (0..(train_image_count / m)).collect();
-        batch_indices.shuffle(&mut rng);
+        indices.clear();
+        indices.extend(0..train_image_count);
+        indices.shuffle(&mut rng);
         env.writer(&loss_sum_var).zero_fill();
         env.writer(&accuracy_sum_var).zero_fill();
-        for batch_index in batch_indices.iter().copied() {
-            let first_index = batch_index * m;
-            unpack_images(&mut env, &x_var, &train_images, first_index, m).unwrap();
-            unpack_labels(&mut env, &y_var, &train_labels, first_index, m).unwrap();
+        for batch_indices in indices.chunks(m) {
+            unpack_images(&mut env, &x_var, &train_images, batch_indices).unwrap();
+            unpack_labels(&mut env, &y_var, &train_labels, batch_indices).unwrap();
             env.run(&train_graph);
         }
         if epoch_index < 2 {
@@ -334,10 +329,11 @@ fn main() {
         // loop over test mini-batches to evaluate loss and accuracy
         env.writer(&loss_sum_var).zero_fill();
         env.writer(&accuracy_sum_var).zero_fill();
-        for batch_index in 0..(test_image_count / m) {
-            let first_index = batch_index * m;
-            unpack_images(&mut env, &x_var, &test_images, first_index, m).unwrap();
-            unpack_labels(&mut env, &y_var, &test_labels, first_index, m).unwrap();
+        indices.clear();
+        indices.extend(0..test_image_count);
+        for batch_indices in indices.chunks(m) {
+            unpack_images(&mut env, &x_var, &test_images, batch_indices).unwrap();
+            unpack_labels(&mut env, &y_var, &test_labels, batch_indices).unwrap();
             env.run(&test_graph);
         }
         if epoch_index < 2 {
