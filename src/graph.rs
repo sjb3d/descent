@@ -336,7 +336,12 @@ impl<'g> Array<'g> {
     }
 
     fn set_loss_grad(&self) {
-        let one = self.graph.literal(1.0);
+        let grad_shape = self.shape();
+        let mini_batch_size = *grad_shape.first().unwrap();
+        let mini_batch_scale = self
+            .graph
+            .literal(1.0 / (mini_batch_size as f32))
+            .broadcast(&grad_shape);
         self.graph.with_state(|state| {
             assert_eq!(state.ops.graph[self.node_id].op, Op::Unary(UnaryOp::Mov));
             assert_eq!(
@@ -347,15 +352,12 @@ impl<'g> Array<'g> {
                     .count(),
                 0
             );
-            let one_shape = Shape::from([1]);
-            let grad_shape = state.ops.graph[self.node_id].shape;
-            state.ops.graph[self.node_id].op = Op::Unary(UnaryOp::Mov);
             state.ops.graph.add_edge(
-                one.node_id,
+                mini_batch_scale.node_id,
                 self.node_id,
                 OpEdge {
                     arg: 0,
-                    view: View::broadcast(&one_shape, &grad_shape),
+                    view: grad_shape.identity_view(),
                 },
             );
         })

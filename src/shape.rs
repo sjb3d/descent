@@ -168,7 +168,7 @@ impl Shape {
     pub(crate) fn reduce(&self, axis: Axis) -> Self {
         // strip outermost dimension if reduced, otherwise keep with length 1
         let index = axis.index();
-        if index == 0 {
+        if index == 0 && self.0.len() > 1 {
             Shape::new(self.0.iter().copied().skip(1).collect())
         } else {
             let mut v = self.0;

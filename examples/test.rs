@@ -89,6 +89,7 @@ fn unpack_labels(
 }
 
 fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> DualArray<'g> {
+    let graph = z.graph();
     let (z, dz) = z.into_inner();
     let y = y.into_array(z.graph());
 
@@ -98,7 +99,7 @@ fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> Du
 
     // cross entropy loss
     let loss = y.select_eq(p.coord(-1), -p.log(), 0.0).reduce_sum(-1); // TODO: pick element of p using value of y
-    let dloss = loss.graph().accumulator(loss.shape());
+    let dloss = graph.accumulator(loss.shape());
 
     // backprop (softmax with cross entropy directly)
     let n = *p.shape().last().unwrap();
@@ -118,18 +119,23 @@ fn softmax_cross_entropy_accuracy<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -
     pred.select_eq(y, 1.0, 0.0)
 }
 
-fn stochastic_gradient_descent_step(
-    graph: &Graph,
-    variables: &[Variable],
-    mini_batch_size: usize,
-    learning_rate: f32,
-) {
+fn add_weight_decay_to_grad(graph: &Graph, variables: &[Variable], weight_decay: f32) {
+    if weight_decay == 0.0 {
+        return;
+    }
+
+    for var in variables.iter() {
+        let (w, g) = graph.parameter(var).into_inner();
+        g.accumulate(w * weight_decay);
+    }
+}
+
+fn stochastic_gradient_descent_step(graph: &Graph, variables: &[Variable], learning_rate: f32) {
     graph.next_colour();
 
-    let alpha = learning_rate / (mini_batch_size as f32);
     for var in variables.iter() {
         let g = graph.parameter(var).grad();
-        graph.update_variable(var, |theta| theta - alpha * g);
+        graph.update_variable(var, |theta| theta - learning_rate * g);
     }
 }
 
@@ -137,7 +143,6 @@ fn adam_step(
     env: &mut Environment,
     graph: &Graph,
     variables: &[Variable],
-    mini_batch_size: usize,
     learning_rate: f32,
     beta1: f32,
     beta2: f32,
@@ -160,10 +165,8 @@ fn adam_step(
         env.writer(&v_var).zero_fill();
 
         let g = graph.parameter(var).grad();
-        let rcp = 1.0 / (mini_batch_size as f32);
-
-        let m = graph.update_variable(&m_var, |m| m * beta1 + g * ((1.0 - beta1) * rcp));
-        let v = graph.update_variable(&v_var, |v| v * beta2 + g * g * ((1.0 - beta2) * rcp * rcp));
+        let m = graph.update_variable(&m_var, |m| m * beta1 + g * (1.0 - beta1));
+        let v = graph.update_variable(&v_var, |v| v * beta2 + g * g * (1.0 - beta2));
 
         graph.update_variable(var, |theta| theta - alpha * m / (v.sqrt() + epsilon));
     }
@@ -193,11 +196,14 @@ struct AppParams {
     #[structopt(short, long, possible_values=&Optimizer::VARIANTS, default_value="adam")]
     optimizer: Optimizer,
 
-    #[structopt(short, long, global = true, default_value = "1000")]
+    #[structopt(short, long, default_value = "1000")]
     mini_batch_size: usize,
 
-    #[structopt(short, long, global = true, default_value = "40")]
+    #[structopt(short, long, default_value = "40")]
     epoch_count: usize,
+
+    #[structopt(short, long, default_value = "0.0005")]
+    weight_decay: f32,
 }
 
 fn main() {
@@ -256,14 +262,13 @@ fn main() {
             accuracy_sum + accuracy.reduce_sum(0)
         });
 
-        // train using gradient of the loss
+        // train using gradient of the loss (scaled for size of mini batch)
         loss.set_loss();
         let parameters = network.parameters();
+        add_weight_decay_to_grad(&graph, parameters, app_params.weight_decay);
         match app_params.optimizer {
-            Optimizer::Descent => stochastic_gradient_descent_step(&graph, parameters, m, 0.1),
-            Optimizer::Adam => {
-                adam_step(&mut env, &graph, parameters, m, 0.001, 0.9, 0.999, 1.0E-8)
-            }
+            Optimizer::Descent => stochastic_gradient_descent_step(&graph, parameters, 0.1),
+            Optimizer::Adam => adam_step(&mut env, &graph, parameters, 0.002, 0.9, 0.999, 1.0E-8),
         }
 
         graph.build_schedule()
@@ -295,6 +300,22 @@ fn main() {
     test_graph
         .write_dot(&mut BufWriter::new(File::create("test.dot").unwrap()))
         .unwrap();
+
+    let norm_var = env.variable([1], "norm");
+    let norm_graph = {
+        let graph = env.graph();
+
+        let mut sum = graph.literal(0.0);
+        for var in network.parameters().iter() {
+            let x = graph.read_variable(&var);
+            let x = x.reshape([x.shape().element_count()]);
+            let x = x * x * 0.5;
+            sum = sum + x.reduce_sum(0);
+        }
+        graph.write_variable(&norm_var, sum);
+
+        graph.build_schedule()
+    };
 
     // load training data
     let train_images = load_gz_bytes("data/fashion/train-images-idx3-ubyte.gz").unwrap();
@@ -337,6 +358,9 @@ fn main() {
         let train_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
         let train_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();
 
+        env.run(&norm_graph);
+        let norm: f32 = env.reader(&norm_var).read_value().unwrap();
+
         // loop over test mini-batches to evaluate loss and accuracy
         env.writer(&loss_sum_var).zero_fill();
         env.writer(&accuracy_sum_var).zero_fill();
@@ -354,12 +378,13 @@ fn main() {
         let test_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();
 
         println!(
-            "epoch: {}, loss: {}/{}, accuracy: {}/{}",
+            "epoch: {}, loss: {}/{}, accuracy: {}/{}, w_norm: {}",
             epoch_index,
             train_loss / (train_image_count as f32),
             test_loss / (test_image_count as f32),
             train_accuracy / (train_image_count as f32),
-            test_accuracy / (test_image_count as f32)
+            test_accuracy / (test_image_count as f32),
+            norm.sqrt()
         );
     }
 }
