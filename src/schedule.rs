@@ -59,17 +59,6 @@ slotmap::new_key_type! {
     pub(crate) struct ClusterId;
 }
 
-trait Only: Iterator {
-    fn only(&mut self) -> Option<Self::Item>;
-}
-
-impl<I: Iterator> Only for I {
-    fn only(&mut self) -> Option<Self::Item> {
-        let first = self.next();
-        first.filter(|_| self.next().is_none())
-    }
-}
-
 pub struct Schedule {
     pub(crate) variables: SharedVariables,
     pub(crate) ops: OpGraph,
@@ -90,9 +79,6 @@ impl Schedule {
 
         sched.rebuild_ordering();
         sched.eliminate_dead_code();
-
-        sched.rebuild_ordering();
-        sched.eliminate_accumulate_nodes();
 
         sched.rebuild_ordering();
         sched.eliminate_moves();
@@ -189,29 +175,6 @@ impl Schedule {
         }
     }
 
-    fn eliminate_accumulate_nodes(&mut self) {
-        for node_id in self.ops_sorted.iter().copied() {
-            if matches!(self.ops[node_id].op, Op::Accumulate) {
-                // TODO: generate adds (assume only one incoming edge for now)
-                let in_edge_ref = self.ops.edges_directed(node_id, Incoming).only().unwrap();
-                let in_edge_id = in_edge_ref.id();
-                let in_node_id = in_edge_ref.source();
-                let mut out_edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
-                while let Some((out_edge_id, out_node_id)) = out_edges.next(&self.ops) {
-                    let in_edge = &self.ops[in_edge_id];
-                    let out_edge = &self.ops[out_edge_id];
-                    assert_eq!(in_edge.arg, 0);
-                    let new_edge = OpEdge {
-                        arg: out_edge.arg,
-                        view: in_edge.view.through(false, &out_edge.view),
-                    };
-                    self.ops.add_edge(in_node_id, out_node_id, new_edge);
-                }
-                self.ops.remove_node(node_id);
-            }
-        }
-    }
-
     fn eliminate_moves(&mut self) {
         for node_id in self.ops_sorted.iter().copied() {
             if let Op::Unary(UnaryOp::Mov) = &self.ops[node_id].op {
@@ -225,7 +188,7 @@ impl Schedule {
                         .all(|out_edge_ref| {
                             self.ops[in_edge_id]
                                 .view
-                                .can_view_through(can_reshape, &self.ops[out_edge_ref.id()].view)
+                                .can_view_through(&self.ops[out_edge_ref.id()].view, can_reshape)
                         });
                 if can_eliminate {
                     let mut out_edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
@@ -235,7 +198,7 @@ impl Schedule {
                         assert_eq!(in_edge.arg, 0);
                         let new_edge = OpEdge {
                             arg: out_edge.arg,
-                            view: in_edge.view.through(can_reshape, &out_edge.view),
+                            view: in_edge.view.through(&out_edge.view, can_reshape),
                         };
                         self.ops.add_edge(in_node_id, out_node_id, new_edge);
                     }

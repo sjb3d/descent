@@ -2,6 +2,17 @@ use crate::common::*;
 use ordered_float::NotNan;
 use petgraph::prelude::*;
 
+pub(crate) trait Only: Iterator {
+    fn only(&mut self) -> Option<Self::Item>;
+}
+
+impl<I: Iterator> Only for I {
+    fn only(&mut self) -> Option<Self::Item> {
+        let first = self.next();
+        first.filter(|_| self.next().is_none())
+    }
+}
+
 pub(crate) type OpGraph = StableDiGraph<OpNode, OpEdge, usize>;
 pub(crate) type OpNodeId = NodeIndex<usize>;
 pub(crate) type OpEdgeId = EdgeIndex<usize>;
@@ -54,7 +65,6 @@ pub(crate) enum Op {
     Unary(UnaryOp),
     Binary(BinaryOp),
     CompareAndSelect(CompareMode),
-    Accumulate, // accumulates grad from backprop
     MatMul,
     Reduce { reduce_op: ReduceOp, axis: Axis },
     ImageToWindows { pad: usize },

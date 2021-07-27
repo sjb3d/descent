@@ -317,14 +317,14 @@ impl View {
         Self::identity(&self.output_shape).eq(self)
     }
 
-    pub(crate) fn can_view_through(&self, can_reshape: bool, view: &View) -> bool {
+    pub(crate) fn can_view_through(&self, view: &View, can_reshape: bool) -> bool {
         self.output_shape == view.input_shape
             || (can_reshape
                 && self.is_identity()
                 && self.output_shape.element_count() == view.input_shape.element_count())
     }
 
-    pub(crate) fn through(&self, can_reshape: bool, view: &View) -> Self {
+    pub(crate) fn through(&self, view: &View, can_reshape: bool) -> Self {
         if self.output_shape != view.input_shape {
             assert!(can_reshape);
             assert!(self.is_identity());

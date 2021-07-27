@@ -297,21 +297,38 @@ impl<'g> Array<'g> {
 
     pub fn accumulate(&self, src: Array) {
         self.graph.with_state(|state| {
-            assert_eq!(state.ops.graph[self.node_id].op, Op::Accumulate);
+            assert_eq!(state.ops.graph[self.node_id].op, Op::Unary(UnaryOp::Mov));
             assert_eq!(
                 state.ops.graph[self.node_id].shape,
                 state.ops.graph[src.node_id].shape
             );
-            let arg = state
+            let src_id = if let Some(edge_ref) = state
                 .ops
                 .graph
                 .edges_directed(self.node_id, Incoming)
-                .count();
+                .next()
+            {
+                // remove the edge from the current source to this move
+                let prev_edge_id = edge_ref.id();
+                let prev_src_id = edge_ref.source();
+                state.ops.graph.remove_edge(prev_edge_id);
+
+                // accumulate with the given array
+                state.ops.new_node(
+                    state.ops.graph[src.node_id].shape,
+                    Op::Binary(BinaryOp::Add),
+                    &[prev_src_id, src.node_id],
+                )
+            } else {
+                src.node_id
+            };
+
+            // add the edge to the move
             state.ops.graph.add_edge(
-                src.node_id,
+                src_id,
                 self.node_id,
                 OpEdge {
-                    arg,
+                    arg: 0,
                     view: state.ops.graph[src.node_id].shape.identity_view(),
                 },
             );
@@ -321,7 +338,7 @@ impl<'g> Array<'g> {
     fn set_loss_grad(&self) {
         let one = self.graph.literal(1.0);
         self.graph.with_state(|state| {
-            assert_eq!(state.ops.graph[self.node_id].op, Op::Accumulate);
+            assert_eq!(state.ops.graph[self.node_id].op, Op::Unary(UnaryOp::Mov));
             assert_eq!(
                 state
                     .ops
@@ -712,7 +729,7 @@ impl Graph {
                 .unwrap()
                 .or_insert_with(|| GraphInput {
                     value_node_id: ops.new_node(shape, Op::Input { variable_id }, &[]),
-                    grad_node_id: Some(ops.new_node(shape, Op::Accumulate, &[])),
+                    grad_node_id: Some(ops.new_node(shape, Op::Unary(UnaryOp::Mov), &[])),
                 })
         })
     }
@@ -774,7 +791,7 @@ impl Graph {
 
     pub fn accumulator(&self, shape: impl Into<Shape>) -> Array {
         self.with_state(|state| Array {
-            node_id: state.ops.new_node(shape, Op::Accumulate, &[]),
+            node_id: state.ops.new_node(shape, Op::Unary(UnaryOp::Mov), &[]),
             graph: self,
         })
     }
