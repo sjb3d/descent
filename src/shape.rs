@@ -113,24 +113,34 @@ impl Shape {
         Shape::from([r, m, n])
     }
 
-    pub(crate) fn image_to_windows(&self, filter_w: usize, filter_h: usize, pad: usize) -> Self {
+    pub(crate) fn image_to_windows(
+        &self,
+        filter: (usize, usize),
+        pad: usize,
+        stride: (usize, usize),
+    ) -> Self {
         assert!(self.0.len() >= 3);
         let (prefix, suffix) = self.rsplit_at(3);
         let [in_h, in_w, in_nc]: [usize; 3] = suffix.try_into().unwrap();
-        let out_w = 1 + in_w + 2 * pad - filter_w;
-        let out_h = 1 + in_h + 2 * pad - filter_h;
+        let (filter_w, filter_h) = filter;
+        let (stride_w, stride_h) = stride;
+        let out_w = (in_w + 2 * pad - filter_w) / stride_w + 1;
+        let out_h = (in_h + 2 * pad - filter_h) / stride_h + 1;
+        assert_eq!((out_w - 1) * stride_w, in_w + 2 * pad - filter_w);
+        assert_eq!((out_h - 1) * stride_h, in_h + 2 * pad - filter_h);
         let mut v = TinyVec::new();
         v.extend_from_slice(prefix);
         v.extend_from_slice(&[out_h, out_w, filter_h, filter_w, in_nc]);
         Shape::new(v)
     }
 
-    pub(crate) fn windows_to_image(&self, pad: usize) -> Self {
+    pub(crate) fn windows_to_image(&self, pad: usize, stride: (usize, usize)) -> Self {
         assert!(self.0.len() >= 5);
         let (prefix, suffix) = self.rsplit_at(5);
         let [out_h, out_w, filter_h, filter_w, in_nc]: [usize; 5] = suffix.try_into().unwrap();
-        let in_w = out_w + filter_w - 1 - 2 * pad;
-        let in_h = out_h + filter_h - 1 - 2 * pad;
+        let (stride_w, stride_h) = stride;
+        let in_w = (out_w - 1) * stride_w + filter_w - 2 * pad;
+        let in_h = (out_h - 1) * stride_h + filter_h - 2 * pad;
         let mut v = TinyVec::new();
         v.extend_from_slice(prefix);
         v.extend_from_slice(&[in_h, in_w, in_nc]);

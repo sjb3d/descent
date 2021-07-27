@@ -467,7 +467,7 @@ impl Schedule {
                             outputs: vec![node_id],
                         }));
                     }
-                    Op::ImageToWindows { pad } => {
+                    Op::ImageToWindows { pad, stride } => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
                         assert_eq!(arg_sources.len(), 1);
                         let src0 = &arg_sources[0];
@@ -476,13 +476,14 @@ impl Schedule {
                                 shape: node.shape,
                                 input: src0.view,
                                 pad,
+                                stride,
                             }),
                             inputs: vec![src0.node_id],
                             members: vec![node_id],
                             outputs: vec![node_id],
                         }));
                     }
-                    Op::WindowsToImage { pad } => {
+                    Op::WindowsToImage { pad, stride } => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
                         assert_eq!(arg_sources.len(), 1);
                         let src0 = &arg_sources[0];
@@ -491,6 +492,7 @@ impl Schedule {
                                 shape: node.shape,
                                 input: src0.view,
                                 pad,
+                                stride,
                             }),
                             inputs: vec![src0.node_id],
                             members: vec![node_id],

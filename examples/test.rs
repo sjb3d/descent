@@ -89,7 +89,6 @@ fn unpack_labels(
 }
 
 fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> DualArray<'g> {
-    let graph = z.graph();
     let (z, dz) = z.into_inner();
     let y = y.into_array(z.graph());
 
@@ -99,7 +98,7 @@ fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> Du
 
     // cross entropy loss
     let loss = y.select_eq(p.coord(-1), -p.log(), 0.0).reduce_sum(-1); // TODO: pick element of p using value of y
-    let dloss = graph.accumulator(loss.shape());
+    let dloss = loss.clone_as_accumulator();
 
     // backprop (softmax with cross entropy directly)
     let n = *p.shape().last().unwrap();

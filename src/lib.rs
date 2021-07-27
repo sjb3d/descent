@@ -78,7 +78,10 @@ mod tests {
         env.writer(&b_var).write_all(cast_slice(&b_data)).unwrap();
 
         let g = env.graph();
-        g.write_variable(&c_var, g.parameter(&a_var).conv2d(&b_var, 0).value());
+        g.write_variable(
+            &c_var,
+            g.parameter(&a_var).conv2d(&b_var, 0, (1, 1)).value(),
+        );
 
         let g = g.build_schedule();
         env.run(&g);
@@ -91,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn max_pool() {
+    fn max_pool2d() {
         let mut env = Environment::new();
 
         let a_data: Vec<_> = (0..100).map(|i| i as f32).collect();
@@ -99,16 +102,13 @@ mod tests {
             .map(|i| (11 + 2 * (i % 5) + 20 * (i / 5)) as f32)
             .collect();
 
-        let a_var = env.variable([10, 10], "a");
-        let b_var = env.variable([5, 5], "b");
+        let a_var = env.variable([1, 10, 10, 1], "a");
+        let b_var = env.variable([1, 5, 5, 1], "b");
 
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.graph();
-        g.write_variable(
-            &b_var,
-            g.parameter(&a_var).max_pool(0, 2).max_pool(1, 2).value(),
-        );
+        g.write_variable(&b_var, g.parameter(&a_var).max_pool2d((2, 2)).value());
 
         let g = g.build_schedule();
         env.run(&g);

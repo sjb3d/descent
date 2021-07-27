@@ -55,6 +55,16 @@ impl<'g> Array<'g> {
         self.graph
     }
 
+    pub fn clone_as_accumulator(&self) -> Self {
+        self.graph.with_state(|state| {
+            let shape = state.ops.graph[self.node_id].shape;
+            Array {
+                node_id: state.ops.new_node(shape, Op::Unary(UnaryOp::Mov), &[]),
+                graph: self.graph,
+            }
+        })
+    }
+
     fn view(self, view: View) -> Self {
         if view.is_identity() {
             self
@@ -229,27 +239,33 @@ impl<'g> Array<'g> {
         }
     }
 
-    fn image_to_windows(self, filter_w: usize, filter_h: usize, pad: usize) -> Self {
+    fn image_to_windows(self, filter: (usize, usize), pad: usize, stride: (usize, usize)) -> Self {
         self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape
-                .image_to_windows(filter_w, filter_h, pad);
+                .image_to_windows(filter, pad, stride);
             Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::ImageToWindows { pad }, &[self.node_id]),
+                node_id: state.ops.new_node(
+                    shape,
+                    Op::ImageToWindows { stride, pad },
+                    &[self.node_id],
+                ),
                 graph: self.graph,
             }
         })
     }
 
-    fn windows_to_image(self, pad: usize) -> Self {
+    fn windows_to_image(self, pad: usize, stride: (usize, usize)) -> Self {
         self.graph.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape.windows_to_image(pad);
+            let shape = state.ops.graph[self.node_id]
+                .shape
+                .windows_to_image(pad, stride);
             Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::WindowsToImage { pad }, &[self.node_id]),
+                node_id: state.ops.new_node(
+                    shape,
+                    Op::WindowsToImage { pad, stride },
+                    &[self.node_id],
+                ),
                 graph: self.graph,
             }
         })
@@ -475,7 +491,7 @@ impl<'g> DualArray<'g> {
 
         let b = a.select_gt(0.0, a, a * leakiness);
 
-        let db = self.graph.accumulator(b.shape());
+        let db = b.clone_as_accumulator();
         da.accumulate(a.select_gt(0.0, db, db * leakiness));
 
         Self::new(b, db)
@@ -489,7 +505,7 @@ impl<'g> DualArray<'g> {
 
         let c = a.matmul(b);
 
-        let dc = self.graph.accumulator(c.shape());
+        let dc = c.clone_as_accumulator();
         da.accumulate(dc.matmul(b.transpose()));
         db.accumulate(a.transpose().matmul(dc));
 
@@ -501,7 +517,7 @@ impl<'g> DualArray<'g> {
 
         let b = a.transpose();
 
-        let db = self.graph.accumulator(b.shape());
+        let db = b.clone_as_accumulator();
         da.accumulate(db.transpose());
 
         Self::new(b, db)
@@ -515,24 +531,29 @@ impl<'g> DualArray<'g> {
 
         let b = a.reshape(new_shape);
 
-        let db = self.graph.accumulator(new_shape);
+        let db = b.clone_as_accumulator();
         da.accumulate(db.reshape(old_shape));
 
         Self::new(b, db)
     }
 
-    fn image_to_windows(self, filter_w: usize, filter_h: usize, pad: usize) -> Self {
+    fn image_to_windows(self, filter: (usize, usize), pad: usize, stride: (usize, usize)) -> Self {
         let (a, da) = self.into_inner();
 
-        let b = a.image_to_windows(filter_w, filter_h, pad);
+        let b = a.image_to_windows(filter, pad, stride);
 
-        let db = self.graph.accumulator(b.shape());
-        da.accumulate(db.windows_to_image(pad));
+        let db = b.clone_as_accumulator();
+        da.accumulate(db.windows_to_image(pad, stride));
 
         Self::new(b, db)
     }
 
-    pub fn conv2d(self, filter: impl IntoDualArray<'g>, pad: usize) -> Self {
+    pub fn conv2d(
+        self,
+        filter: impl IntoDualArray<'g>,
+        pad: usize,
+        stride: (usize, usize),
+    ) -> Self {
         let filter = filter.into_dual_array(self.graph);
 
         // copy and pad the input into windows that match the filter size
@@ -545,7 +566,7 @@ impl<'g> DualArray<'g> {
         let [filter_oc, filter_h, filter_w, filter_ic]: [usize; 4] =
             filter_shape.as_slice().try_into().unwrap();
         assert_eq!(input_c, filter_ic);
-        let windows = self.image_to_windows(filter_w, filter_h, pad);
+        let windows = self.image_to_windows((filter_w, filter_h), pad, stride);
 
         // apply the filter using a matrix multiplication
         let windows_shape = windows.shape();
@@ -563,26 +584,25 @@ impl<'g> DualArray<'g> {
         c.reshape([m, output_h, output_w, filter_oc])
     }
 
-    pub fn max_pool(self, axis: isize, pool_size: usize) -> Self {
-        let input_shape = self.shape();
-        let input_axis = input_shape.axis(axis);
+    pub fn max_pool2d(self, size: (usize, usize)) -> Self {
+        let windows = self.image_to_windows(size, 0, size);
 
-        let reduce_input_shape = input_shape.pool(axis, pool_size);
-        let reduce_axis = input_axis.inner();
+        let [m, output_h, output_w, filter_h, filter_w, input_c]: [usize; 6] =
+            windows.shape().as_slice().try_into().unwrap();
 
-        let mut output_shape = input_shape;
-        output_shape[input_axis] /= pool_size;
+        windows
+            .reshape([m * output_h * output_w, filter_h * filter_w, input_c])
+            .reduce_max(1)
+            .reshape([m, output_h, output_w, input_c])
+    }
 
+    pub fn reduce_max(self, axis: isize) -> Self {
         let (a, da) = self.into_inner();
 
-        let reduce_input = a.reshape(reduce_input_shape);
-        let reduce_output = reduce_input.reduce_op(ReduceOp::Max, reduce_axis);
-        let b = reduce_output.reshape(output_shape);
+        let b = a.reduce_max(axis);
 
-        let db = self.graph.accumulator(b.shape());
-        let reduce_output_grad = db.reshape(reduce_output.shape());
-        let reduce_input_grad = reduce_input.select_eq(reduce_output, reduce_output_grad, 0.0);
-        da.accumulate(reduce_input_grad.reshape(input_shape));
+        let db = b.clone_as_accumulator();
+        da.accumulate(a.select_eq(b, db, 0.0));
 
         Self::new(b, db)
     }
@@ -605,8 +625,8 @@ where
         let (b, db) = rhs.into_inner();
 
         let c = a + b;
-        let dc = self.graph.accumulator(c.shape());
 
+        let dc = c.clone_as_accumulator();
         da.accumulate(dc.reduce_onto_per_element(&a.shape()));
         db.accumulate(dc.reduce_onto_per_element(&b.shape()));
 

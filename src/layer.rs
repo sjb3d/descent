@@ -239,7 +239,8 @@ impl Conv2DInstance {
 
 impl LayerInstance for Conv2DInstance {
     fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
-        input.conv2d(&self.f, self.pad) + &self.b
+        let stride = (1, 1);
+        input.conv2d(&self.f, self.pad, stride) + &self.b
     }
 }
 
@@ -261,7 +262,7 @@ impl MaxPool2DInstance {
 
 impl LayerInstance for MaxPool2DInstance {
     fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
-        input.max_pool(-3, self.pool_h).max_pool(-2, self.pool_w)
+        input.max_pool2d((self.pool_w, self.pool_h))
     }
 }
 
@@ -311,7 +312,7 @@ impl LayerInstance for DropoutInstance {
 
         let survivor_scale = 1.0 / (1.0 - self.amount);
         let b = rv.select_gt(self.amount, survivor_scale * a, 0.0);
-        let db = graph.accumulator(shape);
+        let db = b.clone_as_accumulator();
         da.accumulate(rv.select_gt(self.amount, survivor_scale * db, 0.0));
 
         DualArray::new(b, db)
