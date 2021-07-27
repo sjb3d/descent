@@ -108,7 +108,10 @@ mod tests {
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.graph();
-        g.write_variable(&b_var, g.parameter(&a_var).max_pool2d((2, 2)).value());
+        g.write_variable(
+            &b_var,
+            g.parameter(&a_var).max_pool2d((2, 2), (2, 2)).value(),
+        );
 
         let g = g.build_schedule();
         env.run(&g);

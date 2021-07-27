@@ -33,30 +33,55 @@ impl Linear {
 
 pub struct Conv2D {
     pub num_filters: usize,
-    pub filter_w: usize,
-    pub filter_h: usize,
+    pub filter: (usize, usize),
     pub pad: usize,
+    pub stride: (usize, usize),
+    pub is_blur: bool,
 }
 
 impl Conv2D {
-    pub fn new(num_filters: usize, filter_w: usize, filter_h: usize, pad: usize) -> Self {
+    pub fn new(num_filters: usize, filter_w: usize, filter_h: usize) -> Self {
         Self {
             num_filters,
-            filter_w,
-            filter_h,
-            pad,
+            filter: (filter_w, filter_h),
+            pad: 0,
+            stride: (1, 1),
+            is_blur: false,
         }
+    }
+
+    pub fn with_pad(mut self, pad: usize) -> Self {
+        self.pad = pad;
+        self
+    }
+
+    pub fn with_stride(mut self, stride_w: usize, stride_h: usize) -> Self {
+        self.stride = (stride_w, stride_h);
+        self
+    }
+
+    pub fn with_blur(mut self) -> Self {
+        self.is_blur = true;
+        self
     }
 }
 
 pub struct MaxPool2D {
-    pub pool_w: usize,
-    pub pool_h: usize,
+    pub filter: (usize, usize),
+    pub stride: (usize, usize),
 }
 
 impl MaxPool2D {
-    pub fn new(pool_w: usize, pool_h: usize) -> Self {
-        Self { pool_w, pool_h }
+    pub fn new(filter_w: usize, filter_h: usize) -> Self {
+        Self {
+            filter: (filter_w, filter_h),
+            stride: (filter_w, filter_h),
+        }
+    }
+
+    pub fn with_stride(mut self, stride_w: usize, stride_h: usize) -> Self {
+        self.stride = (stride_w, stride_h);
+        self
     }
 }
 
@@ -206,6 +231,7 @@ impl LayerInstance for LeakyReluInstance {
 struct Conv2DInstance {
     f: Variable,
     pad: usize,
+    stride: (usize, usize),
     b: Variable, // TODO: optional?
 }
 
@@ -214,55 +240,84 @@ impl Conv2DInstance {
         let [in_h, in_w, in_nc]: [usize; 3] = ctx.shape.as_slice().try_into().unwrap();
         let Conv2D {
             num_filters: out_nc,
-            filter_w,
-            filter_h,
+            filter,
             pad,
+            stride,
+            is_blur,
         } = params;
 
-        let out_w = 1 + in_w + 2 * pad - filter_w;
-        let out_h = 1 + in_h + 2 * pad - filter_h;
+        let (filter_w, filter_h) = filter;
+        let (stride_w, stride_h) = stride;
+
+        let out_w = (in_w + 2 * pad - filter_w) / stride_w + 1;
+        let out_h = (in_h + 2 * pad - filter_h) / stride_h + 1;
 
         let f = ctx.env.variable([out_nc, filter_h, filter_w, in_nc], "f");
         let b = ctx.env.variable([out_nc], "b");
-
-        let fan_in = filter_h * filter_w * in_nc;
-        write_rand_uniform(ctx.env.writer(&f), fan_in, fan_in * out_nc, ctx.rng);
         ctx.env.writer(&b).zero_fill();
 
-        ctx.parameters.push(f.clone());
-        ctx.parameters.push(b.clone());
+        if is_blur {
+            assert_eq!(filter, (3, 3));
+            let f_data: [f32; 9] = [
+                1.0 / 16.0,
+                2.0 / 16.0,
+                1.0 / 16.0,
+                2.0 / 16.0,
+                4.0 / 16.0,
+                2.0 / 16.0,
+                1.0 / 16.0,
+                2.0 / 16.0,
+                1.0 / 16.0,
+            ];
+            ctx.env
+                .writer(&f)
+                .write_all(bytemuck::bytes_of(&f_data))
+                .unwrap();
+        } else {
+            let fan_in = filter_h * filter_w * in_nc;
+            write_rand_uniform(ctx.env.writer(&f), fan_in, fan_in * out_nc, ctx.rng);
+
+            ctx.parameters.push(f.clone());
+            ctx.parameters.push(b.clone());
+        }
+
         ctx.shape = Shape::from([out_h, out_w, out_nc]);
 
-        Self { f, pad, b }
+        Self { f, pad, stride, b }
     }
 }
 
 impl LayerInstance for Conv2DInstance {
     fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
-        let stride = (1, 1);
-        input.conv2d(&self.f, self.pad, stride) + &self.b
+        input.conv2d(&self.f, self.pad, self.stride) + &self.b
     }
 }
 
 struct MaxPool2DInstance {
-    pool_w: usize,
-    pool_h: usize,
+    filter: (usize, usize),
+    stride: (usize, usize),
 }
 
 impl MaxPool2DInstance {
     pub fn new<'c, R: Rng>(ctx: &mut NetworkContext<'c, R>, params: MaxPool2D) -> Self {
         let [in_h, in_w, in_nc]: [usize; 3] = ctx.shape.as_slice().try_into().unwrap();
-        let MaxPool2D { pool_w, pool_h } = params;
+        let MaxPool2D { filter, stride } = params;
 
-        ctx.shape = Shape::from([in_h / pool_h, in_w / pool_w, in_nc]);
+        let (filter_w, filter_h) = filter;
+        let (stride_w, stride_h) = stride;
 
-        Self { pool_w, pool_h }
+        let out_w = (in_w - filter_w) / stride_w + 1;
+        let out_h = (in_h - filter_h) / stride_h + 1;
+
+        ctx.shape = Shape::from([out_h, out_w, in_nc]);
+
+        Self { filter, stride }
     }
 }
 
 impl LayerInstance for MaxPool2DInstance {
     fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
-        input.max_pool2d((self.pool_w, self.pool_h))
+        input.max_pool2d(self.filter, self.stride)
     }
 }
 

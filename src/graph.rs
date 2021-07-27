@@ -584,8 +584,8 @@ impl<'g> DualArray<'g> {
         c.reshape([m, output_h, output_w, filter_oc])
     }
 
-    pub fn max_pool2d(self, size: (usize, usize)) -> Self {
-        let windows = self.image_to_windows(size, 0, size);
+    pub fn max_pool2d(self, filter: (usize, usize), stride: (usize, usize)) -> Self {
+        let windows = self.image_to_windows(filter, 0, stride);
 
         let [m, output_h, output_w, filter_h, filter_w, input_c]: [usize; 6] =
             windows.shape().as_slice().try_into().unwrap();
