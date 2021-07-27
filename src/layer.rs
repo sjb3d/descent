@@ -36,6 +36,7 @@ pub struct Conv2D {
     pub filter: (usize, usize),
     pub pad: usize,
     pub stride: (usize, usize),
+    pub groups: usize,
     pub is_blur: bool,
 }
 
@@ -46,6 +47,7 @@ impl Conv2D {
             filter: (filter_w, filter_h),
             pad: 0,
             stride: (1, 1),
+            groups: 1,
             is_blur: false,
         }
     }
@@ -57,6 +59,11 @@ impl Conv2D {
 
     pub fn with_stride(mut self, stride_w: usize, stride_h: usize) -> Self {
         self.stride = (stride_w, stride_h);
+        self
+    }
+
+    pub fn with_groups(mut self, groups: usize) -> Self {
+        self.groups = groups;
         self
     }
 
@@ -232,6 +239,7 @@ struct Conv2DInstance {
     f: Variable,
     pad: usize,
     stride: (usize, usize),
+    groups: usize,
     b: Variable, // TODO: optional?
 }
 
@@ -243,6 +251,7 @@ impl Conv2DInstance {
             filter,
             pad,
             stride,
+            groups,
             is_blur,
         } = params;
 
@@ -252,8 +261,15 @@ impl Conv2DInstance {
         let out_w = (in_w + 2 * pad - filter_w) / stride_w + 1;
         let out_h = (in_h + 2 * pad - filter_h) / stride_h + 1;
 
-        let f = ctx.env.variable([out_nc, filter_h, filter_w, in_nc], "f");
-        let b = ctx.env.variable([out_nc], "b");
+        assert_eq!(in_nc % groups, 0);
+        assert_eq!(out_nc % groups, 0);
+        let filter_ic = in_nc / groups;
+        let filter_oc = out_nc / groups;
+
+        let f = ctx
+            .env
+            .variable([filter_oc, filter_h, filter_w, filter_ic], "f");
+        let b = ctx.env.variable([filter_oc], "b");
         ctx.env.writer(&b).zero_fill();
 
         if is_blur {
@@ -274,8 +290,8 @@ impl Conv2DInstance {
                 .write_all(bytemuck::bytes_of(&f_data))
                 .unwrap();
         } else {
-            let fan_in = filter_h * filter_w * in_nc;
-            write_rand_uniform(ctx.env.writer(&f), fan_in, fan_in * out_nc, ctx.rng);
+            let fan_in = filter_h * filter_w * filter_ic;
+            write_rand_uniform(ctx.env.writer(&f), fan_in, fan_in * filter_oc, ctx.rng);
 
             ctx.parameters.push(f.clone());
             ctx.parameters.push(b.clone());
@@ -283,13 +299,20 @@ impl Conv2DInstance {
 
         ctx.shape = Shape::from([out_h, out_w, out_nc]);
 
-        Self { f, pad, stride, b }
+        Self {
+            f,
+            pad,
+            stride,
+            groups,
+            b,
+        }
     }
 }
 
 impl LayerInstance for Conv2DInstance {
     fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
-        input.conv2d(&self.f, self.pad, self.stride) + &self.b
+        // TODO: handle groups when adding bias
+        input.conv2d(&self.f, self.pad, self.stride, self.groups) + &self.b
     }
 }
 

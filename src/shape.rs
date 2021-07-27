@@ -2,7 +2,7 @@ use crate::common::*;
 use std::{convert::TryInto, fmt, iter, mem, ops};
 use tinyvec::ArrayVec as TinyVec;
 
-pub(crate) const MAX_DIM: usize = 6;
+pub(crate) const MAX_DIM: usize = 7;
 pub(crate) type ShapeVec = TinyVec<[usize; MAX_DIM]>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -118,10 +118,13 @@ impl Shape {
         filter: (usize, usize),
         pad: usize,
         stride: (usize, usize),
+        groups: usize,
     ) -> Self {
         assert!(self.0.len() >= 3);
         let (prefix, suffix) = self.rsplit_at(3);
         let [in_h, in_w, in_nc]: [usize; 3] = suffix.try_into().unwrap();
+        assert_eq!(in_nc % groups, 0);
+        let group_nc = in_nc / groups;
         let (filter_w, filter_h) = filter;
         let (stride_w, stride_h) = stride;
         let out_w = (in_w + 2 * pad - filter_w) / stride_w + 1;
@@ -130,15 +133,17 @@ impl Shape {
         assert_eq!((out_h - 1) * stride_h, in_h + 2 * pad - filter_h);
         let mut v = TinyVec::new();
         v.extend_from_slice(prefix);
-        v.extend_from_slice(&[out_h, out_w, filter_h, filter_w, in_nc]);
+        v.extend_from_slice(&[out_h, out_w, groups, filter_h, filter_w, group_nc]);
         Shape::new(v)
     }
 
     pub(crate) fn windows_to_image(&self, pad: usize, stride: (usize, usize)) -> Self {
-        assert!(self.0.len() >= 5);
-        let (prefix, suffix) = self.rsplit_at(5);
-        let [out_h, out_w, filter_h, filter_w, in_nc]: [usize; 5] = suffix.try_into().unwrap();
+        assert!(self.0.len() >= 6);
+        let (prefix, suffix) = self.rsplit_at(6);
+        let [out_h, out_w, groups, filter_h, filter_w, group_nc]: [usize; 6] =
+            suffix.try_into().unwrap();
         let (stride_w, stride_h) = stride;
+        let in_nc = groups * group_nc;
         let in_w = (out_w - 1) * stride_w + filter_w - 2 * pad;
         let in_h = (out_h - 1) * stride_h + filter_h - 2 * pad;
         let mut v = TinyVec::new();

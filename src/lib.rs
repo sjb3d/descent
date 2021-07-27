@@ -80,7 +80,7 @@ mod tests {
         let g = env.graph();
         g.write_variable(
             &c_var,
-            g.parameter(&a_var).conv2d(&b_var, 0, (1, 1)).value(),
+            g.parameter(&a_var).conv2d(&b_var, 0, (1, 1), 1).value(),
         );
 
         let g = g.build_schedule();

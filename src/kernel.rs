@@ -440,12 +440,17 @@ impl ImageToWindowsKernel {
         )?;
         generate_coord("coord", &self.shape, w)?;
 
-        let batch_dims = self.shape.len() - 5;
+        let batch_dims = self.shape.len() - 6;
+        let group_nc = self.shape[-1];
+
         writeln!(w, "int out_y = coord[{}];", batch_dims)?;
         writeln!(w, "int out_x = coord[{}];", batch_dims + 1)?;
-        writeln!(w, "int filter_y = coord[{}];", batch_dims + 2)?;
-        writeln!(w, "int filter_x = coord[{}];", batch_dims + 3)?;
-        writeln!(w, "int in_c = coord[{}];", batch_dims + 4)?;
+        writeln!(w, "int group_index = coord[{}];", batch_dims + 2)?;
+        writeln!(w, "int filter_y = coord[{}];", batch_dims + 3)?;
+        writeln!(w, "int filter_x = coord[{}];", batch_dims + 4)?;
+        writeln!(w, "int group_c = coord[{}];", batch_dims + 5)?;
+
+        writeln!(w, "int in_c = group_index*{} + group_c;", group_nc)?;
 
         writeln!(w, "uint input_w = {};", self.input.output_shape[-2])?;
         writeln!(w, "uint input_h = {};", self.input.output_shape[-3])?;
@@ -517,14 +522,18 @@ impl WindowsToImageKernel {
         )?;
         generate_coord("coord", &self.shape, w)?;
 
-        let (_, suffix) = self.input.output_shape.rsplit_at(5);
-        let [out_h, out_w, filter_h, filter_w, _in_nc]: [usize; 5] = suffix.try_into().unwrap();
+        let (_, suffix) = self.input.output_shape.rsplit_at(6);
+        let [out_h, out_w, _groups, filter_h, filter_w, group_nc]: [usize; 6] =
+            suffix.try_into().unwrap();
         let (stride_w, stride_h) = self.stride;
 
         let batch_dims = self.shape.len() - 3;
         writeln!(w, "int in_y = coord[{}];", batch_dims)?;
         writeln!(w, "int in_x = coord[{}];", batch_dims + 1)?;
         writeln!(w, "int in_c = coord[{}];", batch_dims + 2)?;
+
+        writeln!(w, "int group_index = in_c/{};", group_nc)?;
+        writeln!(w, "int group_c = in_c - group_index*{};", group_nc)?;
 
         writeln!(w, "uint out_w = {};", out_w)?;
         writeln!(w, "uint out_h = {};", out_h)?;
@@ -561,7 +570,14 @@ impl WindowsToImageKernel {
                     w,
                     " + ({})*{}",
                     scale,
-                    ["out_y", "out_x", "filter_y", "filter_x", "in_c"][index - batch_dims]
+                    [
+                        "out_y",
+                        "out_x",
+                        "group_index",
+                        "filter_y",
+                        "filter_x",
+                        "group_c"
+                    ][index - batch_dims]
                 )?;
             }
         }
