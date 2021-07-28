@@ -67,8 +67,9 @@ pub(crate) enum Op {
     CompareAndSelect(CompareMode),
     MatMul,
     Reduce { reduce_op: ReduceOp, axis: Axis },
-    ImageToWindows(WindowParams),
-    WindowsToImage(WindowParams),
+    PadImage { amount: isize, mode: PaddingMode },
+    ImageToWindows { stride: (usize, usize) },
+    WindowsToImage { stride: (usize, usize) },
 }
 
 impl Op {
@@ -106,6 +107,7 @@ impl Op {
                 | Self::Binary(_)
                 | Self::MatMul
                 | Self::Reduce { .. }
+                | Self::PadImage { .. }
                 | Self::ImageToWindows { .. }
                 | Self::WindowsToImage { .. }
         )

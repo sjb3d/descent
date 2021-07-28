@@ -34,7 +34,10 @@ impl Linear {
 pub struct Conv2D {
     pub num_filters: usize,
     pub filter: (usize, usize),
-    pub window_params: WindowParams,
+    pub pad: usize,
+    pub padding_mode: PaddingMode,
+    pub stride: (usize, usize),
+    pub groups: usize,
     pub is_blur: bool,
 }
 
@@ -43,24 +46,27 @@ impl Conv2D {
         Self {
             num_filters,
             filter: (filter_w, filter_h),
-            window_params: WindowParams::default(),
+            pad: 0,
+            padding_mode: PaddingMode::Zero,
+            stride: (1, 1),
+            groups: 1,
             is_blur: false,
         }
     }
 
     pub fn with_pad(mut self, pad: usize, padding_mode: PaddingMode) -> Self {
-        self.window_params.pad = pad;
-        self.window_params.padding_mode = padding_mode;
+        self.pad = pad;
+        self.padding_mode = padding_mode;
         self
     }
 
     pub fn with_stride(mut self, stride_w: usize, stride_h: usize) -> Self {
-        self.window_params.stride = (stride_w, stride_h);
+        self.stride = (stride_w, stride_h);
         self
     }
 
     pub fn with_groups(mut self, groups: usize) -> Self {
-        self.window_params.groups = groups;
+        self.groups = groups;
         self
     }
 
@@ -233,7 +239,10 @@ impl LayerInstance for LeakyReluInstance {
 }
 
 struct Conv2DInstance {
-    window_params: WindowParams,
+    pad: usize,
+    padding_mode: PaddingMode,
+    stride: (usize, usize),
+    groups: usize,
     f: Variable,
     b: Variable, // TODO: optional?
 }
@@ -243,12 +252,17 @@ impl Conv2DInstance {
         let Conv2D {
             num_filters: filter_oc,
             filter,
-            window_params,
+            pad,
+            padding_mode,
+            stride,
+            groups,
             is_blur,
         } = params;
 
-        let window_shape = ctx.shape.image_to_windows(filter, window_params);
-        let [out_h, out_w, groups, filter_h, filter_w, filter_ic]: [usize; 6] =
+        let padded_shape = ctx.shape.pad_image(pad as isize);
+
+        let window_shape = padded_shape.image_to_windows(filter, stride, groups);
+        let [out_h, out_w, _groups, filter_h, filter_w, filter_ic]: [usize; 6] =
             window_shape.as_slice().try_into().unwrap();
 
         let f = ctx
@@ -285,7 +299,10 @@ impl Conv2DInstance {
         ctx.shape = Shape::from([out_h, out_w, groups * filter_oc]);
 
         Self {
-            window_params,
+            pad,
+            padding_mode,
+            stride,
+            groups,
             f,
             b,
         }
@@ -294,15 +311,21 @@ impl Conv2DInstance {
 
 impl LayerInstance for Conv2DInstance {
     fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
-        let conv = input.conv2d(&self.f, self.window_params);
+        let conv = input.conv2d(
+            &self.f,
+            self.pad,
+            self.padding_mode,
+            self.stride,
+            self.groups,
+        );
 
         let out_shape = conv.shape();
         let (out_nc, prefix) = out_shape.split_last().unwrap();
 
         let mut v = ShapeVec::new();
         v.extend_from_slice(prefix);
-        v.push(self.window_params.groups);
-        v.push(out_nc / self.window_params.groups);
+        v.push(self.groups);
+        v.push(out_nc / self.groups);
         let bias_shape = Shape::new(v);
 
         (conv.reshape(bias_shape) + &self.b).reshape(out_shape)

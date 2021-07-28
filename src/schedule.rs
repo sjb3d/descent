@@ -467,7 +467,7 @@ impl Schedule {
                             outputs: vec![node_id],
                         }));
                     }
-                    Op::ImageToWindows(window_params) => {
+                    Op::ImageToWindows { stride } => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
                         assert_eq!(arg_sources.len(), 1);
                         let src0 = &arg_sources[0];
@@ -475,14 +475,14 @@ impl Schedule {
                             kernel: Kernel::ImageToWindows(ImageToWindowsKernel {
                                 shape: node.shape,
                                 input: src0.view,
-                                window_params,
+                                stride,
                             }),
                             inputs: vec![src0.node_id],
                             members: vec![node_id],
                             outputs: vec![node_id],
                         }));
                     }
-                    Op::WindowsToImage(window_params) => {
+                    Op::WindowsToImage { stride } => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
                         assert_eq!(arg_sources.len(), 1);
                         let src0 = &arg_sources[0];
@@ -490,7 +490,7 @@ impl Schedule {
                             kernel: Kernel::WindowsToImage(WindowsToImageKernel {
                                 shape: node.shape,
                                 input: src0.view,
-                                window_params,
+                                stride,
                             }),
                             inputs: vec![src0.node_id],
                             members: vec![node_id],

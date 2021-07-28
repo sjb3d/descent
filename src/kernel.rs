@@ -416,7 +416,7 @@ impl ReduceKernel {
 pub(crate) struct ImageToWindowsKernel {
     pub(crate) shape: Shape,
     pub(crate) input: View,
-    pub(crate) window_params: WindowParams,
+    pub(crate) stride: (usize, usize),
 }
 
 impl ImageToWindowsKernel {
@@ -454,32 +454,12 @@ impl ImageToWindowsKernel {
         writeln!(w, "uint input_w = {};", self.input.output_shape[-2])?;
         writeln!(w, "uint input_h = {};", self.input.output_shape[-3])?;
 
-        let (stride_w, stride_h) = self.window_params.stride;
-        writeln!(
-            w,
-            "int in_x = out_x*{} + filter_x - {};",
-            stride_w, self.window_params.pad
-        )?;
-        writeln!(
-            w,
-            "int in_y = out_y*{} + filter_y - {};",
-            stride_h, self.window_params.pad
-        )?;
-
-        writeln!(w, "float tmp = 0.f;")?;
-        match self.window_params.padding_mode {
-            PaddingMode::Zero => {
-                writeln!(w, "if (uint(in_x) < input_w && uint(in_y) < input_h) {{")?;
-            }
-            PaddingMode::ClampToEdge => {
-                writeln!(w, "in_x = clamp(in_x, 0, int(input_w - 1));")?;
-                writeln!(w, "in_y = clamp(in_y, 0, int(input_h - 1));")?;
-                writeln!(w, "{{")?;
-            }
-        }
+        let (stride_w, stride_h) = self.stride;
+        writeln!(w, "int in_x = out_x*{} + filter_x;", stride_w)?;
+        writeln!(w, "int in_y = out_y*{} + filter_y;", stride_h)?;
 
         let indexer = self.input.indexer();
-        write!(w, "tmp = input0[{}", indexer.offset)?;
+        write!(w, "float tmp = input0[{}", indexer.offset)?;
         for (index, scale) in indexer.scales.iter().copied().enumerate() {
             if index < batch_dims {
                 write!(w, " + ({})*coord[{}]", scale, index)?;
@@ -493,10 +473,8 @@ impl ImageToWindowsKernel {
             }
         }
         writeln!(w, "];")?;
-        writeln!(w, "}}")?;
 
         writeln!(w, "output0[gl_GlobalInvocationID.x] = tmp;")?;
-
         writeln!(w, "}}")?;
 
         Ok(src)
@@ -507,7 +485,7 @@ impl ImageToWindowsKernel {
 pub(crate) struct WindowsToImageKernel {
     pub(crate) shape: Shape,
     pub(crate) input: View,
-    pub(crate) window_params: WindowParams,
+    pub(crate) stride: (usize, usize),
 }
 
 impl WindowsToImageKernel {
@@ -533,7 +511,7 @@ impl WindowsToImageKernel {
         let (_, suffix) = self.input.output_shape.rsplit_at(6);
         let [out_h, out_w, _groups, filter_h, filter_w, group_nc]: [usize; 6] =
             suffix.try_into().unwrap();
-        let (stride_w, stride_h) = self.window_params.stride;
+        let (stride_w, stride_h) = self.stride;
 
         let batch_dims = self.shape.len() - 3;
         writeln!(w, "int in_y = coord[{}];", batch_dims)?;
@@ -546,35 +524,25 @@ impl WindowsToImageKernel {
         writeln!(w, "uint out_w = {};", out_w)?;
         writeln!(w, "uint out_h = {};", out_h)?;
 
-        writeln!(
-            w,
-            "uint in_x_padded = uint(in_x) + {};",
-            self.window_params.pad
-        )?;
-        writeln!(
-            w,
-            "uint in_y_padded = uint(in_y) + {};",
-            self.window_params.pad
-        )?;
-        writeln!(w, "int filter_base_x = int(in_x_padded % {});", stride_w)?;
-        writeln!(w, "int filter_base_y = int(in_y_padded % {});", stride_h)?;
+        writeln!(w, "int filter_base_x = int(uint(in_x) % {});", stride_w)?;
+        writeln!(w, "int filter_base_y = int(uint(in_y) % {});", stride_h)?;
         writeln!(w, "int count_x = {};", filter_w.div_round_up(stride_w))?;
         writeln!(w, "int count_y = {};", filter_h.div_round_up(stride_h))?;
-        writeln!(w, "int out_x_base = int(in_x_padded/{});", stride_w)?;
-        writeln!(w, "int out_y_base = int(in_y_padded/{});", stride_h)?;
+        writeln!(w, "int out_x_base = int(uint(in_x)/{});", stride_w)?;
+        writeln!(w, "int out_y_base = int(uint(in_y)/{});", stride_h)?;
 
         writeln!(w, "float tmp = 0.f;")?;
         writeln!(w, "for (int index_y = 0; index_y < count_y; ++index_y)",)?;
         writeln!(w, "for (int index_x = 0; index_x < count_x; ++index_x) {{",)?;
         writeln!(w, "int filter_x = filter_base_x + {}*index_x;", stride_w)?;
         writeln!(w, "int filter_y = filter_base_y + {}*index_y;", stride_h)?;
-        writeln!(w, "int out_x = out_x_base - index_x;")?;
-        writeln!(w, "int out_y = out_y_base - index_y;")?;
         writeln!(
             w,
-            "if (filter_x < {} && filter_y < {} && uint(out_x) < out_w && uint(out_y) < out_w) {{",
+            "if (filter_x < {} && filter_y < {}) {{",
             filter_w, filter_h
         )?;
+        writeln!(w, "int out_x = out_x_base - index_x;")?;
+        writeln!(w, "int out_y = out_y_base - index_y;")?;
 
         // TODO: pad images separately to be able to sum gradients
 
@@ -601,7 +569,6 @@ impl WindowsToImageKernel {
         }
         writeln!(w, "];")?;
 
-        writeln!(w, "")?;
         writeln!(w, "}}")?;
         writeln!(w, "}}")?;
 

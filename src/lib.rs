@@ -81,7 +81,7 @@ mod tests {
         g.write_variable(
             &c_var,
             g.parameter(&a_var)
-                .conv2d(&b_var, WindowParams::default())
+                .conv2d(&b_var, 0, PaddingMode::Zero, (1, 1), 1)
                 .value(),
         );
 
