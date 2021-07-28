@@ -49,7 +49,7 @@ pub(crate) fn get_arg_sources(
 
 #[derive(Debug)]
 pub(crate) struct Cluster {
-    pub(crate) kernel: Kernel,
+    pub(crate) kernel: GenericKernel,
     pub(crate) inputs: Vec<OpNodeId>,
     pub(crate) members: Vec<OpNodeId>,
     pub(crate) outputs: Vec<OpNodeId>,
@@ -260,7 +260,7 @@ impl Schedule {
                 let element_count = first_node.shape.element_count();
 
                 let cluster_id = Some(self.clusters.insert(Cluster {
-                    kernel: Kernel::PerElement(PerElementKernel {
+                    kernel: GenericKernel::PerElement(PerElementKernel {
                         element_count,
                         inputs: Vec::new(),
                         outputs: Vec::new(),
@@ -352,7 +352,7 @@ impl Schedule {
         // finally build the per-element clusters and kernels
         for (cluster_id, cluster) in self.clusters.iter_mut() {
             let kernel = match &mut cluster.kernel {
-                Kernel::PerElement(kernel) => kernel,
+                GenericKernel::PerElement(kernel) => kernel,
                 _ => unreachable!(),
             };
             let members = &cluster.members;
@@ -437,7 +437,7 @@ impl Schedule {
                         assert_eq!(arg_sources.len(), 1);
                         let src0 = &arg_sources[0];
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
-                            kernel: Kernel::Reduce(ReduceKernel {
+                            kernel: GenericKernel::Reduce(ReduceKernel {
                                 shape: node.shape,
                                 input: src0.view,
                                 reduce_op,
@@ -458,7 +458,7 @@ impl Schedule {
                             .into_inner()
                             .unwrap();
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
-                            kernel: Kernel::MatMul(MatMulKernel {
+                            kernel: GenericKernel::MatMul(MatMulKernel {
                                 shape: node.shape,
                                 inputs: kernel_inputs,
                             }),
@@ -472,7 +472,7 @@ impl Schedule {
                         assert_eq!(arg_sources.len(), 1);
                         let src0 = &arg_sources[0];
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
-                            kernel: Kernel::ImageToWindows(ImageToWindowsKernel {
+                            kernel: GenericKernel::ImageToWindows(ImageToWindowsKernel {
                                 shape: node.shape,
                                 input: src0.view,
                                 stride,
@@ -487,7 +487,7 @@ impl Schedule {
                         assert_eq!(arg_sources.len(), 1);
                         let src0 = &arg_sources[0];
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
-                            kernel: Kernel::WindowsToImage(WindowsToImageKernel {
+                            kernel: GenericKernel::WindowsToImage(WindowsToImageKernel {
                                 shape: node.shape,
                                 input: src0.view,
                                 stride,

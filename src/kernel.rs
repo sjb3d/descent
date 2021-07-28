@@ -65,6 +65,13 @@ fn generate_coord(name: &str, shape: &Shape, w: &mut impl Write) -> fmt::Result 
     writeln!(w, ");")
 }
 
+pub(crate) trait Kernel {
+    fn generate_source(&self) -> Result<String, fmt::Error>;
+    fn buffer_count(&self) -> usize;
+    fn group_count(&self) -> usize;
+    fn label_name(&self) -> String;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PerElementKernel {
     pub(crate) element_count: usize,
@@ -73,7 +80,7 @@ pub(crate) struct PerElementKernel {
     pub(crate) ops: Vec<PerElementKernelOp>,
 }
 
-impl PerElementKernel {
+impl Kernel for PerElementKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
@@ -230,6 +237,22 @@ impl PerElementKernel {
 
         Ok(src)
     }
+
+    fn buffer_count(&self) -> usize {
+        self.inputs.len() + self.outputs.len()
+    }
+
+    fn group_count(&self) -> usize {
+        self.element_count.div_round_up(64)
+    }
+
+    fn label_name(&self) -> String {
+        format!(
+            "PerElement ({} ops) [{}]",
+            self.ops.len(),
+            self.element_count
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -247,7 +270,9 @@ impl MatMulKernel {
     fn k(&self) -> usize {
         self.inputs[0].output_shape[1]
     }
+}
 
+impl Kernel for MatMulKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
@@ -337,6 +362,19 @@ impl MatMulKernel {
 
         Ok(src)
     }
+
+    fn buffer_count(&self) -> usize {
+        3
+    }
+
+    fn group_count(&self) -> usize {
+        let [r, m, n]: [usize; 3] = self.shape.as_slice().try_into().unwrap();
+        r * m.div_round_up(MatMulKernel::TILE_M) * n.div_round_up(MatMulKernel::TILE_N)
+    }
+
+    fn label_name(&self) -> String {
+        format!("MatMul (k={}) {}", self.k(), self.shape)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -351,7 +389,9 @@ impl ReduceKernel {
     fn k(&self) -> usize {
         self.input.output_shape[self.axis]
     }
+}
 
+impl Kernel for ReduceKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
@@ -410,6 +450,18 @@ impl ReduceKernel {
 
         Ok(src)
     }
+
+    fn buffer_count(&self) -> usize {
+        2
+    }
+
+    fn group_count(&self) -> usize {
+        self.shape.element_count().div_round_up(64)
+    }
+
+    fn label_name(&self) -> String {
+        format!("Reduce (k={}) {}", self.k(), self.shape)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -419,7 +471,7 @@ pub(crate) struct ImageToWindowsKernel {
     pub(crate) stride: (usize, usize),
 }
 
-impl ImageToWindowsKernel {
+impl Kernel for ImageToWindowsKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
@@ -479,6 +531,18 @@ impl ImageToWindowsKernel {
 
         Ok(src)
     }
+
+    fn buffer_count(&self) -> usize {
+        2
+    }
+
+    fn group_count(&self) -> usize {
+        self.shape.element_count().div_round_up(64)
+    }
+
+    fn label_name(&self) -> String {
+        format!("ImageToWindows {}", self.shape)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -488,7 +552,7 @@ pub(crate) struct WindowsToImageKernel {
     pub(crate) stride: (usize, usize),
 }
 
-impl WindowsToImageKernel {
+impl Kernel for WindowsToImageKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
@@ -578,11 +642,23 @@ impl WindowsToImageKernel {
 
         Ok(src)
     }
+
+    fn buffer_count(&self) -> usize {
+        2
+    }
+
+    fn group_count(&self) -> usize {
+        self.shape.element_count().div_round_up(64)
+    }
+
+    fn label_name(&self) -> String {
+        format!("WindowsToImage {}", self.shape)
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum Kernel {
+pub(crate) enum GenericKernel {
     PerElement(PerElementKernel),
     Reduce(ReduceKernel),
     MatMul(MatMulKernel),
@@ -590,52 +666,33 @@ pub(crate) enum Kernel {
     WindowsToImage(WindowsToImageKernel),
 }
 
-impl Kernel {
-    fn generate_source(&self) -> Result<String, fmt::Error> {
+impl GenericKernel {
+    fn as_kernel(&self) -> &dyn Kernel {
         match self {
-            Kernel::PerElement(kernel) => kernel.generate_source(),
-            Kernel::MatMul(kernel) => kernel.generate_source(),
-            Kernel::Reduce(kernel) => kernel.generate_source(),
-            Kernel::ImageToWindows(kernel) => kernel.generate_source(),
-            Kernel::WindowsToImage(kernel) => kernel.generate_source(),
+            GenericKernel::PerElement(kernel) => kernel,
+            GenericKernel::MatMul(kernel) => kernel,
+            GenericKernel::Reduce(kernel) => kernel,
+            GenericKernel::ImageToWindows(kernel) => kernel,
+            GenericKernel::WindowsToImage(kernel) => kernel,
         }
+    }
+}
+
+impl Kernel for GenericKernel {
+    fn generate_source(&self) -> Result<String, fmt::Error> {
+        self.as_kernel().generate_source()
     }
 
     fn buffer_count(&self) -> usize {
-        match self {
-            Kernel::PerElement(kernel) => kernel.inputs.len() + kernel.outputs.len(),
-            Kernel::MatMul(..) => 3,
-            Kernel::Reduce(..) => 2,
-            Kernel::ImageToWindows(..) => 2,
-            Kernel::WindowsToImage(..) => 2,
-        }
+        self.as_kernel().buffer_count()
     }
 
     fn group_count(&self) -> usize {
-        match self {
-            Kernel::PerElement(kernel) => kernel.element_count.div_round_up(64),
-            Kernel::MatMul(kernel) => {
-                let [r, m, n]: [usize; 3] = kernel.shape.as_slice().try_into().unwrap();
-                r * m.div_round_up(MatMulKernel::TILE_M) * n.div_round_up(MatMulKernel::TILE_N)
-            }
-            Kernel::Reduce(kernel) => kernel.shape.element_count().div_round_up(64),
-            Kernel::ImageToWindows(kernel) => kernel.shape.element_count().div_round_up(64),
-            Kernel::WindowsToImage(kernel) => kernel.shape.element_count().div_round_up(64),
-        }
+        self.as_kernel().group_count()
     }
 
-    pub(crate) fn label_name(&self) -> String {
-        match self {
-            Kernel::PerElement(kernel) => format!(
-                "PerElement ({} ops) [{}]",
-                kernel.ops.len(),
-                kernel.element_count
-            ),
-            Kernel::MatMul(kernel) => format!("MatMul (k={}) {}", kernel.k(), kernel.shape),
-            Kernel::Reduce(kernel) => format!("Reduce (k={}) {}", kernel.k(), kernel.shape),
-            Kernel::ImageToWindows(kernel) => format!("ImageToWindows {}", kernel.shape),
-            Kernel::WindowsToImage(kernel) => format!("WindowsToImage {}", kernel.shape),
-        }
+    fn label_name(&self) -> String {
+        self.as_kernel().label_name()
     }
 }
 
@@ -661,7 +718,7 @@ impl KernelCacheWorker {
         }
     }
 
-    fn create_module(&mut self, kernel: &Kernel) -> KernelModule {
+    fn create_module(&mut self, kernel: &GenericKernel) -> KernelModule {
         let device = &self.context.device;
 
         let source = kernel.generate_source().unwrap();
@@ -747,7 +804,7 @@ impl KernelCacheWorker {
 
 pub(crate) struct KernelCache {
     worker: KernelCacheWorker,
-    modules: HashMap<Kernel, KernelModule>,
+    modules: HashMap<GenericKernel, KernelModule>,
 }
 
 impl KernelCache {
@@ -758,7 +815,7 @@ impl KernelCache {
         }
     }
 
-    pub(crate) fn module(&mut self, kernel: &Kernel) -> KernelModule {
+    pub(crate) fn module(&mut self, kernel: &GenericKernel) -> KernelModule {
         *self.modules.entry(kernel.clone()).or_insert_with({
             let worker = &mut self.worker;
             move || worker.create_module(kernel)
