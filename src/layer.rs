@@ -43,12 +43,7 @@ impl Conv2D {
         Self {
             num_filters,
             filter: (filter_w, filter_h),
-            window_params: WindowParams {
-                pad: 0,
-                padding_mode: PaddingMode::Zero,
-                stride: (1, 1),
-                groups: 1,
-            },
+            window_params: WindowParams::default(),
             is_blur: false,
         }
     }

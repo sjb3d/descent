@@ -587,10 +587,8 @@ impl<'g> DualArray<'g> {
         let windows = self.image_to_windows(
             filter,
             WindowParams {
-                pad: 0,
-                padding_mode: PaddingMode::Zero,
                 stride,
-                groups: 1,
+                ..Default::default()
             },
         );
 

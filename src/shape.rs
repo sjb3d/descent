@@ -19,6 +19,17 @@ pub struct WindowParams {
     pub groups: usize,
 }
 
+impl Default for WindowParams {
+    fn default() -> Self {
+        Self {
+            pad: 0,
+            padding_mode: PaddingMode::Zero,
+            stride: (1, 1),
+            groups: 1,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Axis(u8);
 
