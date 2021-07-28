@@ -34,9 +34,7 @@ impl Linear {
 pub struct Conv2D {
     pub num_filters: usize,
     pub filter: (usize, usize),
-    pub pad: usize,
-    pub stride: (usize, usize),
-    pub groups: usize,
+    pub window_params: WindowParams,
     pub is_blur: bool,
 }
 
@@ -45,25 +43,29 @@ impl Conv2D {
         Self {
             num_filters,
             filter: (filter_w, filter_h),
-            pad: 0,
-            stride: (1, 1),
-            groups: 1,
+            window_params: WindowParams {
+                pad: 0,
+                padding_mode: PaddingMode::Zero,
+                stride: (1, 1),
+                groups: 1,
+            },
             is_blur: false,
         }
     }
 
-    pub fn with_pad(mut self, pad: usize) -> Self {
-        self.pad = pad;
+    pub fn with_pad(mut self, pad: usize, padding_mode: PaddingMode) -> Self {
+        self.window_params.pad = pad;
+        self.window_params.padding_mode = padding_mode;
         self
     }
 
     pub fn with_stride(mut self, stride_w: usize, stride_h: usize) -> Self {
-        self.stride = (stride_w, stride_h);
+        self.window_params.stride = (stride_w, stride_h);
         self
     }
 
     pub fn with_groups(mut self, groups: usize) -> Self {
-        self.groups = groups;
+        self.window_params.groups = groups;
         self
     }
 
@@ -236,10 +238,8 @@ impl LayerInstance for LeakyReluInstance {
 }
 
 struct Conv2DInstance {
+    window_params: WindowParams,
     f: Variable,
-    pad: usize,
-    stride: (usize, usize),
-    groups: usize,
     b: Variable, // TODO: optional?
 }
 
@@ -249,22 +249,20 @@ impl Conv2DInstance {
         let Conv2D {
             num_filters: out_nc,
             filter,
-            pad,
-            stride,
-            groups,
+            window_params,
             is_blur,
         } = params;
 
         let (filter_w, filter_h) = filter;
-        let (stride_w, stride_h) = stride;
+        let (stride_w, stride_h) = window_params.stride;
 
-        let out_w = (in_w + 2 * pad - filter_w) / stride_w + 1;
-        let out_h = (in_h + 2 * pad - filter_h) / stride_h + 1;
+        let out_w = (in_w + 2 * window_params.pad - filter_w) / stride_w + 1;
+        let out_h = (in_h + 2 * window_params.pad - filter_h) / stride_h + 1;
 
-        assert_eq!(in_nc % groups, 0);
-        assert_eq!(out_nc % groups, 0);
-        let filter_ic = in_nc / groups;
-        let filter_oc = out_nc / groups;
+        assert_eq!(in_nc % window_params.groups, 0);
+        assert_eq!(out_nc % window_params.groups, 0);
+        let filter_ic = in_nc / window_params.groups;
+        let filter_oc = out_nc / window_params.groups;
 
         let f = ctx
             .env
@@ -300,10 +298,8 @@ impl Conv2DInstance {
         ctx.shape = Shape::from([out_h, out_w, out_nc]);
 
         Self {
+            window_params,
             f,
-            pad,
-            stride,
-            groups,
             b,
         }
     }
@@ -312,7 +308,7 @@ impl Conv2DInstance {
 impl LayerInstance for Conv2DInstance {
     fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
         // TODO: handle groups when adding bias
-        input.conv2d(&self.f, self.pad, self.stride, self.groups) + &self.b
+        input.conv2d(&self.f, self.window_params) + &self.b
     }
 }
 

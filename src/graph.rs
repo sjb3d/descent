@@ -239,21 +239,15 @@ impl<'g> Array<'g> {
         }
     }
 
-    fn image_to_windows(
-        self,
-        filter: (usize, usize),
-        pad: usize,
-        stride: (usize, usize),
-        groups: usize,
-    ) -> Self {
+    fn image_to_windows(self, filter: (usize, usize), window_params: WindowParams) -> Self {
         self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape
-                .image_to_windows(filter, pad, stride, groups);
+                .image_to_windows(filter, window_params);
             Array {
                 node_id: state.ops.new_node(
                     shape,
-                    Op::ImageToWindows { stride, pad },
+                    Op::ImageToWindows(window_params),
                     &[self.node_id],
                 ),
                 graph: self.graph,
@@ -261,15 +255,15 @@ impl<'g> Array<'g> {
         })
     }
 
-    fn windows_to_image(self, pad: usize, stride: (usize, usize)) -> Self {
+    fn windows_to_image(self, window_params: WindowParams) -> Self {
         self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape
-                .windows_to_image(pad, stride);
+                .windows_to_image(window_params);
             Array {
                 node_id: state.ops.new_node(
                     shape,
-                    Op::WindowsToImage { pad, stride },
+                    Op::WindowsToImage(window_params),
                     &[self.node_id],
                 ),
                 graph: self.graph,
@@ -543,30 +537,18 @@ impl<'g> DualArray<'g> {
         Self::new(b, db)
     }
 
-    fn image_to_windows(
-        self,
-        filter: (usize, usize),
-        pad: usize,
-        stride: (usize, usize),
-        groups: usize,
-    ) -> Self {
+    fn image_to_windows(self, filter: (usize, usize), window_params: WindowParams) -> Self {
         let (a, da) = self.into_inner();
 
-        let b = a.image_to_windows(filter, pad, stride, groups);
+        let b = a.image_to_windows(filter, window_params);
 
         let db = b.clone_as_accumulator();
-        da.accumulate(db.windows_to_image(pad, stride));
+        da.accumulate(db.windows_to_image(window_params));
 
         Self::new(b, db)
     }
 
-    pub fn conv2d(
-        self,
-        filter: impl IntoDualArray<'g>,
-        pad: usize,
-        stride: (usize, usize),
-        groups: usize,
-    ) -> Self {
+    pub fn conv2d(self, filter: impl IntoDualArray<'g>, window_params: WindowParams) -> Self {
         let filter = filter.into_dual_array(self.graph);
 
         // copy and pad the input into windows that match the filter size
@@ -579,30 +561,38 @@ impl<'g> DualArray<'g> {
         let [filter_oc, filter_h, filter_w, filter_ic]: [usize; 4] =
             filter_shape.as_slice().try_into().unwrap();
         assert_eq!(input_nc, filter_ic);
-        let windows = self.image_to_windows((filter_w, filter_h), pad, stride, groups);
+        let windows = self.image_to_windows((filter_w, filter_h), window_params);
 
         // apply the filter using a matrix multiplication
         let windows_shape = windows.shape();
         let [windows_m, output_h, output_w, windows_g, windows_fh, windows_fw, windows_nc]: [usize;
             7] = windows_shape.as_slice().try_into().unwrap();
         assert_eq!(m, windows_m);
-        assert_eq!(groups, windows_g);
+        assert_eq!(window_params.groups, windows_g);
         assert_eq!(filter_h, windows_fh);
         assert_eq!(filter_w, windows_fw);
         assert_eq!(filter_ic, windows_nc);
         let a = windows.reshape([
-            m * output_h * output_w * groups,
+            m * output_h * output_w * window_params.groups,
             filter_h * filter_w * filter_ic,
         ]);
         let b = filter.reshape([filter_oc, filter_h * filter_w * filter_ic]);
         let c = a.matmul(b.transpose());
 
         // reshape output back to 4D
-        c.reshape([m, output_h, output_w, groups * filter_oc])
+        c.reshape([m, output_h, output_w, window_params.groups * filter_oc])
     }
 
     pub fn max_pool2d(self, filter: (usize, usize), stride: (usize, usize)) -> Self {
-        let windows = self.image_to_windows(filter, 0, stride, 1);
+        let windows = self.image_to_windows(
+            filter,
+            WindowParams {
+                pad: 0,
+                padding_mode: PaddingMode::Zero,
+                stride,
+                groups: 1,
+            },
+        );
 
         let [m, output_h, output_w, groups, filter_h, filter_w, group_nc]: [usize; 7] =
             windows.shape().as_slice().try_into().unwrap();

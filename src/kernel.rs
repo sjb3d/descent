@@ -416,8 +416,7 @@ impl ReduceKernel {
 pub(crate) struct ImageToWindowsKernel {
     pub(crate) shape: Shape,
     pub(crate) input: View,
-    pub(crate) pad: usize,
-    pub(crate) stride: (usize, usize),
+    pub(crate) window_params: WindowParams,
 }
 
 impl ImageToWindowsKernel {
@@ -455,16 +454,16 @@ impl ImageToWindowsKernel {
         writeln!(w, "uint input_w = {};", self.input.output_shape[-2])?;
         writeln!(w, "uint input_h = {};", self.input.output_shape[-3])?;
 
-        let (stride_w, stride_h) = self.stride;
+        let (stride_w, stride_h) = self.window_params.stride;
         writeln!(
             w,
             "int in_x = out_x*{} + filter_x - {};",
-            stride_w, self.pad
+            stride_w, self.window_params.pad
         )?;
         writeln!(
             w,
             "int in_y = out_y*{} + filter_y - {};",
-            stride_h, self.pad
+            stride_h, self.window_params.pad
         )?;
 
         writeln!(w, "float tmp = 0.f;")?;
@@ -498,8 +497,7 @@ impl ImageToWindowsKernel {
 pub(crate) struct WindowsToImageKernel {
     pub(crate) shape: Shape,
     pub(crate) input: View,
-    pub(crate) pad: usize,
-    pub(crate) stride: (usize, usize),
+    pub(crate) window_params: WindowParams,
 }
 
 impl WindowsToImageKernel {
@@ -525,7 +523,7 @@ impl WindowsToImageKernel {
         let (_, suffix) = self.input.output_shape.rsplit_at(6);
         let [out_h, out_w, _groups, filter_h, filter_w, group_nc]: [usize; 6] =
             suffix.try_into().unwrap();
-        let (stride_w, stride_h) = self.stride;
+        let (stride_w, stride_h) = self.window_params.stride;
 
         let batch_dims = self.shape.len() - 3;
         writeln!(w, "int in_y = coord[{}];", batch_dims)?;
@@ -538,8 +536,16 @@ impl WindowsToImageKernel {
         writeln!(w, "uint out_w = {};", out_w)?;
         writeln!(w, "uint out_h = {};", out_h)?;
 
-        writeln!(w, "uint in_x_padded = uint(in_x) + {};", self.pad)?;
-        writeln!(w, "uint in_y_padded = uint(in_y) + {};", self.pad)?;
+        writeln!(
+            w,
+            "uint in_x_padded = uint(in_x) + {};",
+            self.window_params.pad
+        )?;
+        writeln!(
+            w,
+            "uint in_y_padded = uint(in_y) + {};",
+            self.window_params.pad
+        )?;
         writeln!(w, "int filter_base_x = int(in_x_padded % {});", stride_w)?;
         writeln!(w, "int filter_base_y = int(in_y_padded % {});", stride_h)?;
         writeln!(w, "int count_x = {};", filter_w.div_round_up(stride_w))?;

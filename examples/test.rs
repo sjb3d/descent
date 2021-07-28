@@ -221,10 +221,14 @@ fn main() {
             .with_layer(Layer::LeakyRelu(0.01))
             .with_layer(Layer::Linear(Linear::new(10))),
         TestNetwork::ConvNet => network
-            .with_layer(Layer::Conv2D(Conv2D::new(32, 3, 3).with_pad(1)))
+            .with_layer(Layer::Conv2D(
+                Conv2D::new(32, 3, 3).with_pad(1, PaddingMode::Zero),
+            ))
             .with_layer(Layer::LeakyRelu(0.01))
             .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2)))
-            .with_layer(Layer::Conv2D(Conv2D::new(64, 3, 3).with_pad(1)))
+            .with_layer(Layer::Conv2D(
+                Conv2D::new(64, 3, 3).with_pad(1, PaddingMode::Zero),
+            ))
             .with_layer(Layer::LeakyRelu(0.01))
             .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2)))
             .with_layer(Layer::Flatten)
