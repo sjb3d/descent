@@ -8,7 +8,7 @@ pub(crate) type ShapeVec = TinyVec<[usize; MAX_DIM]>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PaddingMode {
     Zero,
-    //ClampToEdge,
+    ClampToEdge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,10 +41,6 @@ impl Axis {
 
     pub(crate) fn index(&self) -> usize {
         self.0 as usize
-    }
-
-    pub(crate) fn inner(&self) -> Self {
-        Self(self.0 + 1)
     }
 }
 
@@ -169,20 +165,6 @@ impl Shape {
         let mut v = TinyVec::new();
         v.extend_from_slice(prefix);
         v.extend_from_slice(&[in_h, in_w, in_nc]);
-        Shape::new(v)
-    }
-
-    pub(crate) fn pool(&self, axis: isize, size: usize) -> Self {
-        let axis = self.axis(axis);
-        let (prefix, suffix) = self.0.split_at(axis.index());
-        let (src_size, suffix) = suffix.split_first().unwrap();
-        let src_size = *src_size;
-        assert_eq!(src_size % size, 0, "pooling must exactly divide the axis");
-        let mut v = ShapeVec::new();
-        v.extend_from_slice(prefix);
-        v.push(src_size / size);
-        v.push(size);
-        v.extend_from_slice(suffix);
         Shape::new(v)
     }
 

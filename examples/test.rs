@@ -101,7 +101,7 @@ fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> Du
     let dloss = loss.clone_as_accumulator();
 
     // backprop (softmax with cross entropy directly)
-    let n = *p.shape().last().unwrap();
+    let n = p.shape()[-1];
     dz.accumulate((p - y.one_hot(n)) * dloss);
 
     DualArray::new(loss, dloss)
@@ -177,6 +177,7 @@ enum TestNetwork {
     Linear,
     Hidden300,
     ConvNet,
+    ConvBlurNet,
 }
 
 #[derive(Debug, EnumString, EnumVariantNames)]
@@ -231,6 +232,36 @@ fn main() {
             ))
             .with_layer(Layer::LeakyRelu(0.01))
             .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2)))
+            .with_layer(Layer::Flatten)
+            .with_layer(Layer::Dropout(0.5))
+            .with_layer(Layer::Linear(Linear::new(128)))
+            .with_layer(Layer::LeakyRelu(0.01))
+            .with_layer(Layer::Linear(Linear::new(10))),
+        TestNetwork::ConvBlurNet => network
+            .with_layer(Layer::Conv2D(
+                Conv2D::new(32, 3, 3).with_pad(1, PaddingMode::Zero),
+            ))
+            .with_layer(Layer::LeakyRelu(0.01))
+            .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2).with_stride(1, 1)))
+            .with_layer(Layer::Conv2D(
+                Conv2D::new(1, 3, 3)
+                    .with_pad(1, PaddingMode::ClampToEdge)
+                    .with_stride(2, 2)
+                    .with_groups(32)
+                    .with_blur(),
+            ))
+            .with_layer(Layer::Conv2D(
+                Conv2D::new(64, 3, 3).with_pad(1, PaddingMode::Zero),
+            ))
+            .with_layer(Layer::LeakyRelu(0.01))
+            .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2).with_stride(1, 1)))
+            .with_layer(Layer::Conv2D(
+                Conv2D::new(1, 3, 3)
+                    .with_pad(1, PaddingMode::ClampToEdge)
+                    .with_stride(2, 2)
+                    .with_groups(64)
+                    .with_blur(),
+            ))
             .with_layer(Layer::Flatten)
             .with_layer(Layer::Dropout(0.5))
             .with_layer(Layer::Linear(Linear::new(128)))

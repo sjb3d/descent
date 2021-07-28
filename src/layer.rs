@@ -240,24 +240,16 @@ struct Conv2DInstance {
 
 impl Conv2DInstance {
     pub fn new<'c, R: Rng>(ctx: &mut NetworkContext<'c, R>, params: Conv2D) -> Self {
-        let [in_h, in_w, in_nc]: [usize; 3] = ctx.shape.as_slice().try_into().unwrap();
         let Conv2D {
-            num_filters: out_nc,
+            num_filters: filter_oc,
             filter,
             window_params,
             is_blur,
         } = params;
 
-        let (filter_w, filter_h) = filter;
-        let (stride_w, stride_h) = window_params.stride;
-
-        let out_w = (in_w + 2 * window_params.pad - filter_w) / stride_w + 1;
-        let out_h = (in_h + 2 * window_params.pad - filter_h) / stride_h + 1;
-
-        assert_eq!(in_nc % window_params.groups, 0);
-        assert_eq!(out_nc % window_params.groups, 0);
-        let filter_ic = in_nc / window_params.groups;
-        let filter_oc = out_nc / window_params.groups;
+        let window_shape = ctx.shape.image_to_windows(filter, window_params);
+        let [out_h, out_w, groups, filter_h, filter_w, filter_ic]: [usize; 6] =
+            window_shape.as_slice().try_into().unwrap();
 
         let f = ctx
             .env
@@ -266,7 +258,7 @@ impl Conv2DInstance {
         ctx.env.writer(&b).zero_fill();
 
         if is_blur {
-            assert_eq!(filter, (3, 3));
+            assert_eq!([filter_oc, filter_h, filter_w, filter_ic], [1, 3, 3, 1]);
             let f_data: [f32; 9] = [
                 1.0 / 16.0,
                 2.0 / 16.0,
@@ -290,7 +282,7 @@ impl Conv2DInstance {
             ctx.parameters.push(b.clone());
         }
 
-        ctx.shape = Shape::from([out_h, out_w, out_nc]);
+        ctx.shape = Shape::from([out_h, out_w, groups * filter_oc]);
 
         Self {
             window_params,
@@ -302,8 +294,18 @@ impl Conv2DInstance {
 
 impl LayerInstance for Conv2DInstance {
     fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
-        // TODO: handle groups when adding bias
-        input.conv2d(&self.f, self.window_params) + &self.b
+        let conv = input.conv2d(&self.f, self.window_params);
+
+        let out_shape = conv.shape();
+        let (out_nc, prefix) = out_shape.split_last().unwrap();
+
+        let mut v = ShapeVec::new();
+        v.extend_from_slice(prefix);
+        v.push(self.window_params.groups);
+        v.push(out_nc / self.window_params.groups);
+        let bias_shape = Shape::new(v);
+
+        (conv.reshape(bias_shape) + &self.b).reshape(out_shape)
     }
 }
 

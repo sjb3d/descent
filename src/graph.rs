@@ -296,21 +296,6 @@ impl<'g> Array<'g> {
             .with_state(|state| state.ops.graph[self.node_id].shape)
     }
 
-    pub fn max_pool(&self, axis: isize, size: usize) -> Self {
-        let self_shape = self.shape();
-        let self_axis = self_shape.axis(axis);
-
-        let pool_shape = self_shape.pool(axis, size);
-        let pool_axis = self_axis.inner();
-
-        let mut output_shape = self_shape;
-        output_shape[self_axis] /= size;
-
-        self.reshape(pool_shape)
-            .reduce_op(ReduceOp::Max, pool_axis)
-            .reshape(output_shape)
-    }
-
     pub fn accumulate(&self, src: Array) {
         self.graph.with_state(|state| {
             assert_eq!(state.ops.graph[self.node_id].op, Op::Unary(UnaryOp::Mov));
@@ -353,7 +338,7 @@ impl<'g> Array<'g> {
 
     fn set_loss_grad(&self) {
         let grad_shape = self.shape();
-        let mini_batch_size = *grad_shape.first().unwrap();
+        let mini_batch_size = grad_shape[0];
         let mini_batch_scale = self
             .graph
             .literal(1.0 / (mini_batch_size as f32))
@@ -560,7 +545,7 @@ impl<'g> DualArray<'g> {
             self_shape.as_slice().try_into().unwrap();
         let [filter_oc, filter_h, filter_w, filter_ic]: [usize; 4] =
             filter_shape.as_slice().try_into().unwrap();
-        assert_eq!(input_nc, filter_ic);
+        assert_eq!(input_nc, window_params.groups * filter_ic);
         let windows = self.image_to_windows((filter_w, filter_h), window_params);
 
         // apply the filter using a matrix multiplication

@@ -467,7 +467,17 @@ impl ImageToWindowsKernel {
         )?;
 
         writeln!(w, "float tmp = 0.f;")?;
-        writeln!(w, "if (uint(in_x) < input_w && uint(in_y) < input_h) {{")?;
+        match self.window_params.padding_mode {
+            PaddingMode::Zero => {
+                writeln!(w, "if (uint(in_x) < input_w && uint(in_y) < input_h) {{")?;
+            }
+            PaddingMode::ClampToEdge => {
+                writeln!(w, "in_x = clamp(in_x, 0, int(input_w - 1));")?;
+                writeln!(w, "in_y = clamp(in_y, 0, int(input_h - 1));")?;
+                writeln!(w, "{{")?;
+            }
+        }
+
         let indexer = self.input.indexer();
         write!(w, "tmp = input0[{}", indexer.offset)?;
         for (index, scale) in indexer.scales.iter().copied().enumerate() {
@@ -565,6 +575,8 @@ impl WindowsToImageKernel {
             "if (filter_x < {} && filter_y < {} && uint(out_x) < out_w && uint(out_y) < out_w) {{",
             filter_w, filter_h
         )?;
+
+        // TODO: pad images separately to be able to sum gradients
 
         let indexer = self.input.indexer();
         writeln!(w, "tmp += input0[{}", indexer.offset)?;
