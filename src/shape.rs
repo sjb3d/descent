@@ -171,6 +171,10 @@ impl Shape {
         View::new(self)
     }
 
+    pub(crate) fn identity_mapping(&self, axis: Axis) -> AxisMapping {
+        AxisMapping::new(axis, self[axis])
+    }
+
     pub(crate) fn padded_view(&self, pad: &[usize]) -> View {
         View::with_pad(self, pad)
     }
@@ -308,7 +312,7 @@ impl Default for AxisMapping {
 }
 
 impl AxisMapping {
-    fn identity(axis: Axis, length: usize) -> Self {
+    fn new(axis: Axis, length: usize) -> Self {
         if length > 1 {
             Self::Source { axis, step: 1 }
         } else {
@@ -316,7 +320,7 @@ impl AxisMapping {
         }
     }
 
-    fn stepped(&self, step_multiplier: isize) -> Self {
+    pub(crate) fn stepped(&self, step_multiplier: isize) -> Self {
         match *self {
             Self::Source { axis, step } => Self::Source {
                 axis,
@@ -342,11 +346,8 @@ impl View {
             input_shape: *shape,
             input_padding: iter::repeat(0).take(shape.len()).collect(),
             input_offsets: iter::repeat(0).take(shape.len()).collect(),
-            output_mapping: shape
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(index, len)| AxisMapping::identity(Axis::from_index(index), len))
+            output_mapping: (0..shape.len())
+                .map(|index| shape.identity_mapping(Axis::from_index(index)))
                 .collect(),
             output_shape: *shape,
         }
@@ -366,11 +367,8 @@ impl View {
             input_shape: *shape,
             input_padding: pad.iter().cloned().collect(),
             input_offsets: iter::repeat(0).take(shape.len()).collect(),
-            output_mapping: shape
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(index, len)| AxisMapping::identity(Axis::from_index(index), len))
+            output_mapping: (0..shape.len())
+                .map(|index| shape.identity_mapping(Axis::from_index(index)))
                 .collect(),
             output_shape: padded_shape,
         }
@@ -454,7 +452,7 @@ impl View {
             .enumerate()
         {
             output_mapping.push(if from == to {
-                AxisMapping::identity(Axis::from_index(index), from)
+                AxisMapping::new(Axis::from_index(index), from)
             } else {
                 assert_eq!(from, 1);
                 AxisMapping::Broadcast

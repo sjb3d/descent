@@ -273,17 +273,41 @@ impl<'g> Array<'g> {
         stride: (usize, usize),
         groups: usize,
     ) -> Self {
-        self.graph.with_state(|state| {
-            let shape = state.ops.graph[self.node_id]
-                .shape
-                .image_to_windows(filter, stride, groups);
-            Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::ImageToWindows { stride }, &[self.node_id]),
-                graph: self.graph,
-            }
-        })
+        let input_shape = self.shape();
+        let in_y_axis = input_shape.axis(-3);
+        let in_x_axis = input_shape.axis(-2);
+        let in_c_axis = input_shape.axis(-1);
+
+        let mut view = input_shape.identity_view();
+
+        view.output_shape = input_shape.image_to_windows(filter, stride, groups);
+        let group_nc = view.output_shape[SignedIndex(-1)];
+        let (stride_w, stride_h) = stride;
+
+        view.output_mapping.truncate(view.output_shape.len() - 6);
+        view.output_mapping.push(
+            input_shape
+                .identity_mapping(in_y_axis)
+                .stepped(stride_h as isize),
+        );
+        view.output_mapping.push(
+            input_shape
+                .identity_mapping(in_x_axis)
+                .stepped(stride_w as isize),
+        );
+        view.output_mapping.push(
+            input_shape
+                .identity_mapping(in_c_axis)
+                .stepped(group_nc as isize),
+        );
+        view.output_mapping
+            .push(input_shape.identity_mapping(in_y_axis));
+        view.output_mapping
+            .push(input_shape.identity_mapping(in_x_axis));
+        view.output_mapping
+            .push(input_shape.identity_mapping(in_c_axis));
+
+        self.view(view)
     }
 
     fn windows_to_image(self, stride: (usize, usize)) -> Self {

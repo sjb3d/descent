@@ -498,91 +498,6 @@ impl Kernel for ReduceKernel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct ImageToWindowsKernel {
-    pub(crate) shape: Shape,
-    pub(crate) input: View,
-    pub(crate) stride: (usize, usize),
-}
-
-impl Kernel for ImageToWindowsKernel {
-    fn generate_source(&self) -> Result<String, fmt::Error> {
-        let mut src = String::new();
-        let w = &mut src;
-
-        write!(w, "{}", include_str!("kernel_common.glsl"))?;
-
-        generate_input_buffer(0, 0, w)?;
-        generate_output_buffer(1, 0, w)?;
-
-        writeln!(w, "layout(local_size_x = 64) in;")?;
-        writeln!(w, "void main() {{")?;
-
-        writeln!(
-            w,
-            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
-            self.shape.element_count()
-        )?;
-        generate_coord("coord", &self.shape, w)?;
-
-        let batch_dims = self.shape.len() - 6;
-        let group_nc = self.shape[SignedIndex(-1)];
-
-        writeln!(w, "int out_y = coord[{}];", batch_dims)?;
-        writeln!(w, "int out_x = coord[{}];", batch_dims + 1)?;
-        writeln!(w, "int group_index = coord[{}];", batch_dims + 2)?;
-        writeln!(w, "int filter_y = coord[{}];", batch_dims + 3)?;
-        writeln!(w, "int filter_x = coord[{}];", batch_dims + 4)?;
-        writeln!(w, "int group_c = coord[{}];", batch_dims + 5)?;
-
-        writeln!(w, "int in_c = group_index*{} + group_c;", group_nc)?;
-
-        writeln!(
-            w,
-            "uint input_w = {};",
-            self.input.output_shape[SignedIndex(-2)]
-        )?;
-        writeln!(
-            w,
-            "uint input_h = {};",
-            self.input.output_shape[SignedIndex(-3)]
-        )?;
-
-        let (stride_w, stride_h) = self.stride;
-        writeln!(w, "int in_x = out_x*{} + filter_x;", stride_w)?;
-        writeln!(w, "int in_y = out_y*{} + filter_y;", stride_h)?;
-
-        writeln!(w, "int in_coord[{}];", batch_dims + 3)?;
-        for i in 0..batch_dims {
-            writeln!(w, "in_coord[{}] = coord[{}];", i, i)?;
-        }
-        writeln!(w, "in_coord[{}] = in_y;", batch_dims)?;
-        writeln!(w, "in_coord[{}] = in_x;", batch_dims + 1)?;
-        writeln!(w, "in_coord[{}] = in_c;", batch_dims + 2)?;
-
-        write!(w, "float tmp = input0[")?;
-        generate_load_index(&self.input, "in_coord", w)?;
-        writeln!(w, "];")?;
-
-        writeln!(w, "output0[gl_GlobalInvocationID.x] = tmp;")?;
-        writeln!(w, "}}")?;
-
-        Ok(src)
-    }
-
-    fn buffer_count(&self) -> usize {
-        2
-    }
-
-    fn group_count(&self) -> usize {
-        self.shape.element_count().div_round_up(64)
-    }
-
-    fn label_name(&self) -> String {
-        format!("ImageToWindows {}", self.shape)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct WindowsToImageKernel {
     pub(crate) shape: Shape,
     pub(crate) input: View,
@@ -690,7 +605,6 @@ pub(crate) enum GenericKernel {
     PerElement(PerElementKernel),
     Reduce(ReduceKernel),
     MatMul(MatMulKernel),
-    ImageToWindows(ImageToWindowsKernel),
     WindowsToImage(WindowsToImageKernel),
 }
 
@@ -700,7 +614,6 @@ impl GenericKernel {
             GenericKernel::PerElement(kernel) => kernel,
             GenericKernel::MatMul(kernel) => kernel,
             GenericKernel::Reduce(kernel) => kernel,
-            GenericKernel::ImageToWindows(kernel) => kernel,
             GenericKernel::WindowsToImage(kernel) => kernel,
         }
     }
