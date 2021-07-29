@@ -35,7 +35,6 @@ pub struct Conv2D {
     pub num_filters: usize,
     pub filter: (usize, usize),
     pub pad: usize,
-    pub padding_mode: PaddingMode,
     pub stride: (usize, usize),
     pub groups: usize,
     pub is_blur: bool,
@@ -47,16 +46,14 @@ impl Conv2D {
             num_filters,
             filter: (filter_w, filter_h),
             pad: 0,
-            padding_mode: PaddingMode::Zero,
             stride: (1, 1),
             groups: 1,
             is_blur: false,
         }
     }
 
-    pub fn with_pad(mut self, pad: usize, padding_mode: PaddingMode) -> Self {
+    pub fn with_pad(mut self, pad: usize) -> Self {
         self.pad = pad;
-        self.padding_mode = padding_mode;
         self
     }
 
@@ -199,7 +196,7 @@ struct LinearInstance {
 
 impl LinearInstance {
     pub fn new<'c, R: Rng>(ctx: &mut NetworkContext<'c, R>, params: Linear) -> Self {
-        let [input]: [usize; 1] = ctx.shape.as_slice().try_into().unwrap();
+        let [input]: [usize; 1] = ctx.shape.try_into().unwrap();
         let output = params.hidden_units;
 
         let w = ctx.env.variable([input, output], "w");
@@ -240,7 +237,6 @@ impl LayerInstance for LeakyReluInstance {
 
 struct Conv2DInstance {
     pad: usize,
-    padding_mode: PaddingMode,
     stride: (usize, usize),
     groups: usize,
     f: Variable,
@@ -253,17 +249,16 @@ impl Conv2DInstance {
             num_filters: filter_oc,
             filter,
             pad,
-            padding_mode,
             stride,
             groups,
             is_blur,
         } = params;
 
-        let padded_shape = ctx.shape.pad_image(pad as isize);
+        let padded_shape = ctx.shape.pad_image(pad);
 
         let window_shape = padded_shape.image_to_windows(filter, stride, groups);
         let [out_h, out_w, _groups, filter_h, filter_w, filter_ic]: [usize; 6] =
-            window_shape.as_slice().try_into().unwrap();
+            window_shape.try_into().unwrap();
 
         let f = ctx
             .env
@@ -300,7 +295,6 @@ impl Conv2DInstance {
 
         Self {
             pad,
-            padding_mode,
             stride,
             groups,
             f,
@@ -311,13 +305,7 @@ impl Conv2DInstance {
 
 impl LayerInstance for Conv2DInstance {
     fn eval<'g>(&self, _ctx: &EvalContext, input: DualArray<'g>) -> DualArray<'g> {
-        let conv = input.conv2d(
-            &self.f,
-            self.pad,
-            self.padding_mode,
-            self.stride,
-            self.groups,
-        );
+        let conv = input.conv2d(&self.f, self.pad, self.stride, self.groups);
 
         let out_shape = conv.shape();
         let (out_nc, prefix) = out_shape.split_last().unwrap();
@@ -339,7 +327,7 @@ struct MaxPool2DInstance {
 
 impl MaxPool2DInstance {
     pub fn new<'c, R: Rng>(ctx: &mut NetworkContext<'c, R>, params: MaxPool2D) -> Self {
-        let [in_h, in_w, in_nc]: [usize; 3] = ctx.shape.as_slice().try_into().unwrap();
+        let [in_h, in_w, in_nc]: [usize; 3] = ctx.shape.try_into().unwrap();
         let MaxPool2D { filter, stride } = params;
 
         let (filter_w, filter_h) = filter;

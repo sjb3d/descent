@@ -288,7 +288,7 @@ impl Kernel for MatMulKernel {
         let indexer0 = self.inputs[0].indexer();
         let indexer1 = self.inputs[1].indexer();
 
-        let [r, m, n]: [usize; 3] = self.shape.as_slice().try_into().unwrap();
+        let [r, m, n]: [usize; 3] = self.shape.try_into().unwrap();
         let k = self.k();
         let k_chunk_size_in_tiles = k.div_round_up(Self::TILE_K).div_round_up(r);
 
@@ -368,7 +368,7 @@ impl Kernel for MatMulKernel {
     }
 
     fn group_count(&self) -> usize {
-        let [r, m, n]: [usize; 3] = self.shape.as_slice().try_into().unwrap();
+        let [r, m, n]: [usize; 3] = self.shape.try_into().unwrap();
         r * m.div_round_up(MatMulKernel::TILE_M) * n.div_round_up(MatMulKernel::TILE_N)
     }
 
@@ -492,7 +492,7 @@ impl Kernel for ImageToWindowsKernel {
         generate_coord("coord", &self.shape, w)?;
 
         let batch_dims = self.shape.len() - 6;
-        let group_nc = self.shape[-1];
+        let group_nc = self.shape[SignedIndex(-1)];
 
         writeln!(w, "int out_y = coord[{}];", batch_dims)?;
         writeln!(w, "int out_x = coord[{}];", batch_dims + 1)?;
@@ -503,8 +503,16 @@ impl Kernel for ImageToWindowsKernel {
 
         writeln!(w, "int in_c = group_index*{} + group_c;", group_nc)?;
 
-        writeln!(w, "uint input_w = {};", self.input.output_shape[-2])?;
-        writeln!(w, "uint input_h = {};", self.input.output_shape[-3])?;
+        writeln!(
+            w,
+            "uint input_w = {};",
+            self.input.output_shape[SignedIndex(-2)]
+        )?;
+        writeln!(
+            w,
+            "uint input_h = {};",
+            self.input.output_shape[SignedIndex(-3)]
+        )?;
 
         let (stride_w, stride_h) = self.stride;
         writeln!(w, "int in_x = out_x*{} + filter_x;", stride_w)?;

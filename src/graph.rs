@@ -2,7 +2,7 @@ use crate::common::*;
 use ordered_float::NotNan;
 use petgraph::prelude::*;
 use slotmap::SparseSecondaryMap;
-use std::{cell::RefCell, convert::TryInto, ops};
+use std::{cell::RefCell, convert::TryInto, iter, ops};
 
 #[derive(Clone, Copy)]
 pub struct Array<'g> {
@@ -231,7 +231,7 @@ impl<'g> Array<'g> {
                 graph: self.graph,
             }
         });
-        let [r, m, n]: [usize; 3] = result.shape().as_slice().try_into().unwrap();
+        let [r, m, n]: [usize; 3] = result.shape().try_into().unwrap();
         if r == 1 {
             result.reshape([m, n])
         } else {
@@ -239,19 +239,25 @@ impl<'g> Array<'g> {
         }
     }
 
-    fn pad_image(self, amount: isize, mode: PaddingMode) -> Self {
-        if amount == 0 {
+    fn pad_image(self, pad: usize) -> Self {
+        if pad == 0 {
             return self;
         }
-        self.graph.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape.pad_image(amount);
-            Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::PadImage { amount, mode }, &[self.node_id]),
-                graph: self.graph,
-            }
-        })
+
+        let shape = self.shape();
+        assert!(shape.len() >= 3);
+        let mut pad_vec = ShapeVec::new();
+        pad_vec.extend(iter::repeat(0).take(shape.len() - 3));
+        pad_vec.extend_from_slice(&[pad, pad, 0]);
+        self.view(self.shape().padded_view(pad_vec.as_slice()))
+    }
+
+    fn unpad_image(self, pad: usize) -> Self {
+        if pad == 0 {
+            return self;
+        }
+
+        todo!()
     }
 
     fn image_to_windows(
@@ -536,14 +542,13 @@ impl<'g> DualArray<'g> {
         Self::new(b, db)
     }
 
-    fn pad_image(self, amount: usize, mode: PaddingMode) -> Self {
+    fn pad_image(self, pad: usize) -> Self {
         let (a, da) = self.into_inner();
 
-        let amount = amount as isize;
-        let b = a.pad_image(amount, mode);
+        let b = a.pad_image(pad);
 
         let db = b.clone_as_accumulator();
-        da.accumulate(db.pad_image(-amount, mode));
+        da.accumulate(db.unpad_image(pad));
 
         Self::new(b, db)
     }
@@ -568,31 +573,29 @@ impl<'g> DualArray<'g> {
         self,
         filter: impl IntoDualArray<'g>,
         pad: usize,
-        padding_mode: PaddingMode,
         stride: (usize, usize),
         groups: usize,
     ) -> Self {
         let filter = filter.into_dual_array(self.graph);
 
         // pad the input
-        let padded = self.pad_image(pad, padding_mode);
+        let padded = self.pad_image(pad);
 
         // copy the input into windows that match the filter size
         let padded_shape = padded.shape();
         let filter_shape = filter.shape();
         assert_eq!(padded_shape.len(), 4);
         assert_eq!(filter_shape.len(), 4);
-        let [m, _input_h, _input_w, input_nc]: [usize; 4] =
-            padded_shape.as_slice().try_into().unwrap();
+        let [m, _input_h, _input_w, input_nc]: [usize; 4] = padded_shape.try_into().unwrap();
         let [filter_oc, filter_h, filter_w, filter_ic]: [usize; 4] =
-            filter_shape.as_slice().try_into().unwrap();
+            filter_shape.try_into().unwrap();
         assert_eq!(input_nc, groups * filter_ic);
         let windows = padded.image_to_windows((filter_w, filter_h), stride, groups);
 
         // apply the filter using a matrix multiplication
         let windows_shape = windows.shape();
         let [windows_m, output_h, output_w, windows_g, windows_fh, windows_fw, windows_nc]: [usize;
-            7] = windows_shape.as_slice().try_into().unwrap();
+            7] = windows_shape.try_into().unwrap();
         assert_eq!(m, windows_m);
         assert_eq!(groups, windows_g);
         assert_eq!(filter_h, windows_fh);
@@ -613,7 +616,7 @@ impl<'g> DualArray<'g> {
         let windows = self.image_to_windows(filter, stride, 1);
 
         let [m, output_h, output_w, groups, filter_h, filter_w, group_nc]: [usize; 7] =
-            windows.shape().as_slice().try_into().unwrap();
+            windows.shape().try_into().unwrap();
 
         windows
             .reshape([

@@ -1,15 +1,14 @@
 use crate::common::*;
-use std::{convert::TryInto, fmt, iter, mem, ops};
+use std::{
+    array,
+    convert::{TryFrom, TryInto},
+    fmt, iter, mem, ops,
+    slice::SliceIndex,
+};
 use tinyvec::ArrayVec as TinyVec;
 
 pub(crate) const MAX_DIM: usize = 7;
 pub(crate) type ShapeVec = TinyVec<[usize; MAX_DIM]>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PaddingMode {
-    Zero,
-    ClampToEdge,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Axis(u8);
@@ -34,6 +33,9 @@ impl DivRoundUp for usize {
         (self + x - 1) / x
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SignedIndex(pub isize);
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Shape(ShapeVec);
@@ -108,22 +110,18 @@ impl Shape {
     }
 
     pub(crate) fn matmul(&self, rhs: &Shape) -> Self {
-        let [m, k0]: [usize; 2] = self.as_slice().try_into().unwrap();
-        let [k1, n]: [usize; 2] = rhs.as_slice().try_into().unwrap();
+        let [m, k0]: [usize; 2] = self.try_into().unwrap();
+        let [k1, n]: [usize; 2] = rhs.try_into().unwrap();
         assert_eq!(k0, k1);
         let r = k0.div_round_up(MATMUL_MAX_K_SIZE);
         Shape::from([r, m, n])
     }
 
-    pub(crate) fn pad_image(&self, amount: isize) -> Self {
-        let (prefix, suffix) = self.rsplit_at(3);
-        let [in_h, in_w, in_nc]: [usize; 3] = suffix.try_into().unwrap();
-        let out_w = ((in_w as isize) + 2 * amount) as usize;
-        let out_h = ((in_h as isize) + 2 * amount) as usize;
-        let mut v = TinyVec::new();
-        v.extend_from_slice(prefix);
-        v.extend_from_slice(&[out_h, out_w, in_nc]);
-        Shape::new(v)
+    pub(crate) fn pad_image(&self, pad: usize) -> Self {
+        let mut p = *self;
+        p[SignedIndex(-2)] += 2 * pad;
+        p[SignedIndex(-1)] += 2 * pad;
+        p
     }
 
     pub(crate) fn image_to_windows(
@@ -143,7 +141,7 @@ impl Shape {
         let out_h = (in_h - filter_h) / stride_h + 1;
         assert_eq!((out_w - 1) * stride_w, in_w - filter_w);
         assert_eq!((out_h - 1) * stride_h, in_h - filter_h);
-        let mut v = TinyVec::new();
+        let mut v = ShapeVec::new();
         v.extend_from_slice(prefix);
         v.extend_from_slice(&[out_h, out_w, groups, filter_h, filter_w, group_nc]);
         Shape::new(v)
@@ -158,19 +156,23 @@ impl Shape {
         let in_nc = groups * group_nc;
         let in_w = (out_w - 1) * stride_w + filter_w;
         let in_h = (out_h - 1) * stride_h + filter_h;
-        let mut v = TinyVec::new();
+        let mut v = ShapeVec::new();
         v.extend_from_slice(prefix);
         v.extend_from_slice(&[in_h, in_w, in_nc]);
         Shape::new(v)
     }
 
     pub(crate) fn transposed(&self) -> Self {
-        let [a, b]: [usize; 2] = self.as_slice().try_into().unwrap();
+        let [a, b]: [usize; 2] = self.try_into().unwrap();
         Shape::from([b, a])
     }
 
     pub(crate) fn identity_view(&self) -> View {
-        View::identity(self)
+        View::new(self)
+    }
+
+    pub(crate) fn padded_view(&self, pad: &[usize]) -> View {
+        View::with_pad(self, pad)
     }
 
     pub(crate) fn axis(&self, index: isize) -> Axis {
@@ -194,7 +196,7 @@ impl Shape {
         // expand last axis (innermost dimension) from 1 to n
         let (last, prefix) = self.0.split_last().unwrap();
         assert_eq!(*last, 1);
-        let mut v = TinyVec::new();
+        let mut v = ShapeVec::new();
         v.extend_from_slice(prefix);
         v.push(count);
         Shape::new(v)
@@ -248,26 +250,52 @@ impl<const N: usize> From<[usize; N]> for Shape {
     }
 }
 
+impl<const N: usize> TryFrom<Shape> for [usize; N] {
+    type Error = array::TryFromSliceError;
+    fn try_from(value: Shape) -> Result<Self, Self::Error> {
+        value.as_slice().try_into()
+    }
+}
+impl<const N: usize> TryFrom<&Shape> for [usize; N] {
+    type Error = array::TryFromSliceError;
+    fn try_from(value: &Shape) -> Result<Self, Self::Error> {
+        value.as_slice().try_into()
+    }
+}
+
+impl<I: SliceIndex<[usize]>> ops::Index<I> for Shape {
+    type Output = I::Output;
+    fn index(&self, index: I) -> &Self::Output {
+        self.as_slice().index(index)
+    }
+}
+impl<I: SliceIndex<[usize]>> ops::IndexMut<I> for Shape {
+    fn index_mut(&mut self, index: I) -> &mut Self::Output {
+        self.as_mut_slice().index_mut(index)
+    }
+}
+
 impl ops::Index<Axis> for Shape {
     type Output = usize;
     fn index(&self, axis: Axis) -> &Self::Output {
-        self.as_slice().index(axis.index())
+        self.index(axis.index())
     }
 }
 impl ops::IndexMut<Axis> for Shape {
     fn index_mut(&mut self, axis: Axis) -> &mut Self::Output {
-        self.as_mut_slice().index_mut(axis.index())
+        self.index_mut(axis.index())
     }
 }
-impl ops::Index<isize> for Shape {
+
+impl ops::Index<SignedIndex> for Shape {
     type Output = usize;
-    fn index(&self, index: isize) -> &Self::Output {
-        self.index(self.axis(index))
+    fn index(&self, index: SignedIndex) -> &Self::Output {
+        self.index(self.axis(index.0))
     }
 }
-impl ops::IndexMut<isize> for Shape {
-    fn index_mut(&mut self, index: isize) -> &mut Self::Output {
-        self.index_mut(self.axis(index))
+impl ops::IndexMut<SignedIndex> for Shape {
+    fn index_mut(&mut self, index: SignedIndex) -> &mut Self::Output {
+        self.index_mut(self.axis(index.0))
     }
 }
 
@@ -305,6 +333,7 @@ impl AxisMapping {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct View {
+    pub(crate) input_padding: TinyVec<[usize; MAX_DIM]>,
     pub(crate) input_shape: Shape,
     pub(crate) input_offsets: TinyVec<[isize; MAX_DIM]>,
     pub(crate) output_mapping: TinyVec<[AxisMapping; MAX_DIM]>,
@@ -312,39 +341,65 @@ pub(crate) struct View {
 }
 
 impl View {
-    fn identity(shape: &Shape) -> Self {
+    fn new(shape: &Shape) -> Self {
         Self {
+            input_padding: iter::repeat(0).take(shape.len()).collect(),
             input_shape: *shape,
             input_offsets: iter::repeat(0).take(shape.len()).collect(),
             output_mapping: shape
                 .iter()
                 .copied()
                 .enumerate()
-                .map(|(index, shape)| AxisMapping::identity(Axis::from_index(index), shape))
+                .map(|(index, len)| AxisMapping::identity(Axis::from_index(index), len))
                 .collect(),
             output_shape: *shape,
         }
     }
 
+    fn with_pad(shape: &Shape, pad: &[usize]) -> Self {
+        assert_eq!(shape.len(), pad.len());
+        let padded_shape = Shape::new(
+            shape
+                .iter()
+                .copied()
+                .zip(pad.iter().copied())
+                .map(|(n, pad)| n + 2 * pad)
+                .collect(),
+        );
+        Self {
+            input_padding: pad.iter().cloned().collect(),
+            input_shape: padded_shape,
+            input_offsets: iter::repeat(0).take(padded_shape.len()).collect(),
+            output_mapping: padded_shape
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, len)| AxisMapping::identity(Axis::from_index(index), len))
+                .collect(),
+            output_shape: padded_shape,
+        }
+    }
+
     pub(crate) fn is_identity(&self) -> bool {
-        Self::identity(&self.output_shape).eq(self)
+        Self::new(&self.output_shape).eq(self)
+    }
+
+    fn can_restrict_to(&self, view: &View) -> bool {
+        self.output_shape == view.input_shape
+            && view.input_padding.iter().all(|&padding| padding == 0)
+    }
+
+    fn can_reshape_to(&self, view: &View) -> bool {
+        self.is_identity() && self.output_shape.element_count() == view.input_shape.element_count()
     }
 
     pub(crate) fn can_view_through(&self, view: &View, can_reshape: bool) -> bool {
-        self.output_shape == view.input_shape
-            || (can_reshape
-                && self.is_identity()
-                && self.output_shape.element_count() == view.input_shape.element_count())
+        self.can_restrict_to(view) || (can_reshape && self.can_reshape_to(view))
     }
 
     pub(crate) fn through(&self, view: &View, can_reshape: bool) -> Self {
-        if self.output_shape != view.input_shape {
-            assert!(can_reshape);
-            assert!(self.is_identity());
-            assert_eq!(
-                self.output_shape.element_count(),
-                view.input_shape.element_count()
-            );
+        if !self.can_restrict_to(view) {
+            assert!(can_reshape && self.can_reshape_to(view));
             return *view;
         }
 
@@ -372,6 +427,7 @@ impl View {
             })
             .collect();
         Self {
+            input_padding: self.input_padding,
             input_shape: self.input_shape,
             input_offsets,
             output_mapping,
@@ -382,6 +438,7 @@ impl View {
     pub(crate) fn transposed(&self) -> Self {
         assert_eq!(self.output_mapping.len(), 2);
         Self {
+            input_padding: self.input_padding,
             input_shape: self.input_shape,
             input_offsets: self.input_offsets,
             output_mapping: self.output_mapping.iter().copied().rev().collect(),
@@ -391,7 +448,6 @@ impl View {
 
     pub(crate) fn broadcast(input_shape: &Shape, output_shape: &Shape) -> Self {
         assert!(input_shape.len() <= output_shape.len());
-        let input_offsets = iter::repeat(0).take(input_shape.len()).collect();
         let mut output_mapping = TinyVec::new();
         while output_mapping.len() + input_shape.len() < output_shape.len() {
             output_mapping.push(AxisMapping::Broadcast);
@@ -409,8 +465,9 @@ impl View {
             });
         }
         Self {
+            input_padding: iter::repeat(0).take(input_shape.len()).collect(),
             input_shape: *input_shape,
-            input_offsets,
+            input_offsets: iter::repeat(0).take(input_shape.len()).collect(),
             output_mapping,
             output_shape: *output_shape,
         }
