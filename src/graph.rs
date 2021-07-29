@@ -257,7 +257,14 @@ impl<'g> Array<'g> {
             return self;
         }
 
-        todo!()
+        // HACK: subview instead of sum for now
+        let shape = self.shape();
+        let mut view = shape.identity_view();
+        view.input_offsets[shape.len() - 3] += pad as isize;
+        view.input_offsets[shape.len() - 2] += pad as isize;
+        view.output_shape[shape.len() - 3] -= 2 * pad;
+        view.output_shape[shape.len() - 2] -= 2 * pad;
+        self.view(view)
     }
 
     fn image_to_windows(

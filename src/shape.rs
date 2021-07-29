@@ -119,8 +119,8 @@ impl Shape {
 
     pub(crate) fn pad_image(&self, pad: usize) -> Self {
         let mut p = *self;
+        p[SignedIndex(-3)] += 2 * pad;
         p[SignedIndex(-2)] += 2 * pad;
-        p[SignedIndex(-1)] += 2 * pad;
         p
     }
 
@@ -202,9 +202,9 @@ impl Shape {
         Shape::new(v)
     }
 
-    fn strides(&self) -> TinyVec<[isize; MAX_DIM]> {
+    pub(crate) fn strides(&self) -> TinyVec<[usize; MAX_DIM]> {
         let mut stride = 1;
-        let v: TinyVec<[isize; MAX_DIM]> = self
+        let v: TinyVec<[usize; MAX_DIM]> = self
             .0
             .iter()
             .copied()
@@ -212,11 +212,7 @@ impl Shape {
             .map(|n| {
                 let m = stride;
                 stride *= n;
-                if n > 1 {
-                    m as isize
-                } else {
-                    0
-                }
+                m
             })
             .collect();
         v.iter().copied().rev().collect()
@@ -333,8 +329,8 @@ impl AxisMapping {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct View {
-    pub(crate) input_padding: TinyVec<[usize; MAX_DIM]>,
     pub(crate) input_shape: Shape,
+    pub(crate) input_padding: TinyVec<[usize; MAX_DIM]>,
     pub(crate) input_offsets: TinyVec<[isize; MAX_DIM]>,
     pub(crate) output_mapping: TinyVec<[AxisMapping; MAX_DIM]>,
     pub(crate) output_shape: Shape,
@@ -343,8 +339,8 @@ pub(crate) struct View {
 impl View {
     fn new(shape: &Shape) -> Self {
         Self {
-            input_padding: iter::repeat(0).take(shape.len()).collect(),
             input_shape: *shape,
+            input_padding: iter::repeat(0).take(shape.len()).collect(),
             input_offsets: iter::repeat(0).take(shape.len()).collect(),
             output_mapping: shape
                 .iter()
@@ -367,10 +363,10 @@ impl View {
                 .collect(),
         );
         Self {
+            input_shape: *shape,
             input_padding: pad.iter().cloned().collect(),
-            input_shape: padded_shape,
-            input_offsets: iter::repeat(0).take(padded_shape.len()).collect(),
-            output_mapping: padded_shape
+            input_offsets: iter::repeat(0).take(shape.len()).collect(),
+            output_mapping: shape
                 .iter()
                 .copied()
                 .enumerate()
@@ -427,8 +423,8 @@ impl View {
             })
             .collect();
         Self {
-            input_padding: self.input_padding,
             input_shape: self.input_shape,
+            input_padding: self.input_padding,
             input_offsets,
             output_mapping,
             output_shape: view.output_shape,
@@ -438,8 +434,8 @@ impl View {
     pub(crate) fn transposed(&self) -> Self {
         assert_eq!(self.output_mapping.len(), 2);
         Self {
-            input_padding: self.input_padding,
             input_shape: self.input_shape,
+            input_padding: self.input_padding,
             input_offsets: self.input_offsets,
             output_mapping: self.output_mapping.iter().copied().rev().collect(),
             output_shape: self.output_shape.transposed(),
@@ -465,46 +461,34 @@ impl View {
             });
         }
         Self {
-            input_padding: iter::repeat(0).take(input_shape.len()).collect(),
             input_shape: *input_shape,
+            input_padding: iter::repeat(0).take(input_shape.len()).collect(),
             input_offsets: iter::repeat(0).take(input_shape.len()).collect(),
             output_mapping,
             output_shape: *output_shape,
         }
     }
 
-    pub(crate) fn indexer(&self) -> ViewIndexer {
-        ViewIndexer::new(self)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ViewIndexer {
-    pub(crate) scales: TinyVec<[isize; MAX_DIM]>,
-    pub(crate) offset: isize,
-}
-
-impl ViewIndexer {
-    fn new(view: &View) -> Self {
-        let input_strides = view.input_shape.strides();
-
-        let scales = view
-            .output_mapping
-            .iter()
-            .map(|mapping| match mapping {
-                AxisMapping::Source { axis, step } => input_strides[axis.index()] * step,
-                AxisMapping::Broadcast => 0,
+    fn get_axis_step(&self, index: usize) -> Option<(Axis, isize)> {
+        self.output_mapping
+            .get(index)
+            .and_then(|mapping| match mapping {
+                AxisMapping::Source { axis, step } => Some((*axis, *step)),
+                AxisMapping::Broadcast => None,
             })
-            .collect();
-        let offset = view
-            .input_offsets
-            .iter()
-            .cloned()
-            .zip(input_strides.iter().cloned())
-            .map(|(offset, stride)| offset * stride)
-            .sum();
+    }
 
-        Self { scales, offset }
+    pub(crate) fn load_column_major_hint(&self) -> bool {
+        if let Some((axis0, step0)) = self.get_axis_step(0) {
+            if let Some((axis1, step1)) = self.get_axis_step(1) {
+                if axis0 == axis1 {
+                    return step0.abs() < step1.abs();
+                } else {
+                    return axis0 > axis1;
+                }
+            }
+        }
+        false
     }
 }
 

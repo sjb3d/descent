@@ -62,7 +62,54 @@ fn generate_coord(name: &str, shape: &Shape, w: &mut impl Write) -> fmt::Result 
     for &n in shape.iter() {
         write!(w, ", {}", n)?;
     }
-    writeln!(w, ");")
+    writeln!(w, ");")?;
+    Ok(())
+}
+
+fn generate_load_coord(
+    view: &View,
+    input_axis: Axis,
+    coord_name: &str,
+    w: &mut impl Write,
+) -> fmt::Result {
+    let pad = view.input_padding[input_axis.index()];
+    let offset = view.input_offsets[input_axis.index()];
+    if pad == 0 {
+        write!(w, "clamp({} - {}", offset, pad)?;
+    } else {
+        write!(w, "({}", offset)?;
+    }
+
+    for (coord_index, mapping) in view.output_mapping.iter().copied().enumerate() {
+        match mapping {
+            AxisMapping::Source { axis, step } => {
+                if axis == input_axis {
+                    write!(w, " + ({})*{}[{}]", step, coord_name, coord_index)?;
+                }
+            }
+            AxisMapping::Broadcast => {}
+        }
+    }
+
+    if pad == 0 {
+        write!(w, ", 0, {})", view.input_shape[input_axis])?;
+    } else {
+        write!(w, ")")?;
+    }
+
+    Ok(())
+}
+
+fn generate_load_index(view: &View, coord_name: &str, w: &mut impl Write) -> fmt::Result {
+    let input_strides = view.input_shape.strides();
+    for i in 0..view.input_shape.len() {
+        if i > 0 {
+            write!(w, " + ")?;
+        }
+        generate_load_coord(view, Axis::from_index(i), coord_name, w)?;
+        write!(w, "*({})", input_strides[i])?;
+    }
+    Ok(())
 }
 
 pub(crate) trait Kernel {
@@ -106,29 +153,32 @@ impl Kernel for PerElementKernel {
             self.element_count
         )?;
 
-        let mut coord_sets = HashMap::new();
+        let mut coord_set_names = HashMap::new();
+        let get_coord_set_name =
+            |names: &mut HashMap<Shape, String>, shape: &Shape, w: &mut String| {
+                let next_index = names.len();
+                names
+                    .entry(*shape)
+                    .or_insert_with(|| {
+                        let name = format!("coord{}", next_index);
+                        generate_coord(&name, shape, w).unwrap();
+                        name
+                    })
+                    .clone()
+            };
+
         for (op_index, op) in self.ops.iter().enumerate() {
             match op {
                 PerElementKernelOp::Load { input_index } => {
-                    let input = &self.inputs[*input_index];
-                    let coord_shape = &input.output_shape;
-                    let next_coord_index = coord_sets.len();
-                    let (coord_name, coord_indexer) =
-                        coord_sets.entry(coord_shape).or_insert_with(|| {
-                            let coord_indexer = coord_shape.identity_view().indexer();
-                            let coord_name = format!("coord{}", next_coord_index);
-                            generate_coord(&coord_name, coord_shape, w).unwrap();
-                            (coord_name, coord_indexer)
-                        });
-                    let input_indexer = input.indexer();
+                    let view = &self.inputs[*input_index];
+                    let coord_shape = &view.output_shape;
+                    let coord_name = get_coord_set_name(&mut coord_set_names, coord_shape, w);
+
                     write!(w, "float tmp{} = input{}[", op_index, input_index)?;
-                    if &input_indexer == coord_indexer {
+                    if *view == coord_shape.identity_view() {
                         write!(w, "gl_GlobalInvocationID.x")?
                     } else {
-                        write!(w, "{}", input_indexer.offset)?;
-                        for (index, scale) in input_indexer.scales.iter().copied().enumerate() {
-                            write!(w, " + ({})*{}[{}]", scale, coord_name, index)?;
-                        }
+                        generate_load_index(view, &coord_name, w)?;
                     }
                     writeln!(w, "];")?;
                 }
@@ -137,49 +187,19 @@ impl Kernel for PerElementKernel {
                 }
                 PerElementKernelOp::BuiltIn { op, view } => {
                     let coord_shape = &view.output_shape;
-                    let next_coord_index = coord_sets.len();
-                    let (coord_name, coord_indexer) =
-                        coord_sets.entry(coord_shape).or_insert_with(|| {
-                            let coord_indexer = coord_shape.identity_view().indexer();
-                            let coord_name = format!("coord{}", next_coord_index);
-                            generate_coord(&coord_name, coord_shape, w).unwrap();
-                            (coord_name, coord_indexer)
-                        });
-                    let input_indexer = view.indexer();
+                    let coord_name = get_coord_set_name(&mut coord_set_names, coord_shape, w);
                     match op {
                         BuiltInOp::Coord { axis } => {
                             write!(w, "float tmp{} = float(", op_index)?;
-                            if &input_indexer == coord_indexer {
-                                write!(w, "{}[{}]", coord_name, axis.index())?;
-                            } else {
-                                write!(w, "{}", view.input_offsets[axis.index()])?;
-                                for (index, mapping) in
-                                    view.output_mapping.iter().copied().enumerate()
-                                {
-                                    match mapping {
-                                        AxisMapping::Source {
-                                            axis: source_axis,
-                                            step,
-                                        } if &source_axis == axis => {
-                                            write!(w, " + ({})*{}[{}]", step, coord_name, index)?;
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
+                            generate_load_coord(view, *axis, &coord_name, w)?;
                             writeln!(w, ");")?;
                         }
                         BuiltInOp::Rand { uid } => {
                             write!(w, "float tmp{} = rand_from_index({}, ", op_index, uid)?;
-                            if &input_indexer == coord_indexer {
+                            if *view == coord_shape.identity_view() {
                                 write!(w, "int(gl_GlobalInvocationID.x)")?
                             } else {
-                                write!(w, "{}", input_indexer.offset)?;
-                                for (index, scale) in
-                                    input_indexer.scales.iter().copied().enumerate()
-                                {
-                                    write!(w, " + ({})*{}[{}]", scale, coord_name, index)?;
-                                }
+                                generate_load_index(view, &coord_name, w)?;
                             }
                             writeln!(w, ");")?;
                         }
@@ -285,12 +305,21 @@ impl Kernel for MatMulKernel {
 
         assert_eq!(self.inputs[0].output_shape.len(), 2);
         assert_eq!(self.inputs[1].output_shape.len(), 2);
-        let indexer0 = self.inputs[0].indexer();
-        let indexer1 = self.inputs[1].indexer();
 
         let [r, m, n]: [usize; 3] = self.shape.try_into().unwrap();
         let k = self.k();
         let k_chunk_size_in_tiles = k.div_round_up(Self::TILE_K).div_round_up(r);
+
+        for i in 0..2 {
+            writeln!(w, "int load_index{}(uvec2 coord) {{", i)?;
+            writeln!(
+                w,
+                "int icoord[2]; icoord[0] = int(coord.y); icoord[1] = int(coord.x);"
+            )?;
+            write!(w, "return ")?;
+            generate_load_index(&self.inputs[i], "icoord", w)?;
+            writeln!(w, "; }}")?;
+        }
 
         writeln!(
             w,
@@ -298,11 +327,14 @@ impl Kernel for MatMulKernel {
             float load_a(uvec2 coord) {{
                 float tmp = 0.f;
                 if (coord.x < {} && coord.y < {}) {{
-                    tmp = input0[{} + ({})*coord.x + ({})*coord.y];
+                    int icoord[2];
+                    icoord[0] = int(coord.y);
+                    icoord[1] = int(coord.x);
+                    tmp = input0[load_index0(coord)];
                 }}
                 return tmp;
             }}",
-            k, m, indexer0.offset, indexer0.scales[1], indexer0.scales[0],
+            k, m,
         )?;
         writeln!(
             w,
@@ -310,11 +342,11 @@ impl Kernel for MatMulKernel {
             float load_b(uvec2 coord) {{
                 float tmp = 0.f;
                 if (coord.x < {} && coord.y < {}) {{
-                    tmp = input1[{} + ({})*coord.x + ({})*coord.y];
+                    tmp = input1[load_index1(coord)];
                 }}
                 return tmp;
             }}",
-            n, k, indexer1.offset, indexer1.scales[1], indexer1.scales[0],
+            n, k,
         )?;
         writeln!(
             w,
@@ -343,8 +375,8 @@ impl Kernel for MatMulKernel {
             k_chunk_size_in_tiles
         )?;
 
-        let load_a_column_major = indexer0.scales[0].abs() < indexer0.scales[1].abs();
-        let load_b_column_major = indexer1.scales[0].abs() < indexer1.scales[1].abs();
+        let load_a_column_major = self.inputs[0].load_column_major_hint();
+        let load_b_column_major = self.inputs[1].load_column_major_hint();
         let bool_value = |b| if b { "true" } else { "false" };
         writeln!(
             w,
@@ -409,20 +441,18 @@ impl Kernel for ReduceKernel {
             "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
             self.shape.element_count()
         )?;
-        generate_coord("coord", &self.shape, w)?;
+        generate_coord("out_coord", &self.shape, w)?;
 
         let k = self.k();
 
-        let indexer = self.input.indexer();
-        write!(w, "int base = {}", indexer.offset)?;
-        for (index, scale) in indexer.scales.iter().copied().enumerate() {
+        writeln!(w, "int in_coord[{}];", self.input.output_shape.len())?;
+
+        for index in 0..self.input.output_shape.len() {
             if index != self.axis.index() {
                 let offset = if self.axis.index() == 0 { 1 } else { 0 };
-                write!(w, " + ({})*coord[{}]", scale, index - offset)?;
+                writeln!(w, "in_coord[{}] = out_coord[{}];", index, index - offset)?;
             }
         }
-        writeln!(w, ";")?;
-        writeln!(w, "int stride = {};", indexer.scales[self.axis.index()])?;
 
         writeln!(
             w,
@@ -433,7 +463,10 @@ impl Kernel for ReduceKernel {
             }
         )?;
         writeln!(w, "for (int k = 0; k < {}; ++k) {{", k)?;
-        writeln!(w, "float tmp = input0[base + k*stride];")?;
+        writeln!(w, "in_coord[{}] = k;", self.axis.index())?;
+        write!(w, "float tmp = input0[")?;
+        generate_load_index(&self.input, "in_coord", w)?;
+        writeln!(w, "];")?;
         writeln!(
             w,
             "{};",
@@ -518,20 +551,16 @@ impl Kernel for ImageToWindowsKernel {
         writeln!(w, "int in_x = out_x*{} + filter_x;", stride_w)?;
         writeln!(w, "int in_y = out_y*{} + filter_y;", stride_h)?;
 
-        let indexer = self.input.indexer();
-        write!(w, "float tmp = input0[{}", indexer.offset)?;
-        for (index, scale) in indexer.scales.iter().copied().enumerate() {
-            if index < batch_dims {
-                write!(w, " + ({})*coord[{}]", scale, index)?;
-            } else {
-                write!(
-                    w,
-                    " + ({})*{}",
-                    scale,
-                    ["in_y", "in_x", "in_c"][index - batch_dims]
-                )?;
-            }
+        writeln!(w, "int in_coord[{}];", batch_dims + 3)?;
+        for i in 0..batch_dims {
+            writeln!(w, "in_coord[{}] = coord[{}];", i, i)?;
         }
+        writeln!(w, "in_coord[{}] = in_y;", batch_dims)?;
+        writeln!(w, "in_coord[{}] = in_x;", batch_dims + 1)?;
+        writeln!(w, "in_coord[{}] = in_c;", batch_dims + 2)?;
+
+        write!(w, "float tmp = input0[")?;
+        generate_load_index(&self.input, "in_coord", w)?;
         writeln!(w, "];")?;
 
         writeln!(w, "output0[gl_GlobalInvocationID.x] = tmp;")?;
@@ -603,6 +632,11 @@ impl Kernel for WindowsToImageKernel {
         writeln!(w, "int out_x_base = int(uint(in_x)/{});", stride_w)?;
         writeln!(w, "int out_y_base = int(uint(in_y)/{});", stride_h)?;
 
+        writeln!(w, "int in_coord[{}];", batch_dims + 6)?;
+        for i in 0..batch_dims {
+            writeln!(w, "in_coord[{}] = coord[{}];", i, i)?;
+        }
+
         writeln!(w, "float tmp = 0.f;")?;
         writeln!(w, "for (int index_y = 0; index_y < count_y; ++index_y)",)?;
         writeln!(w, "for (int index_x = 0; index_x < count_x; ++index_x) {{",)?;
@@ -616,29 +650,15 @@ impl Kernel for WindowsToImageKernel {
         writeln!(w, "int out_x = out_x_base - index_x;")?;
         writeln!(w, "int out_y = out_y_base - index_y;")?;
 
-        // TODO: pad images separately to be able to sum gradients
+        writeln!(w, "in_coord[{}] = out_y;", batch_dims)?;
+        writeln!(w, "in_coord[{}] = out_x;", batch_dims + 1)?;
+        writeln!(w, "in_coord[{}] = group_index;", batch_dims + 2)?;
+        writeln!(w, "in_coord[{}] = filter_y;", batch_dims + 3)?;
+        writeln!(w, "in_coord[{}] = filter_x;", batch_dims + 4)?;
+        writeln!(w, "in_coord[{}] = group_c;", batch_dims + 5)?;
 
-        let indexer = self.input.indexer();
-        writeln!(w, "tmp += input0[{}", indexer.offset)?;
-        for (index, scale) in indexer.scales.iter().copied().enumerate() {
-            if index < batch_dims {
-                write!(w, " + ({})*coord[{}]", scale, index)?;
-            } else {
-                write!(
-                    w,
-                    " + ({})*{}",
-                    scale,
-                    [
-                        "out_y",
-                        "out_x",
-                        "group_index",
-                        "filter_y",
-                        "filter_x",
-                        "group_c"
-                    ][index - batch_dims]
-                )?;
-            }
-        }
+        write!(w, "tmp += input0[")?;
+        generate_load_index(&self.input, "in_coord", w)?;
         writeln!(w, "];")?;
 
         writeln!(w, "}}")?;
@@ -730,7 +750,7 @@ impl KernelCacheWorker {
         let device = &self.context.device;
 
         let source = kernel.generate_source().unwrap();
-        //println!("{}", source);
+        println!("{}", source);
 
         let shader_module = match self.compiler.compile_into_spirv(
             &source,
