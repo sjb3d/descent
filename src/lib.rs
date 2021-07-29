@@ -63,6 +63,31 @@ mod tests {
     }
 
     #[test]
+    fn pad_image() {
+        let mut env = Environment::new();
+
+        let a_data: Vec<f32> = iter::repeat(1.0).take(64).collect();
+        let b_data: Vec<f32> = iter::repeat(1.0).take(100).collect();
+
+        let a_var = env.variable([1, 8, 8, 1], "a");
+        let b_var = env.variable([1, 10, 10, 1], "b");
+
+        env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
+
+        let g = env.graph();
+        g.write_variable(&b_var, g.read_variable(&a_var).pad_image(1));
+
+        let g = g.build_schedule();
+        env.run(&g);
+
+        let mut b_result = vec![0f32; b_data.len()];
+        env.reader(&b_var)
+            .read_exact(cast_slice_mut(&mut b_result))
+            .unwrap();
+        assert_eq!(b_result, b_data);
+    }
+
+    #[test]
     fn conv2d() {
         let mut env = Environment::new();
 

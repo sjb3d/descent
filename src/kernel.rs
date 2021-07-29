@@ -74,7 +74,7 @@ fn generate_load_coord(
 ) -> fmt::Result {
     let pad = view.input_padding[input_axis.index()];
     let offset = view.input_offsets[input_axis.index()];
-    if pad == 0 {
+    if pad != 0 {
         write!(w, "clamp({} - {}", offset, pad)?;
     } else {
         write!(w, "({}", offset)?;
@@ -91,8 +91,8 @@ fn generate_load_coord(
         }
     }
 
-    if pad == 0 {
-        write!(w, ", 0, {})", view.input_shape[input_axis])?;
+    if pad != 0 {
+        write!(w, ", 0, {})", view.input_shape[input_axis] - 1)?;
     } else {
         write!(w, ")")?;
     }

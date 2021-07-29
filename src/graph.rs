@@ -239,7 +239,7 @@ impl<'g> Array<'g> {
         }
     }
 
-    fn pad_image(self, pad: usize) -> Self {
+    pub(crate) fn pad_image(self, pad: usize) -> Self {
         if pad == 0 {
             return self;
         }

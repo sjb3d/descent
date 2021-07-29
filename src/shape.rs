@@ -360,7 +360,7 @@ impl View {
                 .iter()
                 .copied()
                 .zip(pad.iter().copied())
-                .map(|(n, pad)| n + 2 * pad)
+                .map(|(len, pad)| len + 2 * pad)
                 .collect(),
         );
         Self {

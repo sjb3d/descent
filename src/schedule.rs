@@ -193,9 +193,14 @@ impl Schedule {
                     self.ops
                         .edges_directed(node_id, Outgoing)
                         .all(|out_edge_ref| {
-                            self.ops[in_edge_id]
-                                .view
-                                .can_view_through(&self.ops[out_edge_ref.id()].view, can_reshape)
+                            self.ops[out_edge_ref.target()]
+                                .op
+                                .output_variable_id()
+                                .is_none()
+                                && self.ops[in_edge_id].view.can_view_through(
+                                    &self.ops[out_edge_ref.id()].view,
+                                    can_reshape,
+                                )
                         });
                 if can_eliminate {
                     let mut out_edges = self.ops.neighbors_directed(node_id, Outgoing).detach();
