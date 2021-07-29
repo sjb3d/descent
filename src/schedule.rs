@@ -59,6 +59,13 @@ slotmap::new_key_type! {
     pub(crate) struct ClusterId;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KernelDotOutput {
+    None,
+    Cluster,
+    Color,
+}
+
 pub struct Schedule {
     pub(crate) variables: SharedVariables,
     pub(crate) ops: OpGraph,
@@ -513,13 +520,17 @@ impl Schedule {
         assert_eq!(self.clusters_sorted.len(), self.clusters.len());
     }
 
-    pub fn write_dot(&self, w: &mut impl io::Write) -> io::Result<()> {
+    pub fn write_dot(
+        &self,
+        kernel_output: KernelDotOutput,
+        w: &mut impl io::Write,
+    ) -> io::Result<()> {
         writeln!(w, "digraph G {{")?;
         for (index, cluster_id) in iter::once(None)
             .chain(self.clusters.keys().map(Some))
             .enumerate()
         {
-            if cluster_id.is_some() {
+            if kernel_output == KernelDotOutput::Cluster && cluster_id.is_some() {
                 writeln!(w, "subgraph cluster{} {{ style=filled;", index)?;
             }
             for node_ref in self
@@ -536,10 +547,23 @@ impl Schedule {
                         value.into_inner()
                     )?;
                 } else {
-                    let mut hasher = DefaultHasher::new();
-                    node.colour.hash(&mut hasher);
-                    let hash = hasher.finish();
-                    let col = ((((hash >> 48) ^ (hash >> 24) ^ hash) as u32) & 0xffffff) | 0x404040;
+                    let hasher = if kernel_output == KernelDotOutput::Color {
+                        cluster_id.map(|cluster_id| {
+                            let mut hasher = DefaultHasher::new();
+                            cluster_id.hash(&mut hasher);
+                            hasher
+                        })
+                    } else {
+                        let mut hasher = DefaultHasher::new();
+                        node.colour.hash(&mut hasher);
+                        Some(hasher)
+                    };
+                    let col = if let Some(hasher) = hasher {
+                        let hash = hasher.finish();
+                        ((((hash >> 48) ^ (hash >> 24) ^ hash) as u32) & 0xffffff) | 0x404040
+                    } else {
+                        0xffffff
+                    };
                     write!(
                         w,
                         "n{} [shape=box,style=filled,color=\"#{:06X}\",label=\"{:?}\\n",
@@ -562,7 +586,7 @@ impl Schedule {
                     writeln!(w, "{}\"];", node.shape)?;
                 }
             }
-            if cluster_id.is_some() {
+            if kernel_output == KernelDotOutput::Cluster && cluster_id.is_some() {
                 writeln!(w, "}}")?;
             }
         }

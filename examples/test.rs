@@ -300,7 +300,16 @@ fn main() {
         graph.build_schedule()
     };
     train_graph
-        .write_dot(&mut BufWriter::new(File::create("train.dot").unwrap()))
+        .write_dot(
+            KernelDotOutput::None,
+            &mut BufWriter::new(File::create("train_s.dot").unwrap()),
+        )
+        .unwrap();
+    train_graph
+        .write_dot(
+            KernelDotOutput::Color,
+            &mut BufWriter::new(File::create("train_k.dot").unwrap()),
+        )
         .unwrap();
 
     let test_graph = {
@@ -324,7 +333,10 @@ fn main() {
         graph.build_schedule()
     };
     test_graph
-        .write_dot(&mut BufWriter::new(File::create("test.dot").unwrap()))
+        .write_dot(
+            KernelDotOutput::Cluster,
+            &mut BufWriter::new(File::create("test.dot").unwrap()),
+        )
         .unwrap();
 
     let norm_var = env.variable([1], "norm");

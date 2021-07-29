@@ -663,7 +663,7 @@ impl KernelCacheWorker {
         let device = &self.context.device;
 
         let source = kernel.generate_source().unwrap();
-        println!("{}", source);
+        //println!("{}", source);
 
         let shader_module = match self.compiler.compile_into_spirv(
             &source,
