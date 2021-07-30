@@ -184,6 +184,10 @@ impl Shape {
         AxisMapping::new(axis, self[axis])
     }
 
+    pub(crate) fn iter_axes(&self) -> impl Iterator<Item = Axis> {
+        (0..self.len()).map(Axis::from_index)
+    }
+
     pub(crate) fn axis(&self, index: isize) -> Axis {
         // address from end if negative
         Axis::from_index((index as usize).wrapping_add(if index < 0 { self.0.len() } else { 0 }))
@@ -339,7 +343,6 @@ impl AxisMapping {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct View {
     pub(crate) input_shape: Shape,
-    pub(crate) input_padding: TinyVec<[usize; MAX_DIM]>,
     pub(crate) input_offsets: TinyVec<[isize; MAX_DIM]>,
     pub(crate) output_mapping: TinyVec<[AxisMapping; MAX_DIM]>,
     pub(crate) output_shape: Shape,
@@ -349,7 +352,6 @@ impl View {
     fn new(shape: &Shape) -> Self {
         Self {
             input_shape: *shape,
-            input_padding: iter::repeat(0).take(shape.len()).collect(),
             input_offsets: iter::repeat(0).take(shape.len()).collect(),
             output_mapping: (0..shape.len())
                 .map(|index| shape.identity_mapping(Axis::from_index(index)))
@@ -360,7 +362,6 @@ impl View {
 
     fn with_pad(shape: &Shape, axis: Axis, pad: usize) -> Self {
         let mut tmp = View::new(shape);
-        tmp.input_padding[axis.index()] = pad;
         tmp.input_offsets[axis.index()] = -(pad as isize);
         tmp.output_shape = tmp.output_shape.pad(axis, pad);
         tmp
@@ -370,21 +371,81 @@ impl View {
         Self::new(&self.output_shape).eq(self)
     }
 
-    fn can_restrict_to(&self, view: &View) -> bool {
+    fn input_axis_mapping_count(&self, input_axis: Axis) -> usize {
+        self.output_mapping
+            .iter()
+            .filter(|mapping| match mapping {
+                AxisMapping::Source { axis, .. } => *axis == input_axis,
+                AxisMapping::Broadcast => false,
+            })
+            .count()
+    }
+
+    fn output_spans_input(&self, output_axis: Axis) -> bool {
+        match self.output_mapping[output_axis.index()] {
+            AxisMapping::Source {
+                axis: input_axis,
+                step,
+            } => {
+                if self.input_axis_mapping_count(input_axis) == 1 {
+                    let base = self.input_offsets[input_axis.index()];
+                    let offset = ((self.output_shape[output_axis] - 1) as isize) * step;
+                    let span_min = base - offset.min(0);
+                    let span_max = base + offset.max(0);
+                    let input_min = 0;
+                    let input_max = (self.input_shape[input_axis] - 1) as isize;
+                    span_min <= input_min && input_max <= span_max
+                } else {
+                    false
+                }
+            }
+            AxisMapping::Broadcast => true,
+        }
+    }
+
+    fn can_combine_with(&self, view: &View) -> bool {
         self.output_shape == view.input_shape
-            && view.input_padding.iter().all(|&padding| padding == 0)
+            && self
+                .output_shape
+                .iter_axes()
+                .all(|axis| self.output_spans_input(axis) || !view.input_needs_clamp(axis))
     }
 
     fn can_reshape_to(&self, view: &View) -> bool {
         self.is_identity() && self.output_shape.element_count() == view.input_shape.element_count()
     }
 
+    pub(crate) fn input_needs_clamp(&self, input_axis: Axis) -> bool {
+        let mut offset_min = self.input_offsets[input_axis.index()];
+        let mut offset_max = offset_min;
+        for (mapping, len) in self
+            .output_mapping
+            .iter()
+            .copied()
+            .zip(self.output_shape.iter().copied())
+        {
+            match mapping {
+                AxisMapping::Source { axis, step } => {
+                    if axis == input_axis {
+                        let offset = ((len - 1) as isize) * step;
+                        offset_min -= offset.min(0);
+                        offset_max += offset.max(0);
+                    }
+                }
+                AxisMapping::Broadcast => {}
+            }
+        }
+        let input_min = 0;
+        let input_max = (self.input_shape[input_axis] - 1) as isize;
+        offset_min < input_min || input_max < offset_max
+    }
+
     pub(crate) fn can_view_through(&self, view: &View, can_reshape: bool) -> bool {
-        self.can_restrict_to(view) || (can_reshape && self.can_reshape_to(view))
+        self.can_combine_with(view) || (can_reshape && self.can_reshape_to(view))
     }
 
     pub(crate) fn through(&self, view: &View, can_reshape: bool) -> Self {
-        if !self.can_restrict_to(view) {
+        if !self.can_combine_with(view) {
             assert!(can_reshape && self.can_reshape_to(view));
             return *view;
         }
@@ -414,7 +475,6 @@ impl View {
             .collect();
         Self {
             input_shape: self.input_shape,
-            input_padding: self.input_padding,
             input_offsets,
             output_mapping,
             output_shape: view.output_shape,
@@ -425,7 +485,6 @@ impl View {
         assert_eq!(self.output_mapping.len(), 2);
         Self {
             input_shape: self.input_shape,
-            input_padding: self.input_padding,
             input_offsets: self.input_offsets,
             output_mapping: self.output_mapping.iter().copied().rev().collect(),
             output_shape: self.output_shape.transposed(),
@@ -452,7 +511,6 @@ impl View {
         }
         Self {
             input_shape: *input_shape,
-            input_padding: iter::repeat(0).take(input_shape.len()).collect(),
             input_offsets: iter::repeat(0).take(input_shape.len()).collect(),
             output_mapping,
             output_shape: *output_shape,

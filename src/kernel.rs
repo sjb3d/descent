@@ -72,9 +72,9 @@ fn generate_load_coord(
     coord_name: &str,
     w: &mut impl Write,
 ) -> fmt::Result {
-    let pad = view.input_padding[input_axis.index()];
+    let needs_clamp = view.input_needs_clamp(input_axis);
     let offset = view.input_offsets[input_axis.index()];
-    if pad != 0 {
+    if needs_clamp {
         write!(w, "clamp({}", offset)?;
     } else {
         write!(w, "({}", offset)?;
@@ -91,7 +91,7 @@ fn generate_load_coord(
         }
     }
 
-    if pad != 0 {
+    if needs_clamp {
         write!(w, ", 0, {})", view.input_shape[input_axis] - 1)?;
     } else {
         write!(w, ")")?;
