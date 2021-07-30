@@ -2,7 +2,7 @@ use crate::common::*;
 use ordered_float::NotNan;
 use petgraph::prelude::*;
 use slotmap::SparseSecondaryMap;
-use std::{cell::RefCell, convert::TryInto, iter, ops};
+use std::{cell::RefCell, convert::TryInto, ops};
 
 #[derive(Clone, Copy)]
 pub struct Array<'g> {
@@ -239,25 +239,22 @@ impl<'g> Array<'g> {
         }
     }
 
-    pub(crate) fn pad_image(self, pad: usize) -> Self {
+    pub(crate) fn pad(self, axis: isize, pad: usize) -> Self {
         if pad == 0 {
             return self;
         }
-
         let shape = self.shape();
-        assert!(shape.len() >= 3);
-        let mut pad_vec = ShapeVec::new();
-        pad_vec.extend(iter::repeat(0).take(shape.len() - 3));
-        pad_vec.extend_from_slice(&[pad, pad, 0]);
-        self.view(self.shape().padded_view(pad_vec.as_slice()))
+        self.view(shape.padded_view(shape.axis(axis), pad))
     }
 
-    pub(crate) fn unpad(self, axis: Axis, pad: usize) -> Self {
+    pub(crate) fn unpad(self, axis: isize, pad: usize) -> Self {
         if pad == 0 {
             return self;
         }
         self.graph.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape.unpad(axis, pad);
+            let shape = state.ops.graph[self.node_id].shape;
+            let axis = shape.axis(axis);
+            let shape = shape.unpad(axis, pad);
             Array {
                 node_id: state
                     .ops
@@ -267,9 +264,12 @@ impl<'g> Array<'g> {
         })
     }
 
-    fn unpad_image(self, pad: usize) -> Self {
-        let shape = self.shape();
-        self.unpad(shape.axis(-3), pad).unpad(shape.axis(-2), pad)
+    pub(crate) fn pad_image(self, pad: usize) -> Self {
+        self.pad(-3, pad).pad(-2, pad)
+    }
+
+    pub(crate) fn unpad_image(self, pad: usize) -> Self {
+        self.unpad(-3, pad).unpad(-2, pad)
     }
 
     fn image_to_windows(

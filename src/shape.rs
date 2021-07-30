@@ -176,12 +176,12 @@ impl Shape {
         View::new(self)
     }
 
-    pub(crate) fn identity_mapping(&self, axis: Axis) -> AxisMapping {
-        AxisMapping::new(axis, self[axis])
+    pub(crate) fn padded_view(&self, axis: Axis, pad: usize) -> View {
+        View::with_pad(self, axis, pad)
     }
 
-    pub(crate) fn padded_view(&self, pad: &[usize]) -> View {
-        View::with_pad(self, pad)
+    pub(crate) fn identity_mapping(&self, axis: Axis) -> AxisMapping {
+        AxisMapping::new(axis, self[axis])
     }
 
     pub(crate) fn axis(&self, index: isize) -> Axis {
@@ -358,25 +358,12 @@ impl View {
         }
     }
 
-    fn with_pad(shape: &Shape, pad: &[usize]) -> Self {
-        assert_eq!(shape.len(), pad.len());
-        let padded_shape = Shape::new(
-            shape
-                .iter()
-                .copied()
-                .zip(pad.iter().copied())
-                .map(|(len, pad)| len + 2 * pad)
-                .collect(),
-        );
-        Self {
-            input_shape: *shape,
-            input_padding: pad.iter().cloned().collect(),
-            input_offsets: iter::repeat(0).take(shape.len()).collect(),
-            output_mapping: (0..padded_shape.len())
-                .map(|index| padded_shape.identity_mapping(Axis::from_index(index)))
-                .collect(),
-            output_shape: padded_shape,
-        }
+    fn with_pad(shape: &Shape, axis: Axis, pad: usize) -> Self {
+        let mut tmp = View::new(shape);
+        tmp.input_padding[axis.index()] = pad;
+        tmp.input_offsets[axis.index()] = -(pad as isize);
+        tmp.output_shape = tmp.output_shape.pad(axis, pad);
+        tmp
     }
 
     pub(crate) fn is_identity(&self) -> bool {

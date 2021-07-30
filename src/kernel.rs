@@ -75,7 +75,7 @@ fn generate_load_coord(
     let pad = view.input_padding[input_axis.index()];
     let offset = view.input_offsets[input_axis.index()];
     if pad != 0 {
-        write!(w, "clamp({} - {}", offset, pad)?;
+        write!(w, "clamp({}", offset)?;
     } else {
         write!(w, "({}", offset)?;
     }

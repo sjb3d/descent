@@ -107,12 +107,7 @@ mod tests {
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.graph();
-        g.write_variable(
-            &b_var,
-            g.read_variable(&a_var)
-                .unpad(Axis::from_index(1), 1)
-                .unpad(Axis::from_index(2), 1),
-        );
+        g.write_variable(&b_var, g.read_variable(&a_var).unpad_image(1));
 
         let g = g.build_schedule();
         env.run(&g);
