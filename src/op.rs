@@ -98,16 +98,7 @@ impl Op {
     }
 
     pub(crate) fn can_merge(&self) -> bool {
-        matches!(
-            self,
-            Self::Literal(_)
-                | Self::BuiltIn(_)
-                | Self::Unary(_)
-                | Self::Binary(_)
-                | Self::MatMul
-                | Self::Reduce { .. }
-                | Self::WindowsToImage { .. }
-        )
+        !matches!(self, Self::Input { .. } | Self::Output { .. })
     }
 }
 
