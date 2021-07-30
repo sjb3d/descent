@@ -236,24 +236,10 @@ fn main() {
         TestNetwork::ConvBlurNet => network
             .with_layer(Layer::Conv2D(Conv2D::new(32, 3, 3).with_pad(1)))
             .with_layer(Layer::LeakyRelu(0.01))
-            .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2).with_stride(1, 1)))
-            .with_layer(Layer::Conv2D(
-                Conv2D::new(1, 3, 3)
-                    .with_pad(1)
-                    .with_stride(2, 2)
-                    .with_groups(32)
-                    .with_blur(),
-            ))
+            .with_layer(Layer::MaxBlurPool2D)
             .with_layer(Layer::Conv2D(Conv2D::new(64, 3, 3).with_pad(1)))
             .with_layer(Layer::LeakyRelu(0.01))
-            .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2).with_stride(1, 1)))
-            .with_layer(Layer::Conv2D(
-                Conv2D::new(1, 3, 3)
-                    .with_pad(1)
-                    .with_stride(2, 2)
-                    .with_groups(64)
-                    .with_blur(),
-            ))
+            .with_layer(Layer::MaxBlurPool2D)
             .with_layer(Layer::Flatten)
             .with_layer(Layer::Dropout(0.5))
             .with_layer(Layer::Linear(Linear::new(128)))

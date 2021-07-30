@@ -97,6 +97,7 @@ pub enum Layer {
     LeakyRelu(f32),
     Conv2D(Conv2D),
     MaxPool2D(MaxPool2D),
+    MaxBlurPool2D,
     Flatten,
     Dropout(f32),
 }
@@ -125,14 +126,35 @@ impl NetworkBuilder {
         };
         let mut layers: Vec<Box<dyn LayerInstance>> = Vec::new();
         for layer in self.layers.drain(..) {
-            layers.push(match layer {
-                Layer::Linear(params) => Box::new(LinearInstance::new(&mut ctx, params)),
-                Layer::LeakyRelu(amount) => Box::new(LeakyReluInstance::new(amount)),
-                Layer::Conv2D(params) => Box::new(Conv2DInstance::new(&mut ctx, params)),
-                Layer::MaxPool2D(params) => Box::new(MaxPool2DInstance::new(&mut ctx, params)),
-                Layer::Flatten => Box::new(FlattenInstance::new(&mut ctx)),
-                Layer::Dropout(amount) => Box::new(DropoutInstance::new(amount)),
-            });
+            match layer {
+                Layer::Linear(params) => {
+                    layers.push(Box::new(LinearInstance::new(&mut ctx, params)))
+                }
+                Layer::LeakyRelu(amount) => layers.push(Box::new(LeakyReluInstance::new(amount))),
+                Layer::Conv2D(params) => {
+                    layers.push(Box::new(Conv2DInstance::new(&mut ctx, params)))
+                }
+                Layer::MaxPool2D(params) => {
+                    layers.push(Box::new(MaxPool2DInstance::new(&mut ctx, params)))
+                }
+                Layer::MaxBlurPool2D => {
+                    let num_channels = ctx.shape[SignedIndex(-1)];
+                    layers.push(Box::new(MaxPool2DInstance::new(
+                        &mut ctx,
+                        MaxPool2D::new(2, 2).with_stride(1, 1),
+                    )));
+                    layers.push(Box::new(Conv2DInstance::new(
+                        &mut ctx,
+                        Conv2D::new(1, 3, 3)
+                            .with_pad(1)
+                            .with_stride(2, 2)
+                            .with_groups(num_channels)
+                            .with_blur(),
+                    )));
+                }
+                Layer::Flatten => layers.push(Box::new(FlattenInstance::new(&mut ctx))),
+                Layer::Dropout(amount) => layers.push(Box::new(DropoutInstance::new(amount))),
+            }
         }
         Network {
             layers,
