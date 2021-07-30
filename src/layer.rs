@@ -254,7 +254,10 @@ impl Conv2DInstance {
             is_blur,
         } = params;
 
-        let padded_shape = ctx.shape.pad_image(pad);
+        let padded_shape = ctx
+            .shape
+            .pad(ctx.shape.axis(-3), pad)
+            .pad(ctx.shape.axis(-2), pad);
 
         let window_shape = padded_shape.image_to_windows(filter, stride, groups);
         let [out_h, out_w, _groups, filter_h, filter_w, filter_ic]: [usize; 6] =

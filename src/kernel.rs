@@ -132,8 +132,6 @@ impl Kernel for PerElementKernel {
         let mut src = String::new();
         let w = &mut src;
 
-        write!(w, "{}", include_str!("kernel_common.glsl"))?;
-
         let mut binding_index = 0;
         for input_index in 0..self.inputs.len() {
             generate_input_buffer(binding_index, input_index, w)?;
@@ -297,8 +295,6 @@ impl Kernel for MatMulKernel {
         let mut src = String::new();
         let w = &mut src;
 
-        write!(w, "{}", include_str!("kernel_common.glsl"))?;
-
         generate_input_buffer(0, 0, w)?;
         generate_input_buffer(1, 1, w)?;
         generate_output_buffer(2, 0, w)?;
@@ -428,8 +424,6 @@ impl Kernel for ReduceKernel {
         let mut src = String::new();
         let w = &mut src;
 
-        write!(w, "{}", include_str!("kernel_common.glsl"))?;
-
         generate_input_buffer(0, 0, w)?;
         generate_output_buffer(1, 0, w)?;
 
@@ -498,6 +492,74 @@ impl Kernel for ReduceKernel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct UnpadKernel {
+    pub(crate) shape: Shape,
+    pub(crate) input: View,
+    pub(crate) axis: Axis,
+    pub(crate) pad: usize,
+}
+
+impl Kernel for UnpadKernel {
+    fn generate_source(&self) -> Result<String, fmt::Error> {
+        let mut src = String::new();
+        let w = &mut src;
+
+        generate_input_buffer(0, 0, w)?;
+        generate_output_buffer(1, 0, w)?;
+
+        writeln!(w, "layout(local_size_x = 64) in;")?;
+        writeln!(w, "void main() {{")?;
+
+        writeln!(
+            w,
+            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
+            self.shape.element_count()
+        )?;
+        generate_coord("coord", &self.shape, w)?;
+
+        writeln!(w, "int out_coord = coord[{}];", self.axis.index())?;
+        writeln!(w, "int in_coord = out_coord + {};", self.pad)?;
+        writeln!(
+            w,
+            "int k_min = in_coord - ((out_coord == 0) ? {} : 0);",
+            self.pad
+        )?;
+        writeln!(
+            w,
+            "int k_max = in_coord + ((out_coord == {}) ? {} : 0);",
+            self.shape[self.axis] - 1,
+            self.pad
+        )?;
+
+        writeln!(w, "float sum = 0.f;")?;
+        writeln!(w, "for (int k = k_min; k <= k_max; ++k) {{")?;
+        writeln!(w, "coord[{}] = k;", self.axis.index())?;
+        write!(w, "sum += input0[")?;
+        generate_load_index(&self.input, "coord", w)?;
+        writeln!(w, "];")?;
+        writeln!(w, "}}")?;
+
+        writeln!(w, "output0[gl_GlobalInvocationID.x] = sum;")?;
+
+        writeln!(w, "}}")?;
+
+        Ok(src)
+    }
+
+    fn buffer_count(&self) -> usize {
+        2
+    }
+
+    fn group_count(&self) -> usize {
+        self.shape.element_count().div_round_up(64)
+    }
+
+    fn label_name(&self) -> String {
+        format!("Unpad {}", self.shape)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct WindowsToImageKernel {
     pub(crate) shape: Shape,
     pub(crate) input: View,
@@ -508,8 +570,6 @@ impl Kernel for WindowsToImageKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
-
-        write!(w, "{}", include_str!("kernel_common.glsl"))?;
 
         generate_input_buffer(0, 0, w)?;
         generate_output_buffer(1, 0, w)?;
@@ -605,6 +665,7 @@ pub(crate) enum GenericKernel {
     PerElement(PerElementKernel),
     Reduce(ReduceKernel),
     MatMul(MatMulKernel),
+    Unpad(UnpadKernel),
     WindowsToImage(WindowsToImageKernel),
 }
 
@@ -614,6 +675,7 @@ impl GenericKernel {
             GenericKernel::PerElement(kernel) => kernel,
             GenericKernel::MatMul(kernel) => kernel,
             GenericKernel::Reduce(kernel) => kernel,
+            GenericKernel::Unpad(kernel) => kernel,
             GenericKernel::WindowsToImage(kernel) => kernel,
         }
     }
@@ -662,8 +724,10 @@ impl KernelCacheWorker {
     fn create_module(&mut self, kernel: &GenericKernel) -> KernelModule {
         let device = &self.context.device;
 
-        let source = kernel.generate_source().unwrap();
+        let mut source = kernel.generate_source().unwrap();
         //println!("{}", source);
+
+        source.insert_str(0, include_str!("kernel_common.glsl"));
 
         let shader_module = match self.compiler.compile_into_spirv(
             &source,

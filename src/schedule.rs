@@ -479,6 +479,22 @@ impl Schedule {
                             outputs: vec![node_id],
                         }));
                     }
+                    Op::Unpad { axis, pad } => {
+                        let arg_sources = get_arg_sources(&self.ops, node_id);
+                        assert_eq!(arg_sources.len(), 1);
+                        let src0 = &arg_sources[0];
+                        self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
+                            kernel: GenericKernel::Unpad(UnpadKernel {
+                                shape: node.shape,
+                                input: src0.view,
+                                axis,
+                                pad,
+                            }),
+                            inputs: vec![src0.node_id],
+                            members: vec![node_id],
+                            outputs: vec![node_id],
+                        }));
+                    }
                     Op::WindowsToImage { stride } => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
                         assert_eq!(arg_sources.len(), 1);

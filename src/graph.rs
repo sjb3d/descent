@@ -252,19 +252,24 @@ impl<'g> Array<'g> {
         self.view(self.shape().padded_view(pad_vec.as_slice()))
     }
 
-    fn unpad_image(self, pad: usize) -> Self {
+    pub(crate) fn unpad(self, axis: Axis, pad: usize) -> Self {
         if pad == 0 {
             return self;
         }
+        self.graph.with_state(|state| {
+            let shape = state.ops.graph[self.node_id].shape.unpad(axis, pad);
+            Array {
+                node_id: state
+                    .ops
+                    .new_node(shape, Op::Unpad { axis, pad }, &[self.node_id]),
+                graph: self.graph,
+            }
+        })
+    }
 
-        // HACK: subview instead of sum for now
+    fn unpad_image(self, pad: usize) -> Self {
         let shape = self.shape();
-        let mut view = shape.identity_view();
-        view.input_offsets[shape.len() - 3] += pad as isize;
-        view.input_offsets[shape.len() - 2] += pad as isize;
-        view.output_shape[shape.len() - 3] -= 2 * pad;
-        view.output_shape[shape.len() - 2] -= 2 * pad;
-        self.view(view)
+        self.unpad(shape.axis(-3), pad).unpad(shape.axis(-2), pad)
     }
 
     fn image_to_windows(
@@ -573,7 +578,7 @@ impl<'g> DualArray<'g> {
         Self::new(b, db)
     }
 
-    fn pad_image(self, pad: usize) -> Self {
+    pub(crate) fn pad_image(self, pad: usize) -> Self {
         let (a, da) = self.into_inner();
 
         let b = a.pad_image(pad);
@@ -584,7 +589,7 @@ impl<'g> DualArray<'g> {
         Self::new(b, db)
     }
 
-    fn image_to_windows(
+    pub(crate) fn image_to_windows(
         self,
         filter: (usize, usize),
         stride: (usize, usize),

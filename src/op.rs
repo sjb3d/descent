@@ -66,7 +66,8 @@ pub(crate) enum Op {
     Binary(BinaryOp),
     CompareAndSelect(CompareMode),
     MatMul,
-    Reduce { reduce_op: ReduceOp, axis: Axis },
+    Reduce { reduce_op: ReduceOp, axis: Axis }, // TODO: 2D version?
+    Unpad { axis: Axis, pad: usize },           // TODO: 2D version?
     WindowsToImage { stride: (usize, usize) },
 }
 

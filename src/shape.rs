@@ -117,11 +117,16 @@ impl Shape {
         Shape::from([r, m, n])
     }
 
-    pub(crate) fn pad_image(&self, pad: usize) -> Self {
-        let mut p = *self;
-        p[SignedIndex(-3)] += 2 * pad;
-        p[SignedIndex(-2)] += 2 * pad;
-        p
+    pub(crate) fn unpad(&self, axis: Axis, pad: usize) -> Self {
+        let mut tmp = *self;
+        tmp[axis] -= 2 * pad;
+        tmp
+    }
+
+    pub(crate) fn pad(&self, axis: Axis, pad: usize) -> Self {
+        let mut tmp = *self;
+        tmp[axis] += 2 * pad;
+        tmp
     }
 
     pub(crate) fn image_to_windows(
@@ -367,8 +372,8 @@ impl View {
             input_shape: *shape,
             input_padding: pad.iter().cloned().collect(),
             input_offsets: iter::repeat(0).take(shape.len()).collect(),
-            output_mapping: (0..shape.len())
-                .map(|index| shape.identity_mapping(Axis::from_index(index)))
+            output_mapping: (0..padded_shape.len())
+                .map(|index| padded_shape.identity_mapping(Axis::from_index(index)))
                 .collect(),
             output_shape: padded_shape,
         }
