@@ -7,17 +7,16 @@ publish = false
 
 [dependencies]
 arrayvec = "0.7"
-matrixmultiply = "0.3"
 rand = "0.8"
-petgraph = "0.5"
+petgraph = "0.6"
 #spark = { git = "https://github.com/sjb3d/spark/" }
 spark = { path = "../spark/spark" }
 shaderc = "0.7"
 slotmap = "1.0"
 trait-set = "0.2"
-ordered-float = "2.0"
-bytemuck = "1.5"
-tinyvec = "1.2"
+ordered-float = "2.7"
+bytemuck = "1.7"
+tinyvec = "1.3"
 
 [dev-dependencies]
 rand_chacha = "0.3"
