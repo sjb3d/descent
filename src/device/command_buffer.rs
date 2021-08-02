@@ -70,7 +70,7 @@ impl CommandBuffers {
             buffers.push_back(Fenced::new(CommandBuffer::new(context), fences.old_id()));
         }
         Self {
-            context: SharedContext::clone(&context),
+            context: SharedContext::clone(context),
             buffers,
         }
     }

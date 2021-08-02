@@ -377,7 +377,7 @@ impl Schedule {
             let graph = &self.ops;
             for node_id in members.iter().copied() {
                 // gather the arguments (loading as necessary)
-                let arg_sources = get_arg_sources(&graph, node_id);
+                let arg_sources = get_arg_sources(graph, node_id);
                 let args: TinyVec<[usize; MAX_OP_ARGS]> = arg_sources
                     .iter()
                     .map(|source| {
