@@ -37,6 +37,19 @@ pub trait Module {
     }
 }
 
+pub trait EvalWithModule<M: Module + ?Sized> {
+    fn eval_with(self, module: &M, ctx: &EvalContext) -> Self;
+}
+
+impl<'g, M> EvalWithModule<M> for DualArray<'g>
+where
+    M: Module + ?Sized,
+{
+    fn eval_with(self, module: &M, ctx: &EvalContext) -> Self {
+        self.map(|x| module.eval(x, ctx))
+    }
+}
+
 pub struct Dense {
     w: Variable,
     b: Variable, // TODO: optional?

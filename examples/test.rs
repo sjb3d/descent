@@ -220,7 +220,7 @@ impl TestLinear {
 
 impl Module for TestLinear {
     fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
-        input.flatten().next_colour().map(|x| self.fc.eval(x, ctx))
+        input.flatten().next_colour().eval_with(&self.fc, ctx)
     }
 }
 
@@ -243,10 +243,10 @@ impl Module for TestHidden300 {
         input
             .flatten()
             .next_colour()
-            .map(|x| self.fc1.eval(x, ctx))
+            .eval_with(&self.fc1, ctx)
             .leaky_relu(0.01)
             .next_colour()
-            .map(|x| self.fc2.eval(x, ctx))
+            .eval_with(&self.fc2, ctx)
     }
 }
 
@@ -284,22 +284,22 @@ impl Module for TestConvNet {
     fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
         input
             .next_colour()
-            .map(|x| self.conv1.eval(x, ctx))
+            .eval_with(&self.conv1, ctx)
             .leaky_relu(0.01)
             .next_colour()
-            .map(|x| self.pool1.eval(x, ctx))
+            .eval_with(self.pool1.as_ref(), ctx)
             .next_colour()
-            .map(|x| self.conv2.eval(x, ctx))
+            .eval_with(&self.conv2, ctx)
             .leaky_relu(0.01)
             .next_colour()
-            .map(|x| self.pool2.eval(x, ctx))
+            .eval_with(self.pool2.as_ref(), ctx)
             .next_colour()
             .flatten()
-            .map(|x| Dropout::new(0.5).eval(x, ctx))
-            .map(|x| self.fc1.eval(x, ctx))
+            .eval_with(&Dropout::new(0.5), ctx)
+            .eval_with(&self.fc1, ctx)
             .leaky_relu(0.01)
             .next_colour()
-            .map(|x| self.fc2.eval(x, ctx))
+            .eval_with(&self.fc2, ctx)
     }
 }
 
