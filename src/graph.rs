@@ -605,6 +605,18 @@ impl<'g> DualArray<'g> {
         Self::new(b, db)
     }
 
+    pub fn next_colour(self) -> Self {
+        self.graph().next_colour();
+        self
+    }
+
+    pub fn map<F>(self, f: F) -> Self
+    where
+        F: FnOnce(DualArray<'g>) -> DualArray<'g>,
+    {
+        f(self)
+    }
+
     pub fn conv2d(
         self,
         filter: impl IntoDualArray<'g>,
@@ -673,6 +685,14 @@ impl<'g> DualArray<'g> {
         da.accumulate(a.select_eq(b, db, 0.0));
 
         Self::new(b, db)
+    }
+
+    pub fn flatten(self) -> Self {
+        let shape = self.shape();
+        let (first, suffix) = shape.split_first().unwrap();
+        let m = *first;
+        let count = suffix.iter().copied().product();
+        self.reshape([m, count])
     }
 
     pub fn set_loss(self) -> Array<'g> {
@@ -889,6 +909,21 @@ impl Graph {
     pub fn next_colour(&self) {
         self.with_state(|state| {
             state.ops.next_colour += 1;
+        })
+    }
+
+    pub fn trainable_parameters(&self) -> Vec<Variable> {
+        self.with_state(|state| {
+            let mut v = Vec::new();
+            for node in state.ops.graph.node_weights() {
+                if let Op::Input { variable_id } = node.op {
+                    let variable = Variable::new(variable_id, &state.variables);
+                    if variable.is_trainable() {
+                        v.push(variable);
+                    }
+                }
+            }
+            v
         })
     }
 

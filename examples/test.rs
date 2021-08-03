@@ -1,7 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use descent::{layer::*, prelude::*};
 use flate2::bufread::GzDecoder;
-use rand::{prelude::SliceRandom, SeedableRng};
+use rand::{prelude::SliceRandom, Rng, SeedableRng};
 use std::{
     convert::TryInto,
     fs::File,
@@ -149,7 +149,7 @@ fn adam_step(
 ) {
     graph.next_colour();
 
-    let t_var = env.variable([1], "t");
+    let t_var = env.static_parameter([1], "t");
     env.writer(&t_var).zero_fill();
 
     let t = graph.update_variable(&t_var, |t| t + 1.0);
@@ -158,8 +158,8 @@ fn adam_step(
 
     for var in variables.iter() {
         let shape = var.shape();
-        let m_var = env.variable(shape.clone(), "m");
-        let v_var = env.variable(shape.clone(), "v");
+        let m_var = env.static_parameter(shape.clone(), "m");
+        let v_var = env.static_parameter(shape.clone(), "v");
         env.writer(&m_var).zero_fill();
         env.writer(&v_var).zero_fill();
 
@@ -206,61 +206,132 @@ struct AppParams {
     weight_decay: f32,
 }
 
+struct TestLinear {
+    fc: Dense,
+}
+
+impl TestLinear {
+    fn new(env: &mut Environment, rng: &mut impl Rng) -> Self {
+        Self {
+            fc: Dense::new(env, rng, 28 * 28, 10),
+        }
+    }
+}
+
+impl Module for TestLinear {
+    fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
+        input.flatten().next_colour().map(|x| self.fc.eval(x, ctx))
+    }
+}
+
+struct TestHidden300 {
+    fc1: Dense,
+    fc2: Dense,
+}
+
+impl TestHidden300 {
+    fn new(env: &mut Environment, rng: &mut impl Rng) -> Self {
+        Self {
+            fc1: Dense::new(env, rng, 28 * 28, 300),
+            fc2: Dense::new(env, rng, 300, 10),
+        }
+    }
+}
+
+impl Module for TestHidden300 {
+    fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
+        input
+            .flatten()
+            .next_colour()
+            .map(|x| self.fc1.eval(x, ctx))
+            .leaky_relu(0.01)
+            .next_colour()
+            .map(|x| self.fc2.eval(x, ctx))
+    }
+}
+
+struct TestConvNet {
+    conv1: Conv2D,
+    pool1: Box<dyn Module>,
+    conv2: Conv2D,
+    pool2: Box<dyn Module>,
+    fc1: Dense,
+    fc2: Dense,
+}
+
+impl TestConvNet {
+    fn new(env: &mut Environment, rng: &mut impl Rng, use_blur_pool: bool) -> Self {
+        Self {
+            conv1: Conv2D::builder(1, 32, 3, 3).with_pad(1).build(env, rng),
+            pool1: if use_blur_pool {
+                Box::new(MaxBlurPool2D::new(env, rng, 32))
+            } else {
+                Box::new(MaxPool2D::new())
+            },
+            conv2: Conv2D::builder(32, 64, 3, 3).with_pad(1).build(env, rng),
+            pool2: if use_blur_pool {
+                Box::new(MaxBlurPool2D::new(env, rng, 64))
+            } else {
+                Box::new(MaxPool2D::new())
+            },
+            fc1: Dense::new(env, rng, 7 * 7 * 64, 128),
+            fc2: Dense::new(env, rng, 128, 10),
+        }
+    }
+}
+
+impl Module for TestConvNet {
+    fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
+        input
+            .next_colour()
+            .map(|x| self.conv1.eval(x, ctx))
+            .leaky_relu(0.01)
+            .next_colour()
+            .map(|x| self.pool1.eval(x, ctx))
+            .next_colour()
+            .map(|x| self.conv2.eval(x, ctx))
+            .leaky_relu(0.01)
+            .next_colour()
+            .map(|x| self.pool2.eval(x, ctx))
+            .next_colour()
+            .flatten()
+            .map(|x| Dropout::new(0.5).eval(x, ctx))
+            .map(|x| self.fc1.eval(x, ctx))
+            .leaky_relu(0.01)
+            .next_colour()
+            .map(|x| self.fc2.eval(x, ctx))
+    }
+}
+
 fn main() {
     let app_params = AppParams::from_args();
 
     let mut env = Environment::new();
-
-    let network = Network::builder();
-    let network = match app_params.network {
-        TestNetwork::Linear => network
-            .with_layer(Layer::Flatten)
-            .with_layer(Layer::Linear(Linear::new(10))),
-        TestNetwork::Hidden300 => network
-            .with_layer(Layer::Flatten)
-            .with_layer(Layer::Linear(Linear::new(300)))
-            .with_layer(Layer::LeakyRelu(0.01))
-            .with_layer(Layer::Linear(Linear::new(10))),
-        TestNetwork::ConvNet => network
-            .with_layer(Layer::Conv2D(Conv2D::new(32, 3, 3).with_pad(1)))
-            .with_layer(Layer::LeakyRelu(0.01))
-            .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2)))
-            .with_layer(Layer::Conv2D(Conv2D::new(64, 3, 3).with_pad(1)))
-            .with_layer(Layer::LeakyRelu(0.01))
-            .with_layer(Layer::MaxPool2D(MaxPool2D::new(2, 2)))
-            .with_layer(Layer::Flatten)
-            .with_layer(Layer::Dropout(0.5))
-            .with_layer(Layer::Linear(Linear::new(128)))
-            .with_layer(Layer::LeakyRelu(0.01))
-            .with_layer(Layer::Linear(Linear::new(10))),
-        TestNetwork::ConvBlurNet => network
-            .with_layer(Layer::Conv2D(Conv2D::new(32, 3, 3).with_pad(1)))
-            .with_layer(Layer::LeakyRelu(0.01))
-            .with_layer(Layer::MaxBlurPool2D)
-            .with_layer(Layer::Conv2D(Conv2D::new(64, 3, 3).with_pad(1)))
-            .with_layer(Layer::LeakyRelu(0.01))
-            .with_layer(Layer::MaxBlurPool2D)
-            .with_layer(Layer::Flatten)
-            .with_layer(Layer::Dropout(0.5))
-            .with_layer(Layer::Linear(Linear::new(128)))
-            .with_layer(Layer::LeakyRelu(0.01))
-            .with_layer(Layer::Linear(Linear::new(10))),
-    };
     let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
-    let network = network.finish([28, 28, 1], &mut env, &mut rng);
+
+    let module: Box<dyn Module> = {
+        let env = &mut env;
+        let rng = &mut rng;
+        match app_params.network {
+            TestNetwork::Linear => Box::new(TestLinear::new(env, rng)),
+            TestNetwork::Hidden300 => Box::new(TestHidden300::new(env, rng)),
+            TestNetwork::ConvNet => Box::new(TestConvNet::new(env, rng, false)),
+            TestNetwork::ConvBlurNet => Box::new(TestConvNet::new(env, rng, true)),
+        }
+    };
 
     let m = app_params.mini_batch_size;
-    let x_var = env.variable([m, 28, 28, 1], "x");
-    let y_var = env.variable([m, 1], "y");
+    let x_var = env.static_parameter([m, 28, 28, 1], "x");
+    let y_var = env.static_parameter([m, 1], "y");
 
-    let loss_sum_var = env.variable([1], "loss");
-    let accuracy_sum_var = env.variable([1], "accuracy");
+    let loss_sum_var = env.static_parameter([1], "loss");
+    let accuracy_sum_var = env.static_parameter([1], "accuracy");
 
-    let train_graph = {
+    let (train_graph, parameters) = {
         let graph = env.graph();
 
         // emit the graph for the network
-        let x = network.train(graph.parameter(&x_var));
+        let x = module.train(graph.parameter(&x_var));
         let loss = softmax_cross_entropy_loss(x, &y_var);
 
         // accumulate loss (into variable)
@@ -276,14 +347,14 @@ fn main() {
 
         // train using gradient of the loss (scaled for size of mini batch)
         loss.set_loss();
-        let parameters = network.parameters();
-        add_weight_decay_to_grad(&graph, parameters, app_params.weight_decay);
+        let parameters = graph.trainable_parameters();
+        add_weight_decay_to_grad(&graph, &parameters, app_params.weight_decay);
         match app_params.optimizer {
-            Optimizer::Descent => stochastic_gradient_descent_step(&graph, parameters, 0.1),
-            Optimizer::Adam => adam_step(&mut env, &graph, parameters, 0.002, 0.9, 0.999, 1.0E-8),
+            Optimizer::Descent => stochastic_gradient_descent_step(&graph, &parameters, 0.1),
+            Optimizer::Adam => adam_step(&mut env, &graph, &parameters, 0.002, 0.9, 0.999, 1.0E-8),
         }
 
-        graph.build_schedule()
+        (graph.build_schedule(), parameters)
     };
     train_graph
         .write_dot(
@@ -302,7 +373,7 @@ fn main() {
         let graph = env.graph();
 
         // emit the graph for the network
-        let x = network.test(graph.parameter(&x_var));
+        let x = module.test(graph.parameter(&x_var));
         let loss = softmax_cross_entropy_loss(x, &y_var);
 
         // accumulate loss (into variable)
@@ -325,12 +396,12 @@ fn main() {
         )
         .unwrap();
 
-    let norm_var = env.variable([1], "norm");
+    let norm_var = env.static_parameter([1], "norm");
     let norm_graph = {
         let graph = env.graph();
 
         let mut sum = graph.literal(0.0);
-        for var in network.parameters().iter() {
+        for var in parameters.iter() {
             let x = graph.read_variable(&var);
             let x = x.reshape([x.shape().element_count()]);
             let x = x * x * 0.5;

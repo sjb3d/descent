@@ -98,15 +98,37 @@ impl Environment {
         }
     }
 
-    pub fn variable(&mut self, shape: impl Into<Shape>, name: impl Into<String>) -> Variable {
+    fn variable(
+        &mut self,
+        shape: impl Into<Shape>,
+        name: impl Into<String>,
+        is_trainable: bool,
+    ) -> Variable {
         let shape = shape.into();
         let name = name.into();
         let variable_id = self.variables.borrow_mut().insert(VariableStorage {
             shape,
             name,
+            is_trainable,
             buffer_id: None,
         });
         Variable::new(variable_id, &self.variables)
+    }
+
+    pub fn static_parameter(
+        &mut self,
+        shape: impl Into<Shape>,
+        name: impl Into<String>,
+    ) -> Variable {
+        self.variable(shape, name, false)
+    }
+
+    pub fn trainable_parameter(
+        &mut self,
+        shape: impl Into<Shape>,
+        name: impl Into<String>,
+    ) -> Variable {
+        self.variable(shape, name, true)
     }
 
     pub fn writer(&mut self, variable: &Variable) -> VariableWriter {

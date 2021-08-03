@@ -9,6 +9,7 @@ slotmap::new_key_type! {
 pub(crate) struct VariableStorage {
     pub(crate) shape: Shape,
     pub(crate) name: String,
+    pub(crate) is_trainable: bool,
     pub(crate) buffer_id: Option<BufferId>,
 }
 
@@ -41,5 +42,17 @@ impl Variable {
 
     pub fn name(&self) -> String {
         self.owner.borrow().get(self.id).unwrap().name.clone()
+    }
+
+    pub fn is_trainable(&self) -> bool {
+        self.owner.borrow().get(self.id).unwrap().is_trainable
+    }
+
+    pub fn set_trainable(&self, is_trainable: bool) {
+        self.owner
+            .borrow_mut()
+            .get_mut(self.id)
+            .unwrap()
+            .is_trainable = is_trainable;
     }
 }

@@ -24,7 +24,7 @@ mod tests {
     fn variables() {
         let mut env = Environment::new();
 
-        let a_var = env.variable([10], "a");
+        let a_var = env.static_parameter([10], "a");
 
         let a_data = [0f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
@@ -44,8 +44,8 @@ mod tests {
         let a_data: Vec<f32> = (0..100).map(|i| i as f32).collect();
         let b_data: Vec<f32> = a_data.chunks(10).map(|v| v.iter().sum::<f32>()).collect();
 
-        let a_var = env.variable([10, 10], "a");
-        let b_var = env.variable([10, 1], "b");
+        let a_var = env.static_parameter([10, 10], "a");
+        let b_var = env.static_parameter([10, 1], "b");
 
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
@@ -69,8 +69,8 @@ mod tests {
         let a_data: Vec<f32> = iter::repeat(1.0).take(64).collect();
         let b_data: Vec<f32> = iter::repeat(1.0).take(100).collect();
 
-        let a_var = env.variable([1, 8, 8, 1], "a");
-        let b_var = env.variable([1, 10, 10, 1], "b");
+        let a_var = env.static_parameter([1, 8, 8, 1], "a");
+        let b_var = env.static_parameter([1, 10, 10, 1], "b");
 
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
@@ -101,8 +101,8 @@ mod tests {
             })
             .collect();
 
-        let a_var = env.variable([1, 10, 10, 1], "a");
-        let b_var = env.variable([1, 8, 8, 1], "b");
+        let a_var = env.static_parameter([1, 10, 10, 1], "a");
+        let b_var = env.static_parameter([1, 8, 8, 1], "b");
 
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
@@ -127,9 +127,9 @@ mod tests {
         let b_data: Vec<f32> = iter::repeat(1.0).take(9).collect();
         let c_data: Vec<f32> = iter::repeat(9.0).take(64).collect();
 
-        let a_var = env.variable([1, 10, 10, 1], "a");
-        let b_var = env.variable([1, 3, 3, 1], "b");
-        let c_var = env.variable([1, 8, 8, 1], "c");
+        let a_var = env.static_parameter([1, 10, 10, 1], "a");
+        let b_var = env.static_parameter([1, 3, 3, 1], "b");
+        let c_var = env.static_parameter([1, 8, 8, 1], "c");
 
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
         env.writer(&b_var).write_all(cast_slice(&b_data)).unwrap();
@@ -159,8 +159,8 @@ mod tests {
             .map(|i| (11 + 2 * (i % 5) + 20 * (i / 5)) as f32)
             .collect();
 
-        let a_var = env.variable([1, 10, 10, 1], "a");
-        let b_var = env.variable([1, 5, 5, 1], "b");
+        let a_var = env.static_parameter([1, 10, 10, 1], "a");
+        let b_var = env.static_parameter([1, 5, 5, 1], "b");
 
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
