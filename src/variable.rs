@@ -6,11 +6,24 @@ slotmap::new_key_type! {
     pub(crate) struct VariableId;
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum VariableContents {
+    Zero,
+    RandNormal(f32),
+}
+
+impl VariableContents {
+    pub fn normal_from_fan_in(fan_in: usize) -> Self {
+        let scale = (2.0 / (fan_in as f32)).sqrt();
+        Self::RandNormal(scale)
+    }
+}
+
 pub(crate) struct VariableStorage {
     pub(crate) shape: Shape,
     pub(crate) name: String,
-    pub(crate) is_trainable: bool,
     pub(crate) buffer_id: Option<BufferId>,
+    pub(crate) reset_to: Option<VariableContents>,
 }
 
 pub(crate) type SharedVariables = Rc<RefCell<SlotMap<VariableId, VariableStorage>>>;
@@ -44,15 +57,11 @@ impl Variable {
         self.owner.borrow().get(self.id).unwrap().name.clone()
     }
 
-    pub fn is_trainable(&self) -> bool {
-        self.owner.borrow().get(self.id).unwrap().is_trainable
+    pub fn reset_to(&self) -> Option<VariableContents> {
+        self.owner.borrow().get(self.id).unwrap().reset_to
     }
 
-    pub fn set_trainable(&self, is_trainable: bool) {
-        self.owner
-            .borrow_mut()
-            .get_mut(self.id)
-            .unwrap()
-            .is_trainable = is_trainable;
+    pub fn is_trainable(&self) -> bool {
+        self.owner.borrow().get(self.id).unwrap().reset_to.is_some()
     }
 }

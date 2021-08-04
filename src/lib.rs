@@ -22,6 +22,8 @@ mod tests {
     use bytemuck::{cast_slice, cast_slice_mut};
     use std::{io::prelude::*, iter};
 
+    const TEST_RAND_SEED: u32 = 0x5EED5EED;
+
     #[test]
     fn variables() {
         let mut env = Environment::new();
@@ -55,7 +57,7 @@ mod tests {
         g.write_variable(&b_var, g.read_variable(&a_var).reduce_sum(-1));
 
         let g = g.build_schedule();
-        env.run(&g);
+        env.run(&g, TEST_RAND_SEED);
 
         let mut b_result = vec![0f32; b_data.len()];
         env.reader(&b_var)
@@ -80,7 +82,7 @@ mod tests {
         g.write_variable(&b_var, g.read_variable(&a_var).pad_image(1));
 
         let g = g.build_schedule();
-        env.run(&g);
+        env.run(&g, TEST_RAND_SEED);
 
         let mut b_result = vec![0f32; b_data.len()];
         env.reader(&b_var)
@@ -112,7 +114,7 @@ mod tests {
         g.write_variable(&b_var, g.read_variable(&a_var).unpad_image(1));
 
         let g = g.build_schedule();
-        env.run(&g);
+        env.run(&g, TEST_RAND_SEED);
 
         let mut b_result = vec![0f32; b_data.len()];
         env.reader(&b_var)
@@ -143,7 +145,7 @@ mod tests {
         );
 
         let g = g.build_schedule();
-        env.run(&g);
+        env.run(&g, TEST_RAND_SEED);
 
         let mut c_result = vec![0f32; c_data.len()];
         env.reader(&c_var)
@@ -173,7 +175,7 @@ mod tests {
         );
 
         let g = g.build_schedule();
-        env.run(&g);
+        env.run(&g, TEST_RAND_SEED);
 
         let mut b_result = vec![0f32; b_data.len()];
         env.reader(&b_var)

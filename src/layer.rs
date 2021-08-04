@@ -1,25 +1,5 @@
 use crate::common::*;
-use rand::{distributions::Open01, Rng};
-use std::{f32::consts::PI, io::Write};
-
-fn normal_from_uniform(u1: f32, u2: f32) -> f32 {
-    (-2.0 * u1.ln()).sqrt() * (2.0 * PI * u2).cos()
-}
-
-fn write_rand_uniform(
-    mut writer: impl Write,
-    fan_in: usize,
-    element_count: usize,
-    rng: &mut impl Rng,
-) {
-    let a = (2.0 / (fan_in as f32)).sqrt();
-    for _ in 0..element_count {
-        let u1: f32 = rng.sample(Open01);
-        let u2: f32 = rng.sample(Open01);
-        let n: f32 = a * normal_from_uniform(u1, u2);
-        writer.write_all(bytemuck::bytes_of(&n)).unwrap();
-    }
-}
+use std::io::Write;
 
 pub struct EvalContext {
     is_training: bool,
@@ -29,7 +9,7 @@ pub trait Module {
     fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g>;
 }
 
-pub trait ModuleExt : Module {
+pub trait ModuleExt: Module {
     fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
         self.eval(input, &EvalContext { is_training: true })
     }
@@ -60,12 +40,13 @@ pub struct Dense {
 }
 
 impl Dense {
-    pub fn new(env: &mut Environment, rng: &mut impl Rng, input: usize, output: usize) -> Self {
-        let w = env.trainable_parameter([input, output], "w");
-        let b = env.trainable_parameter([output], "b");
-
-        write_rand_uniform(env.writer(&w), input, input * output, rng);
-        env.writer(&b).zero_fill();
+    pub fn new(env: &mut Environment, input: usize, output: usize) -> Self {
+        let w = env.trainable_parameter(
+            [input, output],
+            "w",
+            VariableContents::normal_from_fan_in(input * output),
+        );
+        let b = env.trainable_parameter([output], "b", VariableContents::Zero);
 
         Self { w, b }
     }
@@ -108,7 +89,7 @@ impl Conv2DBuilder {
         self
     }
 
-    pub fn build(self, env: &mut Environment, rng: &mut impl Rng) -> Conv2D {
+    pub fn build(self, env: &mut Environment) -> Conv2D {
         let Self {
             input_channels: filter_ic,
             output_channels: filter_oc,
@@ -120,10 +101,10 @@ impl Conv2DBuilder {
         } = self;
         let (filter_w, filter_h) = filter;
 
-        let f = env.trainable_parameter([filter_oc, filter_h, filter_w, filter_ic], "f");
-        let b = env.trainable_parameter([filter_oc], "b");
+        let (f, b) = if is_blur {
+            let f = env.static_parameter([filter_oc, filter_h, filter_w, filter_ic], "f");
+            let b = env.static_parameter([filter_oc], "b");
 
-        if is_blur {
             assert_eq!([filter_oc, filter_h, filter_w, filter_ic], [1, 3, 3, 1]);
             let f_data: [f32; 9] = [
                 1.0 / 16.0,
@@ -136,17 +117,22 @@ impl Conv2DBuilder {
                 2.0 / 16.0,
                 1.0 / 16.0,
             ];
+
             env.writer(&f)
                 .write_all(bytemuck::bytes_of(&f_data))
                 .unwrap();
+            env.writer(&b).zero_fill();
 
-            f.set_trainable(false);
-            b.set_trainable(false);
+            (f, b)
         } else {
-            let fan_in = filter_h * filter_w * filter_ic;
-            write_rand_uniform(env.writer(&f), fan_in, fan_in * filter_oc, rng);
-        }
-        env.writer(&b).zero_fill();
+            let f = env.trainable_parameter(
+                [filter_oc, filter_h, filter_w, filter_ic],
+                "f",
+                VariableContents::normal_from_fan_in(filter_h * filter_w * filter_ic),
+            );
+            let b = env.trainable_parameter([filter_oc], "b", VariableContents::Zero);
+            (f, b)
+        };
 
         Conv2D {
             f,
@@ -226,14 +212,14 @@ pub struct MaxBlurPool2D {
 }
 
 impl MaxBlurPool2D {
-    pub fn new(env: &mut Environment, rng: &mut impl Rng, channels: usize) -> Self {
+    pub fn new(env: &mut Environment, channels: usize) -> Self {
         Self {
             blur: Conv2D::builder(1, 1, 3, 3)
                 .with_pad(1)
                 .with_stride(2, 2)
                 .with_groups(channels)
                 .with_blur()
-                .build(env, rng),
+                .build(env),
         }
     }
 }

@@ -1,16 +1,25 @@
 use crate::{common::*, device::common::*};
 use petgraph::visit::{IntoNodeReferences, NodeIndexable, NodeRef};
+use rand::{distributions::Open01, Rng};
 use slotmap::SlotMap;
 use spark::{vk, Builder};
 use std::{
-    cell::RefCell,
-    collections::{hash_map::DefaultHasher, HashSet},
-    ffi::CString,
-    hash::{Hash, Hasher},
-    io,
-    rc::Rc,
+    cell::RefCell, collections::HashSet, f32::consts::PI, ffi::CString, io, io::Write, rc::Rc,
     slice,
 };
+
+fn normal_from_uniform(u1: f32, u2: f32) -> f32 {
+    (-2.0 * u1.ln()).sqrt() * (2.0 * PI * u2).cos()
+}
+
+fn write_rand_normal(mut writer: impl Write, scale: f32, element_count: usize, rng: &mut impl Rng) {
+    for _ in 0..element_count {
+        let u1: f32 = rng.sample(Open01);
+        let u2: f32 = rng.sample(Open01);
+        let n: f32 = scale * normal_from_uniform(u1, u2);
+        writer.write_all(bytemuck::bytes_of(&n)).unwrap();
+    }
+}
 
 pub struct VariableWriter<'a>(StagingWriter<'a>);
 
@@ -65,7 +74,6 @@ pub struct Environment {
     kernel_cache: KernelCache,
     descriptor_pools: DescriptorPools,
     timestamps: TimestampSets,
-    run_counter: usize,
 }
 
 impl Default for Environment {
@@ -94,7 +102,6 @@ impl Environment {
             kernel_cache,
             descriptor_pools,
             timestamps,
-            run_counter: 0,
         }
     }
 
@@ -102,14 +109,14 @@ impl Environment {
         &mut self,
         shape: impl Into<Shape>,
         name: impl Into<String>,
-        is_trainable: bool,
+        reset_to: Option<VariableContents>,
     ) -> Variable {
         let shape = shape.into();
         let name = name.into();
         let variable_id = self.variables.borrow_mut().insert(VariableStorage {
             shape,
             name,
-            is_trainable,
+            reset_to,
             buffer_id: None,
         });
         Variable::new(variable_id, &self.variables)
@@ -120,15 +127,16 @@ impl Environment {
         shape: impl Into<Shape>,
         name: impl Into<String>,
     ) -> Variable {
-        self.variable(shape, name, false)
+        self.variable(shape, name, None)
     }
 
     pub fn trainable_parameter(
         &mut self,
         shape: impl Into<Shape>,
         name: impl Into<String>,
+        reset_to: VariableContents,
     ) -> Variable {
-        self.variable(shape, name, true)
+        self.variable(shape, name, Some(reset_to))
     }
 
     pub fn writer(&mut self, variable: &Variable) -> VariableWriter {
@@ -161,11 +169,22 @@ impl Environment {
         ))
     }
 
+    pub fn reset_variable(&mut self, variable: &Variable, rng: &mut impl Rng) {
+        let shape = variable.shape();
+        let writer = self.writer(variable);
+        match variable.reset_to().unwrap() {
+            VariableContents::Zero => writer.zero_fill(),
+            VariableContents::RandNormal(scale) => {
+                write_rand_normal(writer, scale, shape.element_count(), rng)
+            }
+        }
+    }
+
     pub fn graph(&self) -> Graph {
         Graph::new(SharedVariables::clone(&self.variables))
     }
 
-    pub fn run(&mut self, schedule: &Schedule) {
+    pub fn run(&mut self, schedule: &Schedule, rand_seed: u32) {
         let mut variables = self.variables.borrow_mut();
 
         // collect input and output variables
@@ -241,13 +260,6 @@ impl Environment {
         let cmd = self.command_buffers.acquire(&self.fences);
         let descriptor_pool = self.descriptor_pools.acquire(&self.fences);
         let mut timestamps = self.timestamps.acquire(cmd.get(), &self.fences);
-        let rand_seed: u32 = {
-            let mut hasher = DefaultHasher::new();
-            self.run_counter.hash(&mut hasher);
-            self.run_counter += 1;
-            let hash = hasher.finish();
-            ((hash >> 32) ^ hash) as u32
-        };
         for cluster_id in schedule.clusters_sorted.iter().copied() {
             let cluster = &schedule.clusters[cluster_id];
             for node_id in cluster.outputs.iter().copied() {

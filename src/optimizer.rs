@@ -12,7 +12,11 @@ pub fn add_weight_decay_to_grad(graph: &Graph, variables: &[Variable], weight_de
     }
 }
 
-pub fn stochastic_gradient_descent_step<'g>(graph: &'g Graph, variables: &[Variable], learning_rate: impl IntoArray<'g>) {
+pub fn stochastic_gradient_descent_step<'g>(
+    graph: &'g Graph,
+    variables: &[Variable],
+    learning_rate: impl IntoArray<'g>,
+) {
     graph.next_colour();
 
     let learning_rate = learning_rate.into_array(graph);
@@ -37,8 +41,8 @@ pub fn adam_step<'g>(
     env.writer(&t_var).zero_fill();
 
     let t = graph.update_variable(&t_var, |t| t + 1.0);
-    let alpha =
-        learning_rate.into_array(graph) * (1.0 - (beta2.ln() * t).exp()).sqrt() / (1.0 - (beta1.ln() * t).exp());
+    let alpha = learning_rate.into_array(graph) * (1.0 - (beta2.ln() * t).exp()).sqrt()
+        / (1.0 - (beta1.ln() * t).exp());
 
     for var in variables.iter() {
         let shape = var.shape();
