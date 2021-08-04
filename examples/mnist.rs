@@ -1,4 +1,3 @@
-use bytemuck::{Pod, Zeroable};
 use descent::{layer::*, loss::*, optimizer::*, prelude::*};
 use flate2::bufread::GzDecoder;
 use rand::{prelude::SliceRandom, RngCore, SeedableRng};
@@ -11,17 +10,16 @@ use std::{
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames, VariantNames};
 
-trait ReadValue<T> {
-    fn read_value(&mut self) -> io::Result<T>;
+trait ReadFloat {
+    fn read_f32(&mut self) -> io::Result<f32>;
 }
 
-impl<R, T> ReadValue<T> for R
+impl<R> ReadFloat for R
 where
     R: io::Read,
-    T: Pod + Zeroable,
 {
-    fn read_value(&mut self) -> io::Result<T> {
-        let mut res = T::zeroed();
+    fn read_f32(&mut self) -> io::Result<f32> {
+        let mut res: f32 = 0.0;
         self.read_exact(bytemuck::bytes_of_mut(&mut res))?;
         Ok(res)
     }
@@ -90,7 +88,7 @@ fn unpack_labels(
 
 #[derive(Debug, EnumString, EnumVariantNames)]
 #[strum(serialize_all = "kebab_case")]
-enum Network {
+enum NetworkType {
     Linear,
     SingleLayer,
     ConvNet,
@@ -99,7 +97,7 @@ enum Network {
 
 #[derive(Debug, EnumString, EnumVariantNames)]
 #[strum(serialize_all = "kebab_case")]
-enum Optimizer {
+enum OptimizerType {
     Descent,
     Adam,
 }
@@ -111,11 +109,14 @@ enum Optimizer {
     about = "Example networks to train using the Fashion MNIST dataset."
 )]
 struct AppParams {
-    #[structopt(possible_values=&Network::VARIANTS, default_value="single-layer")]
-    network: Network,
+    #[structopt(possible_values=&NetworkType::VARIANTS, default_value="single-layer")]
+    network: NetworkType,
 
-    #[structopt(short, long, possible_values=&Optimizer::VARIANTS, default_value="adam")]
-    optimizer: Optimizer,
+    #[structopt(short, long, possible_values=&OptimizerType::VARIANTS, default_value="adam")]
+    optimizer: OptimizerType,
+
+    #[structopt(short, long, default_value = "0.0005")]
+    weight_decay: f32,
 
     #[structopt(short, long, default_value = "1000")]
     mini_batch_size: usize,
@@ -123,8 +124,8 @@ struct AppParams {
     #[structopt(short, long, default_value = "40")]
     epoch_count: usize,
 
-    #[structopt(short, long, default_value = "0.0005")]
-    weight_decay: f32,
+    #[structopt(short, long, default_value = "5")]
+    trial_count: usize,
 }
 
 struct TestLinear {
@@ -220,6 +221,14 @@ impl Module for TestConvNet {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct Result {
+    trial_index: usize,
+    epoch_index: usize,
+    train_accuracy: f32,
+    test_accuracy: f32,
+}
+
 fn main() {
     let app_params = AppParams::from_args();
 
@@ -227,10 +236,10 @@ fn main() {
     let module: Box<dyn Module> = {
         let env = &mut env;
         match app_params.network {
-            Network::Linear => Box::new(TestLinear::new(env)),
-            Network::SingleLayer => Box::new(TestHidden300::new(env)),
-            Network::ConvNet => Box::new(TestConvNet::new(env, false)),
-            Network::ConvBlurNet => Box::new(TestConvNet::new(env, true)),
+            NetworkType::Linear => Box::new(TestLinear::new(env)),
+            NetworkType::SingleLayer => Box::new(TestHidden300::new(env)),
+            NetworkType::ConvNet => Box::new(TestConvNet::new(env, false)),
+            NetworkType::ConvBlurNet => Box::new(TestConvNet::new(env, true)),
         }
     };
 
@@ -243,7 +252,7 @@ fn main() {
     let accuracy_sum_var = env.static_parameter([1], "accuracy");
 
     // build a graph for training, collect the trainable parameters
-    let (train_graph, parameters) = {
+    let (train_graph, parameters, optimizer) = {
         let graph = env.graph();
 
         // emit the graph for the network
@@ -261,11 +270,13 @@ fn main() {
         let learning_rate_scale = graph.read_variable(&learning_rate_scale_var);
         let parameters = graph.trainable_parameters();
         add_weight_decay_to_grad(&graph, &parameters, app_params.weight_decay);
-        match app_params.optimizer {
-            Optimizer::Descent => {
-                stochastic_gradient_descent_step(&graph, &parameters, 0.1 * learning_rate_scale)
-            }
-            Optimizer::Adam => adam_step(
+        let optimizer: Box<dyn Optimizer> = match app_params.optimizer {
+            OptimizerType::Descent => Box::new(StochasticGradientDescent::new(
+                &graph,
+                &parameters,
+                0.1 * learning_rate_scale,
+            )),
+            OptimizerType::Adam => Box::new(Adam::new(
                 &mut env,
                 &graph,
                 &parameters,
@@ -273,10 +284,10 @@ fn main() {
                 0.9,
                 0.999,
                 1.0E-8,
-            ),
-        }
+            )),
+        };
 
-        (graph.build_schedule(), parameters)
+        (graph.build_schedule(), parameters, optimizer)
     };
     train_graph
         .write_dot(
@@ -360,66 +371,84 @@ fn main() {
     assert_eq!(test_image_rows, 28);
     assert_eq!(test_image_cols, 28);
 
-    // reset all trainable variables
-    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
-    for var in parameters.iter() {
-        env.reset_variable(var, &mut rng);
+    // attempt to train 5 times with different random seeds
+    let mut best_result = Result::default();
+    for trial_index in 0..app_params.trial_count {
+        // reset all trainable variables and optimizer state
+        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(trial_index as u64);
+        for var in parameters.iter() {
+            env.reset_variable(var, &mut rng);
+        }
+        optimizer.reset_state(&mut env);
+
+        // run epochs
+        let mut indices = Vec::new();
+        for epoch_index in 0..app_params.epoch_count {
+            // update learning for this epoch (halve every 40 epochs)
+            let learning_rate_scale = 0.5f32.powf((epoch_index as f32) / 40.0);
+            env.writer(&learning_rate_scale_var)
+                .write_all(bytemuck::bytes_of(&learning_rate_scale))
+                .unwrap();
+
+            // loop over training mini-batches
+            indices.clear();
+            indices.extend(0..train_image_count);
+            indices.shuffle(&mut rng);
+            env.writer(&loss_sum_var).zero_fill();
+            env.writer(&accuracy_sum_var).zero_fill();
+            for batch_indices in indices.chunks(m) {
+                unpack_images(&mut env, &x_var, &train_images, batch_indices).unwrap();
+                unpack_labels(&mut env, &y_var, &train_labels, batch_indices).unwrap();
+                env.run(&train_graph, rng.next_u32());
+            }
+            if epoch_index < 2 {
+                env.print_timings("training");
+            }
+            let train_loss =
+                env.reader(&loss_sum_var).read_f32().unwrap() / (train_image_count as f32);
+            let train_accuracy =
+                env.reader(&accuracy_sum_var).read_f32().unwrap() / (train_image_count as f32);
+
+            // loop over test mini-batches to evaluate loss and accuracy
+            env.writer(&loss_sum_var).zero_fill();
+            env.writer(&accuracy_sum_var).zero_fill();
+            indices.clear();
+            indices.extend(0..test_image_count);
+            for batch_indices in indices.chunks(m) {
+                unpack_images(&mut env, &x_var, &test_images, batch_indices).unwrap();
+                unpack_labels(&mut env, &y_var, &test_labels, batch_indices).unwrap();
+                env.run(&test_graph, rng.next_u32());
+            }
+            if epoch_index < 2 {
+                env.print_timings("testing");
+            }
+            let test_loss =
+                env.reader(&loss_sum_var).read_f32().unwrap() / (test_image_count as f32);
+            let test_accuracy =
+                env.reader(&accuracy_sum_var).read_f32().unwrap() / (test_image_count as f32);
+
+            // compute the norm of all the parameters
+            env.run(&norm_graph, rng.next_u32());
+            let norm: f32 = env.reader(&norm_var).read_f32().unwrap();
+
+            println!(
+                "epoch: {}, loss: {}/{}, accuracy: {}/{}, w_norm: {}",
+                epoch_index,
+                train_loss,
+                test_loss,
+                train_accuracy,
+                test_accuracy,
+                norm.sqrt()
+            );
+            if test_accuracy > best_result.test_accuracy {
+                best_result = Result {
+                    trial_index,
+                    epoch_index,
+                    train_accuracy,
+                    test_accuracy,
+                }
+            }
+        }
     }
-
-    // run epochs
-    let mut indices = Vec::new();
-    for epoch_index in 0..app_params.epoch_count {
-        // update learning for this epoch (halve every 40 epochs)
-        let learning_rate_scale = 0.5f32.powf((epoch_index as f32) / 40.0);
-        env.writer(&learning_rate_scale_var)
-            .write_all(bytemuck::bytes_of(&learning_rate_scale))
-            .unwrap();
-
-        // loop over training mini-batches
-        indices.clear();
-        indices.extend(0..train_image_count);
-        indices.shuffle(&mut rng);
-        env.writer(&loss_sum_var).zero_fill();
-        env.writer(&accuracy_sum_var).zero_fill();
-        for batch_indices in indices.chunks(m) {
-            unpack_images(&mut env, &x_var, &train_images, batch_indices).unwrap();
-            unpack_labels(&mut env, &y_var, &train_labels, batch_indices).unwrap();
-            env.run(&train_graph, rng.next_u32());
-        }
-        if epoch_index < 2 {
-            env.print_timings("training");
-        }
-        let train_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
-        let train_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();
-
-        // loop over test mini-batches to evaluate loss and accuracy
-        env.writer(&loss_sum_var).zero_fill();
-        env.writer(&accuracy_sum_var).zero_fill();
-        indices.clear();
-        indices.extend(0..test_image_count);
-        for batch_indices in indices.chunks(m) {
-            unpack_images(&mut env, &x_var, &test_images, batch_indices).unwrap();
-            unpack_labels(&mut env, &y_var, &test_labels, batch_indices).unwrap();
-            env.run(&test_graph, rng.next_u32());
-        }
-        if epoch_index < 2 {
-            env.print_timings("testing");
-        }
-        let test_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
-        let test_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();
-
-        // compute the norm of all the parameters
-        env.run(&norm_graph, rng.next_u32());
-        let norm: f32 = env.reader(&norm_var).read_value().unwrap();
-
-        println!(
-            "epoch: {}, loss: {}/{}, accuracy: {}/{}, w_norm: {}",
-            epoch_index,
-            train_loss / (train_image_count as f32),
-            test_loss / (test_image_count as f32),
-            train_accuracy / (train_image_count as f32),
-            test_accuracy / (test_image_count as f32),
-            norm.sqrt()
-        );
-    }
+    println!("best result {:#?}", best_result);
 }
