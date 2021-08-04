@@ -90,9 +90,9 @@ fn unpack_labels(
 
 #[derive(Debug, EnumString, EnumVariantNames)]
 #[strum(serialize_all = "kebab_case")]
-enum TestNetwork {
+enum Network {
     Linear,
-    Hidden300,
+    SingleLayer,
     ConvNet,
     ConvBlurNet,
 }
@@ -105,10 +105,14 @@ enum Optimizer {
 }
 
 #[derive(Debug, StructOpt)]
-#[structopt(no_version)]
+#[structopt(
+    no_version,
+    name = "mnist",
+    about = "Example networks to train using the Fashion MNIST dataset."
+)]
 struct AppParams {
-    #[structopt(possible_values=&TestNetwork::VARIANTS, default_value="hidden300")]
-    network: TestNetwork,
+    #[structopt(possible_values=&Network::VARIANTS, default_value="single-layer")]
+    network: Network,
 
     #[structopt(short, long, possible_values=&Optimizer::VARIANTS, default_value="adam")]
     optimizer: Optimizer,
@@ -222,10 +226,10 @@ fn main() {
         let env = &mut env;
         let rng = &mut rng;
         match app_params.network {
-            TestNetwork::Linear => Box::new(TestLinear::new(env, rng)),
-            TestNetwork::Hidden300 => Box::new(TestHidden300::new(env, rng)),
-            TestNetwork::ConvNet => Box::new(TestConvNet::new(env, rng, false)),
-            TestNetwork::ConvBlurNet => Box::new(TestConvNet::new(env, rng, true)),
+            Network::Linear => Box::new(TestLinear::new(env, rng)),
+            Network::SingleLayer => Box::new(TestHidden300::new(env, rng)),
+            Network::ConvNet => Box::new(TestConvNet::new(env, rng, false)),
+            Network::ConvBlurNet => Box::new(TestConvNet::new(env, rng, true)),
         }
     };
 
