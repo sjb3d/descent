@@ -152,11 +152,12 @@ impl TimestampAccumulator {
         }
     }
 
-    fn print_timings(&self, names: &[String]) {
+    fn print_timings(&self, label: &str, names: &[String]) {
         if self.counter != 0 {
             let norm = 1.0 / (self.counter as f32);
             println!(
-                "total: {:.2} ms (average of {} runs)",
+                "{} total: {:.2} ms (average of {} runs)",
+                label,
                 norm * self.time_total * 1000.0,
                 self.counter,
             );
@@ -222,13 +223,13 @@ impl TimestampSets {
         }
     }
 
-    pub(crate) fn print_timings(&mut self, fences: &FenceSet) {
+    pub(crate) fn print_timings(&mut self, label: &str, fences: &FenceSet) {
         // ensure all timings have been processed
         for set in self.sets.iter_mut() {
             self.accumulator
                 .accumulate_timings(set.get_mut_when_signaled(fences));
         }
-        self.accumulator.print_timings(&self.names);
+        self.accumulator.print_timings(label, &self.names);
         self.accumulator.reset_timings();
     }
 

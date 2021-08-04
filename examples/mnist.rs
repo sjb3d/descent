@@ -268,7 +268,7 @@ fn main() {
         add_weight_decay_to_grad(&graph, &parameters, app_params.weight_decay);
         match app_params.optimizer {
             Optimizer::Descent => stochastic_gradient_descent_step(&graph, &parameters, 0.1*learning_rate_scale),
-            Optimizer::Adam => adam_step(&mut env, &graph, &parameters, 0.002*learning_rate_scale, 0.9, 0.999, 1.0E-8),
+            Optimizer::Adam => adam_step(&mut env, &graph, &parameters, 0.005*learning_rate_scale, 0.9, 0.999, 1.0E-8),
         }
 
         (graph.build_schedule(), parameters)
@@ -370,8 +370,7 @@ fn main() {
             env.run(&train_graph);
         }
         if epoch_index < 2 {
-            println!("training time (per mini batch):");
-            env.print_timings();
+            env.print_timings("training");
         }
         let train_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
         let train_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();
@@ -387,8 +386,7 @@ fn main() {
             env.run(&test_graph);
         }
         if epoch_index < 2 {
-            println!("testing time (per mini batch):");
-            env.print_timings();
+            env.print_timings("testing");
         }
         let test_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
         let test_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();

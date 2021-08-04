@@ -382,8 +382,8 @@ impl Environment {
         }
     }
 
-    pub fn print_timings(&mut self) {
-        self.timestamps.print_timings(&self.fences);
+    pub fn print_timings(&mut self, label: &str) {
+        self.timestamps.print_timings(label, &self.fences);
     }
 }
 
