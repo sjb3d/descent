@@ -282,6 +282,7 @@ fn main() {
             &mut BufWriter::new(File::create("train_k.dot").unwrap()),
         )
         .unwrap();
+    println!("trainable parameters: {}", parameters.iter().map(|var| var.shape().element_count()).sum::<usize>());
 
     // build a graph to evaluate the test set (keeps parameters unchanged)
     let test_graph = {
