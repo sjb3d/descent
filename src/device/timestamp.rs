@@ -156,7 +156,7 @@ impl TimestampAccumulator {
         if self.counter != 0 {
             let norm = 1.0 / (self.counter as f32);
             println!(
-                "total time: {:.2} ms (average of {} runs)",
+                "total: {:.2} ms (average of {} runs)",
                 norm * self.time_total * 1000.0,
                 self.counter,
             );

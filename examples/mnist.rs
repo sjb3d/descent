@@ -152,9 +152,10 @@ struct TestHidden300 {
 
 impl TestHidden300 {
     fn new(env: &mut Environment, rng: &mut impl Rng) -> Self {
+        let hidden_units = 300;
         Self {
-            fc1: Dense::new(env, rng, 28 * 28, 300),
-            fc2: Dense::new(env, rng, 300, 10),
+            fc1: Dense::new(env, rng, 28 * 28, hidden_units),
+            fc2: Dense::new(env, rng, hidden_units, 10),
         }
     }
 }
@@ -180,21 +181,24 @@ struct TestConvNet {
 
 impl TestConvNet {
     fn new(env: &mut Environment, rng: &mut impl Rng, use_blur_pool: bool) -> Self {
+        let c1 = 16;
+        let c2 = 32;
+        let hidden = 128;
         Self {
-            conv1: Conv2D::builder(1, 32, 3, 3).with_pad(1).build(env, rng),
+            conv1: Conv2D::builder(1, c1, 3, 3).with_pad(1).build(env, rng),
             pool1: if use_blur_pool {
-                Box::new(MaxBlurPool2D::new(env, rng, 32))
+                Box::new(MaxBlurPool2D::new(env, rng, c1))
             } else {
                 Box::new(MaxPool2D::new())
             },
-            conv2: Conv2D::builder(32, 64, 3, 3).with_pad(1).build(env, rng),
+            conv2: Conv2D::builder(c1, c2, 3, 3).with_pad(1).build(env, rng),
             pool2: if use_blur_pool {
-                Box::new(MaxBlurPool2D::new(env, rng, 64))
+                Box::new(MaxBlurPool2D::new(env, rng, c2))
             } else {
                 Box::new(MaxPool2D::new())
             },
-            fc1: Dense::new(env, rng, 7 * 7 * 64, 128),
-            fc2: Dense::new(env, rng, 128, 10),
+            fc1: Dense::new(env, rng, 7 * 7 * c2, hidden),
+            fc2: Dense::new(env, rng, hidden, 10),
         }
     }
 }
@@ -237,6 +241,7 @@ fn main() {
     let x_var = env.static_parameter([m, 28, 28, 1], "x");
     let y_var = env.static_parameter([m, 1], "y");
 
+    let learning_rate_scale_var = env.static_parameter([1], "log_lr_scale");
     let loss_sum_var = env.static_parameter([1], "loss");
     let accuracy_sum_var = env.static_parameter([1], "accuracy");
 
@@ -246,26 +251,24 @@ fn main() {
 
         // emit the graph for the network
         let x = module.train(graph.parameter(&x_var));
-        let loss = softmax_cross_entropy_loss(x, &y_var);
-
-        // accumulate loss (into variable)
-        graph.update_variable(&loss_sum_var, |loss_sum| {
-            loss_sum + loss.value().reduce_sum(0)
-        });
-
-        // accumulate accuracy (into variable)
+        let loss = softmax_cross_entropy_loss(x, &y_var).set_loss();
         let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
+
+        // update sum of loss and accuracy
+        graph.update_variable(&loss_sum_var, |loss_sum| {
+            loss_sum + loss.reduce_sum(0)
+        });
         graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
             accuracy_sum + accuracy.reduce_sum(0)
         });
 
         // train using gradient of the loss (scaled for size of mini batch)
-        loss.set_loss();
+        let learning_rate_scale = graph.read_variable(&learning_rate_scale_var);
         let parameters = graph.trainable_parameters();
         add_weight_decay_to_grad(&graph, &parameters, app_params.weight_decay);
         match app_params.optimizer {
-            Optimizer::Descent => stochastic_gradient_descent_step(&graph, &parameters, 0.1),
-            Optimizer::Adam => adam_step(&mut env, &graph, &parameters, 0.002, 0.9, 0.999, 1.0E-8),
+            Optimizer::Descent => stochastic_gradient_descent_step(&graph, &parameters, 0.1*learning_rate_scale),
+            Optimizer::Adam => adam_step(&mut env, &graph, &parameters, 0.002*learning_rate_scale, 0.9, 0.999, 1.0E-8),
         }
 
         (graph.build_schedule(), parameters)
@@ -290,15 +293,13 @@ fn main() {
 
         // emit the graph for the network
         let x = module.test(graph.parameter(&x_var));
-        let loss = softmax_cross_entropy_loss(x, &y_var);
-
-        // accumulate loss (into variable)
-        graph.update_variable(&loss_sum_var, |loss_sum| {
-            loss_sum + loss.value().reduce_sum(0)
-        });
-
-        // accumulate accuracy (into variable)
+        let loss = softmax_cross_entropy_loss(x, &y_var).set_loss();
         let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
+
+        // update sum of loss and accuracy
+        graph.update_variable(&loss_sum_var, |loss_sum| {
+            loss_sum + loss.reduce_sum(0)
+        });
         graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
             accuracy_sum + accuracy.reduce_sum(0)
         });
@@ -353,6 +354,10 @@ fn main() {
     // run epochs
     let mut indices = Vec::new();
     for epoch_index in 0..app_params.epoch_count {
+        // update learning for this epoch (halve every 40 epochs)
+        let learning_rate_scale = 0.5f32.powf((epoch_index as f32)/40.0);
+        env.writer(&learning_rate_scale_var).write_all(bytemuck::bytes_of(&learning_rate_scale)).unwrap();
+
         // loop over training mini-batches
         indices.clear();
         indices.extend(0..train_image_count);
@@ -365,6 +370,7 @@ fn main() {
             env.run(&train_graph);
         }
         if epoch_index < 2 {
+            println!("training time (per mini batch):");
             env.print_timings();
         }
         let train_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
@@ -381,6 +387,7 @@ fn main() {
             env.run(&test_graph);
         }
         if epoch_index < 2 {
+            println!("testing time (per mini batch):");
             env.print_timings();
         }
         let test_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
