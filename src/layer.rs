@@ -27,7 +27,9 @@ pub struct EvalContext {
 
 pub trait Module {
     fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g>;
+}
 
+pub trait ModuleExt : Module {
     fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
         self.eval(input, &EvalContext { is_training: true })
     }
@@ -36,6 +38,8 @@ pub trait Module {
         self.eval(input, &EvalContext { is_training: false })
     }
 }
+
+impl<T> ModuleExt for T where T: Module + ?Sized {}
 
 pub trait EvalWithModule<M: Module + ?Sized> {
     fn eval_with(self, module: &M, ctx: &EvalContext) -> Self;
