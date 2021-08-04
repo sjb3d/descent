@@ -69,7 +69,7 @@ impl Dense {
 
 impl Module for Dense {
     fn eval<'g>(&self, input: DualArray<'g>, _ctx: &EvalContext) -> DualArray<'g> {
-        input.matmul(&self.w) + &self.b
+        input.next_colour().matmul(&self.w) + &self.b
     }
 }
 
@@ -183,7 +183,9 @@ impl Conv2D {
 
 impl Module for Conv2D {
     fn eval<'g>(&self, input: DualArray<'g>, _ctx: &EvalContext) -> DualArray<'g> {
-        let conv = input.conv2d(&self.f, self.pad, self.stride, self.groups);
+        let conv = input
+            .next_colour()
+            .conv2d(&self.f, self.pad, self.stride, self.groups);
 
         let out_shape = conv.shape();
         let bias_shape = {
@@ -211,7 +213,7 @@ impl MaxPool2D {
 
 impl Module for MaxPool2D {
     fn eval<'g>(&self, input: DualArray<'g>, _ctx: &EvalContext) -> DualArray<'g> {
-        input.max_pool2d((2, 2), (2, 2))
+        input.next_colour().max_pool2d((2, 2), (2, 2))
     }
 }
 
@@ -235,6 +237,7 @@ impl MaxBlurPool2D {
 impl Module for MaxBlurPool2D {
     fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
         input
+            .next_colour()
             .max_pool2d((2, 2), (1, 1))
             .map(|x| self.blur.eval(x, ctx))
     }
@@ -259,6 +262,7 @@ impl Module for Dropout {
         let graph = input.graph();
         let shape = input.shape();
 
+        graph.next_colour();
         let rv = graph.rand(shape);
 
         let (a, da) = input.into_inner();
