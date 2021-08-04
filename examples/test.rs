@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use descent::{layer::*, prelude::*};
+use descent::{layer::*, loss::*, optimizer::*, prelude::*};
 use flate2::bufread::GzDecoder;
 use rand::{prelude::SliceRandom, Rng, SeedableRng};
 use std::{
@@ -86,90 +86,6 @@ fn unpack_labels(
     let labels: Vec<f32> = indices.iter().map(|&index| bytes[index] as f32).collect();
     let mut w = env.writer(variable);
     w.write_all(bytemuck::cast_slice(&labels))
-}
-
-fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> DualArray<'g> {
-    let (z, dz) = z.next_colour().into_inner();
-    let y = y.into_array(z.graph());
-
-    // softmax
-    let t = (z - z.reduce_max(-1)).exp();
-    let p = t / t.reduce_sum(-1);
-
-    // cross entropy loss
-    let loss = y.select_eq(p.coord(-1), -p.log(), 0.0).reduce_sum(-1); // TODO: pick element of p using value of y
-    let dloss = loss.clone_as_accumulator();
-
-    // backprop (softmax with cross entropy directly)
-    let n = p.shape()[SignedIndex(-1)];
-    dz.accumulate((p - y.one_hot(n)) * dloss);
-
-    DualArray::new(loss, dloss)
-}
-
-fn softmax_cross_entropy_accuracy<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> Array<'g> {
-    let z = z.value();
-    let y = y.into_array(z.graph());
-
-    // index of most likely choice
-    let pred = z.argmax(-1);
-
-    // set to 1 when correct, 0 when incorrect
-    pred.select_eq(y, 1.0, 0.0)
-}
-
-fn add_weight_decay_to_grad(graph: &Graph, variables: &[Variable], weight_decay: f32) {
-    if weight_decay == 0.0 {
-        return;
-    }
-
-    graph.next_colour();
-    for var in variables.iter() {
-        let (w, g) = graph.parameter(var).into_inner();
-        g.accumulate(w * weight_decay);
-    }
-}
-
-fn stochastic_gradient_descent_step(graph: &Graph, variables: &[Variable], learning_rate: f32) {
-    graph.next_colour();
-
-    for var in variables.iter() {
-        let g = graph.parameter(var).grad();
-        graph.update_variable(var, |theta| theta - learning_rate * g);
-    }
-}
-
-fn adam_step(
-    env: &mut Environment,
-    graph: &Graph,
-    variables: &[Variable],
-    learning_rate: f32,
-    beta1: f32,
-    beta2: f32,
-    epsilon: f32,
-) {
-    graph.next_colour();
-
-    let t_var = env.static_parameter([1], "t");
-    env.writer(&t_var).zero_fill();
-
-    let t = graph.update_variable(&t_var, |t| t + 1.0);
-    let alpha =
-        learning_rate * (1.0 - (beta2.ln() * t).exp()).sqrt() / (1.0 - (beta1.ln() * t).exp());
-
-    for var in variables.iter() {
-        let shape = var.shape();
-        let m_var = env.static_parameter(shape.clone(), "m");
-        let v_var = env.static_parameter(shape.clone(), "v");
-        env.writer(&m_var).zero_fill();
-        env.writer(&v_var).zero_fill();
-
-        let g = graph.parameter(var).grad();
-        let m = graph.update_variable(&m_var, |m| m * beta1 + g * (1.0 - beta1));
-        let v = graph.update_variable(&v_var, |v| v * beta2 + g * g * (1.0 - beta2));
-
-        graph.update_variable(var, |theta| theta - alpha * m / (v.sqrt() + epsilon));
-    }
 }
 
 #[derive(Debug, EnumString, EnumVariantNames)]
@@ -320,6 +236,7 @@ fn main() {
     let loss_sum_var = env.static_parameter([1], "loss");
     let accuracy_sum_var = env.static_parameter([1], "accuracy");
 
+    // build a graph for training, collect the trainable parameters
     let (train_graph, parameters) = {
         let graph = env.graph();
 
@@ -362,6 +279,7 @@ fn main() {
         )
         .unwrap();
 
+    // build a graph to evaluate the test set (keeps parameters unchanged)
     let test_graph = {
         let graph = env.graph();
 
@@ -389,6 +307,7 @@ fn main() {
         )
         .unwrap();
 
+    // build a graph to evaluate the L2 norm of training parameters (to check weight decay)
     let norm_var = env.static_parameter([1], "norm");
     let norm_graph = {
         let graph = env.graph();
@@ -446,9 +365,6 @@ fn main() {
         let train_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
         let train_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();
 
-        env.run(&norm_graph);
-        let norm: f32 = env.reader(&norm_var).read_value().unwrap();
-
         // loop over test mini-batches to evaluate loss and accuracy
         env.writer(&loss_sum_var).zero_fill();
         env.writer(&accuracy_sum_var).zero_fill();
@@ -464,6 +380,10 @@ fn main() {
         }
         let test_loss: f32 = env.reader(&loss_sum_var).read_value().unwrap();
         let test_accuracy: f32 = env.reader(&accuracy_sum_var).read_value().unwrap();
+
+        // compute the norm of all the parameters
+        env.run(&norm_graph);
+        let norm: f32 = env.reader(&norm_var).read_value().unwrap();
 
         println!(
             "epoch: {}, loss: {}/{}, accuracy: {}/{}, w_norm: {}",

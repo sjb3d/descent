@@ -9,7 +9,9 @@ mod common {
 }
 mod kernel;
 pub mod layer;
+pub mod loss;
 mod op;
+pub mod optimizer;
 pub mod schedule;
 pub mod shape;
 pub mod variable;
