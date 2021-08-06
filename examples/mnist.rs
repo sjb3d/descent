@@ -4,7 +4,7 @@ use rand::{prelude::SliceRandom, RngCore, SeedableRng};
 use std::{
     convert::TryInto,
     fs::File,
-    io::{self, prelude::*, BufReader, BufWriter},
+    io::{self, prelude::*, BufReader},
     path::Path,
 };
 use structopt::StructOpt;
@@ -142,7 +142,7 @@ impl TestLinear {
 
 impl Module for TestLinear {
     fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
-        input.flatten().eval_with(&self.fc, ctx)
+        input.flatten().apply(&self.fc, ctx)
     }
 }
 
@@ -165,9 +165,9 @@ impl Module for TestHidden300 {
     fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
         input
             .flatten()
-            .eval_with(&self.fc1, ctx)
+            .apply(&self.fc1, ctx)
             .leaky_relu(0.01)
-            .eval_with(&self.fc2, ctx)
+            .apply(&self.fc2, ctx)
     }
 }
 
@@ -207,17 +207,17 @@ impl TestConvNet {
 impl Module for TestConvNet {
     fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
         input
-            .eval_with(&self.conv1, ctx)
+            .apply(&self.conv1, ctx)
             .leaky_relu(0.01)
-            .eval_with(self.pool1.as_ref(), ctx)
-            .eval_with(&self.conv2, ctx)
+            .apply(self.pool1.as_ref(), ctx)
+            .apply(&self.conv2, ctx)
             .leaky_relu(0.01)
-            .eval_with(self.pool2.as_ref(), ctx)
+            .apply(self.pool2.as_ref(), ctx)
             .flatten()
-            .eval_with(&Dropout::new(0.5), ctx)
-            .eval_with(&self.fc1, ctx)
+            .apply(&Dropout::new(0.5), ctx)
+            .apply(&self.fc1, ctx)
             .leaky_relu(0.01)
-            .eval_with(&self.fc2, ctx)
+            .apply(&self.fc2, ctx)
     }
 }
 
@@ -289,18 +289,8 @@ fn main() {
 
         (graph.build_schedule(), parameters, optimizer)
     };
-    train_graph
-        .write_dot(
-            KernelDotOutput::None,
-            &mut BufWriter::new(File::create("train_s.dot").unwrap()),
-        )
-        .unwrap();
-    train_graph
-        .write_dot(
-            KernelDotOutput::Color,
-            &mut BufWriter::new(File::create("train_k.dot").unwrap()),
-        )
-        .unwrap();
+    train_graph.write_dot_file(KernelDotOutput::None, "train_s.dot");
+    train_graph.write_dot_file(KernelDotOutput::Color, "train_k.dot");
     println!(
         "trainable parameters: {}",
         parameters
@@ -326,12 +316,7 @@ fn main() {
 
         graph.build_schedule()
     };
-    test_graph
-        .write_dot(
-            KernelDotOutput::Cluster,
-            &mut BufWriter::new(File::create("test.dot").unwrap()),
-        )
-        .unwrap();
+    test_graph.write_dot_file(KernelDotOutput::Cluster, "test.dot");
 
     // build a graph to evaluate the L2 norm of training parameters (to check weight decay)
     let norm_var = env.static_parameter([1], "norm");
@@ -429,7 +414,7 @@ fn main() {
 
             // compute the norm of all the parameters
             env.run(&norm_graph, rng.next_u32());
-            let norm: f32 = env.reader(&norm_var).read_f32().unwrap();
+            let norm = env.reader(&norm_var).read_f32().unwrap();
 
             println!(
                 "epoch: {}, loss: {}/{}, accuracy: {}/{}, w_norm: {}",

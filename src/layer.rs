@@ -21,15 +21,15 @@ pub trait ModuleExt: Module {
 
 impl<T> ModuleExt for T where T: Module + ?Sized {}
 
-pub trait EvalWithModule<M: Module + ?Sized> {
-    fn eval_with(self, module: &M, ctx: &EvalContext) -> Self;
+pub trait ApplyModule<M: Module + ?Sized> {
+    fn apply(self, module: &M, ctx: &EvalContext) -> Self;
 }
 
-impl<'g, M> EvalWithModule<M> for DualArray<'g>
+impl<'g, M> ApplyModule<M> for DualArray<'g>
 where
     M: Module + ?Sized,
 {
-    fn eval_with(self, module: &M, ctx: &EvalContext) -> Self {
+    fn apply(self, module: &M, ctx: &EvalContext) -> Self {
         self.map(|x| module.eval(x, ctx))
     }
 }

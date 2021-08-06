@@ -10,6 +10,7 @@ use slotmap::{SecondaryMap, SlotMap};
 use std::{
     collections::{hash_map::DefaultHasher, HashMap},
     convert::TryInto,
+    fs::File,
     hash::{Hash, Hasher},
     io, iter,
 };
@@ -541,11 +542,12 @@ impl Schedule {
         assert_eq!(self.clusters_sorted.len(), self.clusters.len());
     }
 
-    pub fn write_dot(
-        &self,
-        kernel_output: KernelDotOutput,
-        w: &mut impl io::Write,
-    ) -> io::Result<()> {
+    pub fn write_dot_file(&self, kernel_output: KernelDotOutput, path: &str) {
+        let mut w = io::BufWriter::new(File::create(path).unwrap());
+        self.write_dot(kernel_output, &mut w).unwrap();
+    }
+
+    fn write_dot(&self, kernel_output: KernelDotOutput, w: &mut impl io::Write) -> io::Result<()> {
         writeln!(w, "digraph G {{")?;
         for (index, cluster_id) in iter::once(None)
             .chain(self.clusters.keys().map(Some))
