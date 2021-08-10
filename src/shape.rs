@@ -546,7 +546,7 @@ impl View {
             })
     }
 
-    pub(crate) fn load_column_major_hint(&self) -> bool {
+    pub(crate) fn load_in_columns_hint(&self) -> bool {
         if let Some((outer_axis, outer_step)) = self.get_axis_step(-2) {
             if let Some((inner_axis, inner_step)) = self.get_axis_step(-1) {
                 if outer_axis == inner_axis {

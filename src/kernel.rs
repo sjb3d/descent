@@ -376,18 +376,18 @@ impl Kernel for MatMulKernel {
         )?;
         writeln!(w, "const uint K_CHUNK_COUNT = {};", k_chunk_count)?;
 
-        let load_a_column_major = self.inputs[0].load_column_major_hint();
-        let load_b_column_major = self.inputs[1].load_column_major_hint();
+        let load_a_in_columns = self.inputs[0].load_in_columns_hint();
+        let load_b_in_columns = self.inputs[1].load_in_columns_hint();
         let bool_value = |b| if b { "true" } else { "false" };
         writeln!(
             w,
-            "const bool LOAD_A_COLUMN_MAJOR = {};",
-            bool_value(load_a_column_major)
+            "const bool LOAD_A_IN_COLUMNS = {};",
+            bool_value(load_a_in_columns)
         )?;
         writeln!(
             w,
-            "const bool LOAD_B_COLUMN_MAJOR = {};",
-            bool_value(load_b_column_major)
+            "const bool LOAD_B_IN_COLUMNS = {};",
+            bool_value(load_b_in_columns)
         )?;
 
         assert_eq!((Self::TILE_M * Self::TILE_N) % Self::GROUP_SIZE, 0);

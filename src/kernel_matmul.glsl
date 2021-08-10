@@ -10,8 +10,8 @@
 // const uint GROUP_SIZE
 // const uint K_CHUNK_SIZE_IN_TILES
 // const uint K_CHUNK_COUNT
-// const bool LOAD_A_COLUMN_MAJOR
-// const bool LOAD_B_COLUMN_MAJOR
+// const bool LOAD_A_IN_COLUMNS
+// const bool LOAD_B_IN_COLUMNS
 
 layout(local_size_x = GROUP_SIZE) in;
 
@@ -58,7 +58,7 @@ void main() {
     for (uint k_tile_index = k_tile_begin; k_tile_index != k_tile_end; ++k_tile_index) {
         barrier();
         for (uint load_index = thread_index; load_index < A_TILE_SIZE; load_index += GROUP_SIZE) {
-            uvec2 a_coord_in_tile = LOAD_A_COLUMN_MAJOR
+            uvec2 a_coord_in_tile = LOAD_A_IN_COLUMNS
                 ? uvec2(load_index/A_TILE_H, load_index % A_TILE_H)
                 : uvec2(load_index % A_TILE_W, load_index/A_TILE_W);
             uvec2 a_tile_coord = uvec2(k_tile_index, c_tile_coord.y);
@@ -66,7 +66,7 @@ void main() {
             s_a[a_coord_in_tile.y*A_TILE_STRIDE + a_coord_in_tile.x] = a;
         }
         for (uint load_index = thread_index; load_index < B_TILE_SIZE; load_index += GROUP_SIZE) {
-            uvec2 b_coord_in_tile = LOAD_B_COLUMN_MAJOR
+            uvec2 b_coord_in_tile = LOAD_B_IN_COLUMNS
                 ? uvec2(load_index/B_TILE_H, load_index % B_TILE_H)
                 : uvec2(load_index % B_TILE_W, load_index/B_TILE_W);
             uvec2 b_tile_coord = uvec2(c_tile_coord.x, k_tile_index);
