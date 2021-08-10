@@ -151,15 +151,26 @@ impl<'g> Array<'g> {
     }
 
     fn reduce_op(self, reduce_op: ReduceOp, axis: Axis) -> Self {
-        self.graph.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape.reduce(axis);
-            Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::Reduce { reduce_op, axis }, &[self.node_id]),
-                graph: self.graph,
+        let shape = self.shape();
+        if shape[axis] == 1 {
+            if axis.index() == 0 {
+                self.remove_axis(0)
+            } else {
+                self
             }
-        })
+        } else {
+            self.graph.with_state(|state| {
+                let shape = shape.reduce(axis);
+                Array {
+                    node_id: state.ops.new_node(
+                        shape,
+                        Op::Reduce { reduce_op, axis },
+                        &[self.node_id],
+                    ),
+                    graph: self.graph,
+                }
+            })
+        }
     }
 
     pub fn one_hot(self, count: usize) -> Self {
@@ -220,10 +231,21 @@ impl<'g> Array<'g> {
     }
 
     pub fn matmul(self, rhs: Array) -> Self {
+        let lhs_batch_shape = Shape::from([1]) + self.shape();
+        let lhs = self.broadcast(&lhs_batch_shape);
+
+        let rhs_batch_shape = Shape::from([1]) + rhs.shape();
+        let rhs = rhs.broadcast(&rhs_batch_shape);
+
+        let result = lhs.batched_matmul(rhs);
+        result.view(result.shape().identity_view().remove_axis(0))
+    }
+
+    pub fn batched_matmul(self, rhs: Array) -> Self {
         let result = self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape
-                .matmul(&state.ops.graph[rhs.node_id].shape);
+                .batched_matmul(&state.ops.graph[rhs.node_id].shape);
             Array {
                 node_id: state
                     .ops
@@ -231,12 +253,11 @@ impl<'g> Array<'g> {
                 graph: self.graph,
             }
         });
-        let [r, m, n]: [usize; 3] = result.shape().try_into().unwrap();
-        if r == 1 {
-            result.reshape([m, n])
-        } else {
-            result.reduce_sum(0)
-        }
+        result.reduce_sum(1).remove_axis(1)
+    }
+
+    pub(crate) fn remove_axis(self, axis: isize) -> Self {
+        self.view(self.shape().identity_view().remove_axis(axis))
     }
 
     pub(crate) fn pad(self, axis: isize, pad: usize) -> Self {

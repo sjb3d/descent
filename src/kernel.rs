@@ -286,7 +286,7 @@ impl MatMulKernel {
     const GROUP_SIZE: usize = 64;
 
     fn k(&self) -> usize {
-        self.inputs[0].output_shape[1]
+        self.inputs[0].output_shape[SignedIndex(-1)]
     }
 }
 
@@ -299,18 +299,21 @@ impl Kernel for MatMulKernel {
         generate_input_buffer(1, 1, w)?;
         generate_output_buffer(2, 0, w)?;
 
-        assert_eq!(self.inputs[0].output_shape.len(), 2);
-        assert_eq!(self.inputs[1].output_shape.len(), 2);
+        assert_eq!(self.inputs[0].output_shape.len(), 3);
+        assert_eq!(self.inputs[1].output_shape.len(), 3);
 
-        let [r, m, n]: [usize; 3] = self.shape.try_into().unwrap();
+        let [_batch_count, k_chunk_count, m, n]: [usize; 4] = self.shape.try_into().unwrap();
         let k = self.k();
-        let k_chunk_size_in_tiles = k.div_round_up(Self::TILE_K).div_round_up(r);
+        let k_chunk_size_in_tiles = k.div_round_up(Self::TILE_K).div_round_up(k_chunk_count);
 
         for i in 0..2 {
-            writeln!(w, "int load_index{}(uvec2 coord) {{", i)?;
+            writeln!(w, "int load_index{}(uint batch_index, uvec2 coord) {{", i)?;
             writeln!(
                 w,
-                "int icoord[2]; icoord[0] = int(coord.y); icoord[1] = int(coord.x);"
+                "int icoord[3];
+                icoord[0] = int(batch_index);
+                icoord[1] = int(coord.y);
+                icoord[2] = int(coord.x);"
             )?;
             write!(w, "return ")?;
             generate_load_index(&self.inputs[i], "icoord", w)?;
@@ -320,13 +323,13 @@ impl Kernel for MatMulKernel {
         writeln!(
             w,
             "\
-            float load_a(uvec2 coord) {{
+            float load_a(uint batch_index, uvec2 coord) {{
                 float tmp = 0.f;
                 if (coord.x < {} && coord.y < {}) {{
                     int icoord[2];
                     icoord[0] = int(coord.y);
                     icoord[1] = int(coord.x);
-                    tmp = input0[load_index0(coord)];
+                    tmp = input0[load_index0(batch_index, coord)];
                 }}
                 return tmp;
             }}",
@@ -335,10 +338,10 @@ impl Kernel for MatMulKernel {
         writeln!(
             w,
             "\
-            float load_b(uvec2 coord) {{
+            float load_b(uint batch_index, uvec2 coord) {{
                 float tmp = 0.f;
                 if (coord.x < {} && coord.y < {}) {{
-                    tmp = input1[load_index1(coord)];
+                    tmp = input1[load_index1(batch_index, coord)];
                 }}
                 return tmp;
             }}",
@@ -347,13 +350,14 @@ impl Kernel for MatMulKernel {
         writeln!(
             w,
             "\
-            void store_c(uint k_chunk_index, uvec2 coord, float value) {{
+            void store_c(uint batch_index, uint k_chunk_index, uvec2 coord, float value) {{
                 if (coord.x < {} && coord.y < {}) {{
-                    output0[k_chunk_index*{} + coord.y*{} + coord.x] = value;
+                    output0[batch_index*{} + k_chunk_index*{} + coord.y*{} + coord.x] = value;
                 }}
             }}",
             n,
             m,
+            k_chunk_count * m * n,
             m * n,
             n
         )?;
@@ -370,6 +374,7 @@ impl Kernel for MatMulKernel {
             "const uint K_CHUNK_SIZE_IN_TILES = {};",
             k_chunk_size_in_tiles
         )?;
+        writeln!(w, "const uint K_CHUNK_COUNT = {};", k_chunk_count)?;
 
         let load_a_column_major = self.inputs[0].load_column_major_hint();
         let load_b_column_major = self.inputs[1].load_column_major_hint();
@@ -396,8 +401,11 @@ impl Kernel for MatMulKernel {
     }
 
     fn group_count(&self) -> usize {
-        let [r, m, n]: [usize; 3] = self.shape.try_into().unwrap();
-        r * m.div_round_up(MatMulKernel::TILE_M) * n.div_round_up(MatMulKernel::TILE_N)
+        let [batch_count, k_chunk_count, m, n]: [usize; 4] = self.shape.try_into().unwrap();
+        batch_count
+            * k_chunk_count
+            * m.div_round_up(MatMulKernel::TILE_M)
+            * n.div_round_up(MatMulKernel::TILE_N)
     }
 
     fn label_name(&self) -> String {

@@ -1,6 +1,6 @@
-// float load_a(uvec2 coord);
-// float load_b(uvec2 coord);
-// void store_c(uvec2 coord, float value);
+// float load_a(uint batch_index, uvec2 coord);
+// float load_b(uint batch_index, uvec2 coord);
+// void store_c(uint batch_index, uint k_chunk_index, uvec2 coord, float value);
 // const uint M
 // const uint N
 // const uint K
@@ -9,6 +9,7 @@
 // const uint TILE_K
 // const uint GROUP_SIZE
 // const uint K_CHUNK_SIZE_IN_TILES
+// const uint K_CHUNK_COUNT
 // const bool LOAD_A_COLUMN_MAJOR
 // const bool LOAD_B_COLUMN_MAJOR
 
@@ -39,10 +40,11 @@ shared float s_a[A_TILE_H * A_TILE_STRIDE];
 shared float s_b[B_TILE_H * B_TILE_STRIDE];
 
 void main() {
-    int c_output_coord[3];
-    compute_grid_coord(gl_WorkGroupID.x, c_output_coord, 0, M_TILE_COUNT, N_TILE_COUNT);
-    uvec2 c_tile_coord = uvec2(c_output_coord[2], c_output_coord[1]);
-    uint k_chunk_index = c_output_coord[0];
+    int c_output_coord[4];
+    compute_grid_coord(gl_WorkGroupID.x, c_output_coord, 0, K_CHUNK_COUNT, M_TILE_COUNT, N_TILE_COUNT);
+    uvec2 c_tile_coord = uvec2(c_output_coord[3], c_output_coord[2]);
+    uint k_chunk_index = c_output_coord[1];
+    uint batch_index = c_output_coord[0];
 
     uint thread_index = gl_LocalInvocationID.x;
 
@@ -60,7 +62,7 @@ void main() {
                 ? uvec2(load_index/A_TILE_H, load_index % A_TILE_H)
                 : uvec2(load_index % A_TILE_W, load_index/A_TILE_W);
             uvec2 a_tile_coord = uvec2(k_tile_index, c_tile_coord.y);
-            float a = load_a(a_tile_coord*uvec2(A_TILE_W, A_TILE_H) + a_coord_in_tile);
+            float a = load_a(batch_index, a_tile_coord*uvec2(A_TILE_W, A_TILE_H) + a_coord_in_tile);
             s_a[a_coord_in_tile.y*A_TILE_STRIDE + a_coord_in_tile.x] = a;
         }
         for (uint load_index = thread_index; load_index < B_TILE_SIZE; load_index += GROUP_SIZE) {
@@ -68,7 +70,7 @@ void main() {
                 ? uvec2(load_index/B_TILE_H, load_index % B_TILE_H)
                 : uvec2(load_index % B_TILE_W, load_index/B_TILE_W);
             uvec2 b_tile_coord = uvec2(c_tile_coord.x, k_tile_index);
-            float b = load_b(b_tile_coord*uvec2(B_TILE_W, B_TILE_H) + b_coord_in_tile);
+            float b = load_b(batch_index, b_tile_coord*uvec2(B_TILE_W, B_TILE_H) + b_coord_in_tile);
             s_b[b_coord_in_tile.y*B_TILE_STRIDE + b_coord_in_tile.x] = b;
         }
         barrier();
@@ -89,6 +91,6 @@ void main() {
     for (uint i = 0; i < C_VALUES_PER_THREAD; ++i) {
         uint c_index = i*GROUP_SIZE + thread_index;
         uvec2 c_coord_in_tile = uvec2(c_index % C_TILE_W, c_index / C_TILE_W);
-        store_c(k_chunk_index, c_tile_coord*uvec2(C_TILE_W, C_TILE_H) + c_coord_in_tile, result[i]);
+        store_c(batch_index, k_chunk_index, c_tile_coord*uvec2(C_TILE_W, C_TILE_H) + c_coord_in_tile, result[i]);
     }   
 }

@@ -109,12 +109,13 @@ impl Shape {
         None
     }
 
-    pub(crate) fn matmul(&self, rhs: &Shape) -> Self {
-        let [m, k0]: [usize; 2] = self.try_into().unwrap();
-        let [k1, n]: [usize; 2] = rhs.try_into().unwrap();
+    pub(crate) fn batched_matmul(&self, rhs: &Shape) -> Self {
+        let [b0, m, k0]: [usize; 3] = self.try_into().unwrap();
+        let [b1, k1, n]: [usize; 3] = rhs.try_into().unwrap();
+        assert_eq!(b0, b1);
         assert_eq!(k0, k1);
         let r = k0.div_round_up(MATMUL_MAX_K_SIZE);
-        Shape::from([r, m, n])
+        Shape::from([b0, r, m, n])
     }
 
     pub(crate) fn unpad(&self, axis: Axis, pad: usize) -> Self {
@@ -305,6 +306,15 @@ impl ops::Index<SignedIndex> for Shape {
 impl ops::IndexMut<SignedIndex> for Shape {
     fn index_mut(&mut self, index: SignedIndex) -> &mut Self::Output {
         self.index_mut(self.axis(index.0))
+    }
+}
+
+impl ops::Add for Shape {
+    type Output = Shape;
+    fn add(self, rhs: Self) -> Self::Output {
+        let mut v = self.0.clone();
+        v.extend_from_slice(rhs.as_slice());
+        Shape(v)
     }
 }
 
@@ -517,9 +527,10 @@ impl View {
         }
     }
 
-    fn get_axis_step(&self, index: usize) -> Option<(Axis, isize)> {
+    fn get_axis_step(&self, axis: isize) -> Option<(Axis, isize)> {
+        let axis = self.output_shape.axis(axis);
         self.output_mapping
-            .get(index)
+            .get(axis.index())
             .and_then(|mapping| match mapping {
                 AxisMapping::Source { axis, step } => Some((*axis, *step)),
                 AxisMapping::Broadcast => None,
@@ -527,16 +538,24 @@ impl View {
     }
 
     pub(crate) fn load_column_major_hint(&self) -> bool {
-        if let Some((axis0, step0)) = self.get_axis_step(0) {
-            if let Some((axis1, step1)) = self.get_axis_step(1) {
-                if axis0 == axis1 {
-                    return step0.abs() < step1.abs();
+        if let Some((outer_axis, outer_step)) = self.get_axis_step(-2) {
+            if let Some((inner_axis, inner_step)) = self.get_axis_step(-1) {
+                if outer_axis == inner_axis {
+                    return outer_step.abs() < inner_step.abs();
                 } else {
-                    return axis0 > axis1;
+                    return outer_axis > inner_axis;
                 }
             }
         }
         false
+    }
+
+    pub(crate) fn remove_axis(&self, axis: isize) -> Self {
+        let axis = self.output_shape.axis(axis);
+        let mut tmp = self.clone();
+        tmp.output_mapping.remove(axis.index());
+        tmp.output_shape.0.remove(axis.index());
+        tmp
     }
 }
 
