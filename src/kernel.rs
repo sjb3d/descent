@@ -4,6 +4,7 @@ use shaderc::{Compiler, ShaderKind};
 use spark::{vk, Builder};
 use std::{collections::HashMap, convert::TryInto, ffi::CStr, fmt, fmt::Write, mem, slice};
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum PerElementKernelOp {
     Load {
@@ -56,7 +57,7 @@ fn generate_output_buffer(
     Ok(())
 }
 
-fn generate_coord(name: &str, shape: &Shape, w: &mut impl Write) -> fmt::Result {
+fn generate_coord(name: &str, shape: Shape, w: &mut impl Write) -> fmt::Result {
     writeln!(w, "int {}[{}];", name, shape.len())?;
     write!(w, "compute_grid_coord(gl_GlobalInvocationID.x, {}", name)?;
     for &n in shape.iter() {
@@ -153,10 +154,10 @@ impl Kernel for PerElementKernel {
 
         let mut coord_set_names = HashMap::new();
         let get_coord_set_name =
-            |names: &mut HashMap<Shape, String>, shape: &Shape, w: &mut String| {
+            |names: &mut HashMap<Shape, String>, shape: Shape, w: &mut String| {
                 let next_index = names.len();
                 names
-                    .entry(*shape)
+                    .entry(shape)
                     .or_insert_with(|| {
                         let name = format!("coord{}", next_index);
                         generate_coord(&name, shape, w).unwrap();
@@ -169,7 +170,7 @@ impl Kernel for PerElementKernel {
             match op {
                 PerElementKernelOp::Load { input_index } => {
                     let view = &self.inputs[*input_index];
-                    let coord_shape = &view.output_shape;
+                    let coord_shape = view.output_shape;
                     let coord_name = get_coord_set_name(&mut coord_set_names, coord_shape, w);
 
                     write!(w, "float tmp{} = input{}[", op_index, input_index)?;
@@ -184,7 +185,7 @@ impl Kernel for PerElementKernel {
                     writeln!(w, "float tmp{} = {:#?};", op_index, value.into_inner())?
                 }
                 PerElementKernelOp::BuiltIn { op, view } => {
-                    let coord_shape = &view.output_shape;
+                    let coord_shape = view.output_shape;
                     let coord_name = get_coord_set_name(&mut coord_set_names, coord_shape, w);
                     match op {
                         BuiltInOp::Coord { axis } => {
@@ -443,7 +444,7 @@ impl Kernel for ReduceKernel {
             "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
             self.shape.element_count()
         )?;
-        generate_coord("out_coord", &self.shape, w)?;
+        generate_coord("out_coord", self.shape, w)?;
 
         let k = self.k();
 
@@ -523,7 +524,7 @@ impl Kernel for UnpadKernel {
             "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
             self.shape.element_count()
         )?;
-        generate_coord("coord", &self.shape, w)?;
+        generate_coord("coord", self.shape, w)?;
 
         writeln!(w, "int out_coord = coord[{}];", self.axis.index())?;
         writeln!(w, "int in_coord = out_coord + {};", self.pad)?;
@@ -590,7 +591,7 @@ impl Kernel for WindowsToImageKernel {
             "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
             self.shape.element_count()
         )?;
-        generate_coord("coord", &self.shape, w)?;
+        generate_coord("coord", self.shape, w)?;
 
         let (_, suffix) = self.input.output_shape.rsplit_at(6);
         let [out_h, out_w, _groups, filter_h, filter_w, group_nc]: [usize; 6] =

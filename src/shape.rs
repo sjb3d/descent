@@ -68,7 +68,7 @@ impl Shape {
         Shape::new(v)
     }
 
-    pub(crate) fn match_with_broadcast(&self, rhs: &Shape) -> Self {
+    pub(crate) fn match_with_broadcast(&self, rhs: Shape) -> Self {
         // broadcast axes from 1 => n where necessary
         let len = self.0.len().max(rhs.0.len());
         let a = self.prefix_ones_to_len(len);
@@ -89,7 +89,7 @@ impl Shape {
         )
     }
 
-    pub(crate) fn reduce_axis_onto_per_element(&self, rhs: &Shape) -> Option<Axis> {
+    pub(crate) fn match_with_reduce(&self, rhs: Shape) -> Option<Axis> {
         if self.0.len() > rhs.0.len() {
             return Some(Axis::from_index(0));
         }
@@ -109,7 +109,7 @@ impl Shape {
         None
     }
 
-    pub(crate) fn batched_matmul(&self, rhs: &Shape) -> Self {
+    pub(crate) fn batched_matmul(&self, rhs: Shape) -> Self {
         let [b0, m, k0]: [usize; 3] = self.try_into().unwrap();
         let [b1, k1, n]: [usize; 3] = rhs.try_into().unwrap();
         assert_eq!(b0, b1);
@@ -169,11 +169,11 @@ impl Shape {
     }
 
     pub(crate) fn identity_view(&self) -> View {
-        View::new(self)
+        View::new(*self)
     }
 
     pub(crate) fn padded_view(&self, axis: Axis, pad: usize) -> View {
-        View::with_pad(self, axis, pad)
+        View::with_pad(*self, axis, pad)
     }
 
     pub(crate) fn identity_mapping(&self, axis: Axis) -> AxisMapping {
@@ -307,7 +307,7 @@ impl ops::IndexMut<SignedIndex> for Shape {
 impl ops::Add for Shape {
     type Output = Shape;
     fn add(self, rhs: Self) -> Self::Output {
-        let mut v = self.0.clone();
+        let mut v = self.0;
         v.extend_from_slice(rhs.as_slice());
         Shape(v)
     }
@@ -354,18 +354,18 @@ pub(crate) struct View {
 }
 
 impl View {
-    fn new(shape: &Shape) -> Self {
+    fn new(shape: Shape) -> Self {
         Self {
-            input_shape: *shape,
+            input_shape: shape,
             input_offsets: iter::repeat(0).take(shape.len()).collect(),
             output_mapping: (0..shape.len())
                 .map(|index| shape.identity_mapping(Axis::from_index(index)))
                 .collect(),
-            output_shape: *shape,
+            output_shape: shape,
         }
     }
 
-    fn with_pad(shape: &Shape, axis: Axis, pad: usize) -> Self {
+    fn with_pad(shape: Shape, axis: Axis, pad: usize) -> Self {
         let mut tmp = View::new(shape);
         tmp.input_offsets[axis.index()] = -(pad as isize);
         tmp.output_shape = tmp.output_shape.pad(axis, pad);
@@ -504,13 +504,13 @@ impl View {
     pub(crate) fn transposed(&self) -> Self {
         let len = self.output_mapping.len();
         assert!(len >= 2);
-        let mut tmp = self.clone();
+        let mut tmp = *self;
         tmp.output_mapping.swap(len - 2, len - 1);
         tmp.output_shape.0.swap(len - 2, len - 1);
         tmp
     }
 
-    pub(crate) fn broadcast(input_shape: &Shape, output_shape: &Shape) -> Self {
+    pub(crate) fn broadcast(input_shape: Shape, output_shape: Shape) -> Self {
         assert!(input_shape.len() <= output_shape.len());
         let mut output_mapping = TinyVec::new();
         while output_mapping.len() + input_shape.len() < output_shape.len() {
@@ -529,10 +529,10 @@ impl View {
             });
         }
         Self {
-            input_shape: *input_shape,
+            input_shape,
             input_offsets: iter::repeat(0).take(input_shape.len()).collect(),
             output_mapping,
-            output_shape: *output_shape,
+            output_shape,
         }
     }
 
@@ -561,7 +561,7 @@ impl View {
 
     pub(crate) fn remove_axis(&self, axis: isize) -> Self {
         let axis = self.output_shape.axis(axis);
-        let mut tmp = self.clone();
+        let mut tmp = *self;
         tmp.output_mapping.remove(axis.index());
         tmp.output_shape.0.remove(axis.index());
         tmp

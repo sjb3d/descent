@@ -193,13 +193,8 @@ impl Module for Conv2D {
     }
 }
 
+#[derive(Default)]
 pub struct MaxPool2D {}
-
-impl MaxPool2D {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
 
 impl Module for MaxPool2D {
     fn eval<'g>(&self, input: DualArray<'g>, _ctx: &EvalContext) -> DualArray<'g> {

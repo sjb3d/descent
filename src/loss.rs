@@ -1,5 +1,6 @@
 use crate::common::*;
 
+#[allow(clippy::many_single_char_names)]
 pub fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -> DualArray<'g> {
     let (z, dz) = z.next_colour().into_inner();
     let y = y.into_array(z.graph());

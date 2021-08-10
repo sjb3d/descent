@@ -81,8 +81,8 @@ impl<'g> Array<'g> {
         })
     }
 
-    fn broadcast(self, shape: &Shape) -> Self {
-        self.view(View::broadcast(&self.shape(), shape))
+    fn broadcast(self, shape: Shape) -> Self {
+        self.view(View::broadcast(self.shape(), shape))
     }
 
     fn unary_op(self, op: UnaryOp) -> Self {
@@ -100,11 +100,11 @@ impl<'g> Array<'g> {
         let op_shape = self.graph.with_state(|state| {
             state.ops.graph[self.node_id]
                 .shape
-                .match_with_broadcast(&state.ops.graph[rhs.node_id].shape)
+                .match_with_broadcast(state.ops.graph[rhs.node_id].shape)
         });
 
-        let lhs = self.broadcast(&op_shape).node_id;
-        let rhs = rhs.broadcast(&op_shape).node_id;
+        let lhs = self.broadcast(op_shape).node_id;
+        let rhs = rhs.broadcast(op_shape).node_id;
 
         self.graph.with_state(|state| Array {
             node_id: state.ops.new_node(op_shape, Op::Binary(op), &[lhs, rhs]),
@@ -126,15 +126,15 @@ impl<'g> Array<'g> {
         let op_shape = self.graph.with_state(|state| {
             state.ops.graph[self.node_id]
                 .shape
-                .match_with_broadcast(&state.ops.graph[rhs.node_id].shape)
-                .match_with_broadcast(&state.ops.graph[pass.node_id].shape)
-                .match_with_broadcast(&state.ops.graph[fail.node_id].shape)
+                .match_with_broadcast(state.ops.graph[rhs.node_id].shape)
+                .match_with_broadcast(state.ops.graph[pass.node_id].shape)
+                .match_with_broadcast(state.ops.graph[fail.node_id].shape)
         });
 
-        let lhs = self.broadcast(&op_shape).node_id;
-        let rhs = rhs.broadcast(&op_shape).node_id;
-        let pass = pass.broadcast(&op_shape).node_id;
-        let fail = fail.broadcast(&op_shape).node_id;
+        let lhs = self.broadcast(op_shape).node_id;
+        let rhs = rhs.broadcast(op_shape).node_id;
+        let pass = pass.broadcast(op_shape).node_id;
+        let fail = fail.broadcast(op_shape).node_id;
 
         self.graph.with_state(|state| Array {
             node_id: state.ops.new_node(
@@ -187,9 +187,9 @@ impl<'g> Array<'g> {
         coord_or_zero.reduce_max(axis)
     }
 
-    fn reduce_onto_per_element(self, shape: &Shape) -> Self {
+    fn reduce_onto_per_element(self, shape: Shape) -> Self {
         let mut output = self;
-        while let Some(axis) = output.shape().reduce_axis_onto_per_element(shape) {
+        while let Some(axis) = output.shape().match_with_reduce(shape) {
             output = output.reduce_op(ReduceOp::Sum, axis);
         }
         output
@@ -228,10 +228,10 @@ impl<'g> Array<'g> {
 
     pub fn matmul(self, rhs: Array) -> Self {
         let lhs_batch_shape = Shape::from([1]) + self.shape();
-        let lhs = self.broadcast(&lhs_batch_shape);
+        let lhs = self.broadcast(lhs_batch_shape);
 
         let rhs_batch_shape = Shape::from([1]) + rhs.shape();
-        let rhs = rhs.broadcast(&rhs_batch_shape);
+        let rhs = rhs.broadcast(rhs_batch_shape);
 
         let result = lhs.batched_matmul(rhs);
         result.view(result.shape().identity_view().remove_axis(0))
@@ -241,7 +241,7 @@ impl<'g> Array<'g> {
         let result = self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape
-                .batched_matmul(&state.ops.graph[rhs.node_id].shape);
+                .batched_matmul(state.ops.graph[rhs.node_id].shape);
             Array {
                 node_id: state
                     .ops
@@ -415,7 +415,7 @@ impl<'g> Array<'g> {
         let mini_batch_scale = self
             .graph
             .literal(1.0 / (mini_batch_size as f32))
-            .broadcast(&grad_shape);
+            .broadcast(grad_shape);
         self.graph.with_state(|state| {
             assert_eq!(state.ops.graph[self.node_id].op, Op::Unary(UnaryOp::Mov));
             assert_eq!(
@@ -732,8 +732,8 @@ where
         let c = a + b;
 
         let dc = c.clone_as_accumulator();
-        da.accumulate(dc.reduce_onto_per_element(&a.shape()));
-        db.accumulate(dc.reduce_onto_per_element(&b.shape()));
+        da.accumulate(dc.reduce_onto_per_element(a.shape()));
+        db.accumulate(dc.reduce_onto_per_element(b.shape()));
 
         Self::new(c, dc)
     }

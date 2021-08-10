@@ -66,8 +66,8 @@ impl Adam {
 
         for var in variables.iter() {
             let shape = var.shape();
-            let m_var = env.static_parameter(shape.clone(), "m");
-            let v_var = env.static_parameter(shape.clone(), "v");
+            let m_var = env.static_parameter(shape, "m");
+            let v_var = env.static_parameter(shape, "v");
 
             let g = graph.parameter(var).grad();
             let m = graph.update_variable(&m_var, |m| m * beta1 + g * (1.0 - beta1));

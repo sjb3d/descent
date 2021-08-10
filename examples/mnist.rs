@@ -190,13 +190,13 @@ impl TestConvNet {
             pool1: if use_blur_pool {
                 Box::new(MaxBlurPool2D::new(env, c1))
             } else {
-                Box::new(MaxPool2D::new())
+                Box::new(MaxPool2D::default())
             },
             conv2: Conv2D::builder(c1, c2, 3, 3).with_pad(1).build(env),
             pool2: if use_blur_pool {
                 Box::new(MaxBlurPool2D::new(env, c2))
             } else {
-                Box::new(MaxPool2D::new())
+                Box::new(MaxPool2D::default())
             },
             fc1: Dense::new(env, 7 * 7 * c2, hidden),
             fc2: Dense::new(env, hidden, 10),
