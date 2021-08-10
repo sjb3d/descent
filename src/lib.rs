@@ -54,7 +54,7 @@ mod tests {
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.graph();
-        g.write_variable(&b_var, g.read_variable(&a_var).reduce_sum(-1));
+        g.write_variable(&b_var, g.read_variable(&a_var).reduce_sum(-1, true));
 
         let g = g.build_schedule();
         env.run(&g, TEST_RAND_SEED);

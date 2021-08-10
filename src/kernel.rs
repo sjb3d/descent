@@ -452,8 +452,7 @@ impl Kernel for ReduceKernel {
 
         for index in 0..self.input.output_shape.len() {
             if index != self.axis.index() {
-                let offset = if self.axis.index() == 0 { 1 } else { 0 };
-                writeln!(w, "in_coord[{}] = out_coord[{}];", index, index - offset)?;
+                writeln!(w, "in_coord[{0}] = out_coord[{0}];", index)?;
             }
         }
 

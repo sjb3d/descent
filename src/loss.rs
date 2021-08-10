@@ -6,11 +6,11 @@ pub fn softmax_cross_entropy_loss<'g>(z: DualArray<'g>, y: impl IntoArray<'g>) -
     let y = y.into_array(z.graph());
 
     // softmax
-    let t = (z - z.reduce_max(-1)).exp();
-    let p = t / t.reduce_sum(-1);
+    let t = (z - z.reduce_max(-1, true)).exp();
+    let p = t / t.reduce_sum(-1, true);
 
     // cross entropy loss
-    let loss = y.select_eq(p.coord(-1), -p.log(), 0.0).reduce_sum(-1); // TODO: pick element of p using value of y
+    let loss = y.select_eq(p.coord(-1), -p.log(), 0.0).reduce_sum(-1, true); // TODO: pick element of p using value of y
     let dloss = loss.clone_as_accumulator();
 
     // backprop (softmax with cross entropy directly)
@@ -25,7 +25,7 @@ pub fn softmax_cross_entropy_accuracy<'g>(z: DualArray<'g>, y: impl IntoArray<'g
     let y = y.into_array(z.graph());
 
     // index of most likely choice
-    let pred = z.argmax(-1);
+    let pred = z.argmax(-1, true);
 
     // set to 1 when correct, 0 when incorrect
     pred.select_eq(y, 1.0, 0.0)

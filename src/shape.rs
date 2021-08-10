@@ -68,7 +68,7 @@ impl Shape {
         Shape::new(v)
     }
 
-    pub(crate) fn match_with_broadcast(&self, rhs: Shape) -> Self {
+    pub(crate) fn broadcast_with(&self, rhs: Shape) -> Self {
         // broadcast axes from 1 => n where necessary
         let len = self.0.len().max(rhs.0.len());
         let a = self.prefix_ones_to_len(len);
@@ -87,26 +87,6 @@ impl Shape {
                 })
                 .collect(),
         )
-    }
-
-    pub(crate) fn match_with_reduce(&self, rhs: Shape) -> Option<Axis> {
-        if self.0.len() > rhs.0.len() {
-            return Some(Axis::from_index(0));
-        }
-        assert_eq!(self.0.len(), rhs.0.len());
-        for (i, (a, b)) in self
-            .0
-            .iter()
-            .copied()
-            .zip(rhs.0.iter().copied())
-            .enumerate()
-        {
-            if a != b {
-                assert_eq!(b, 1);
-                return Some(Axis::from_index(i));
-            }
-        }
-        None
     }
 
     pub(crate) fn batched_matmul(&self, rhs: Shape) -> Self {
@@ -190,15 +170,9 @@ impl Shape {
     }
 
     pub(crate) fn reduce(&self, axis: Axis) -> Self {
-        // strip outermost dimension if reduced, otherwise keep with length 1
-        let index = axis.index();
-        if index == 0 && self.0.len() > 1 {
-            Shape::new(self.0.iter().copied().skip(1).collect())
-        } else {
-            let mut v = self.0;
-            v[index] = 1;
-            Shape::new(v)
-        }
+        let mut tmp = *self;
+        tmp[axis] = 1;
+        tmp
     }
 
     pub(crate) fn one_hot(&self, count: usize) -> Self {
@@ -559,8 +533,15 @@ impl View {
         false
     }
 
-    pub(crate) fn remove_axis(&self, axis: isize) -> Self {
-        let axis = self.output_shape.axis(axis);
+    pub(crate) fn insert_axis(&self, axis: Axis) -> Self {
+        let mut tmp = *self;
+        tmp.output_mapping
+            .insert(axis.index(), AxisMapping::Broadcast);
+        tmp.output_shape.0.insert(axis.index(), 1);
+        tmp
+    }
+
+    pub(crate) fn remove_axis(&self, axis: Axis) -> Self {
         let mut tmp = *self;
         tmp.output_mapping.remove(axis.index());
         tmp.output_shape.0.remove(axis.index());

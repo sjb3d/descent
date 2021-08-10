@@ -261,9 +261,11 @@ fn main() {
         let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
 
         // update sum of loss and accuracy
-        graph.update_variable(&loss_sum_var, |loss_sum| loss_sum + loss.reduce_sum(0));
+        graph.update_variable(&loss_sum_var, |loss_sum| {
+            loss_sum + loss.reduce_sum(0, false)
+        });
         graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
-            accuracy_sum + accuracy.reduce_sum(0)
+            accuracy_sum + accuracy.reduce_sum(0, false)
         });
 
         // train using gradient of the loss (scaled for size of mini batch)
@@ -309,9 +311,11 @@ fn main() {
         let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
 
         // update sum of loss and accuracy
-        graph.update_variable(&loss_sum_var, |loss_sum| loss_sum + loss.reduce_sum(0));
+        graph.update_variable(&loss_sum_var, |loss_sum| {
+            loss_sum + loss.reduce_sum(0, false)
+        });
         graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
-            accuracy_sum + accuracy.reduce_sum(0)
+            accuracy_sum + accuracy.reduce_sum(0, false)
         });
 
         graph.build_schedule()
@@ -328,7 +332,7 @@ fn main() {
             let x = graph.read_variable(&var);
             let x = x.reshape([x.shape().element_count()]);
             let x = x * x * 0.5;
-            sum = sum + x.reduce_sum(0);
+            sum = sum + x.reduce_sum(0, true);
         }
         graph.write_variable(&norm_var, sum);
 

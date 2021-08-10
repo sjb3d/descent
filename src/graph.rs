@@ -85,6 +85,29 @@ impl<'g> Array<'g> {
         self.view(View::broadcast(self.shape(), shape))
     }
 
+    fn unbroadcast(self, shape: Shape) -> Self {
+        let mut output = self;
+
+        while output.shape().len() > shape.len() {
+            output = output.reduce_sum(0, false);
+        }
+        assert_eq!(output.shape().len(), shape.len());
+
+        for (index, (source, target)) in output
+            .shape()
+            .iter()
+            .copied()
+            .zip(shape.iter().copied())
+            .enumerate()
+        {
+            if source != target {
+                assert_eq!(target, 1);
+                output = output.reduce_sum(index as isize, true);
+            }
+        }
+        output
+    }
+
     fn unary_op(self, op: UnaryOp) -> Self {
         self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id].shape;
@@ -100,7 +123,7 @@ impl<'g> Array<'g> {
         let op_shape = self.graph.with_state(|state| {
             state.ops.graph[self.node_id]
                 .shape
-                .match_with_broadcast(state.ops.graph[rhs.node_id].shape)
+                .broadcast_with(state.ops.graph[rhs.node_id].shape)
         });
 
         let lhs = self.broadcast(op_shape).node_id;
@@ -126,9 +149,9 @@ impl<'g> Array<'g> {
         let op_shape = self.graph.with_state(|state| {
             state.ops.graph[self.node_id]
                 .shape
-                .match_with_broadcast(state.ops.graph[rhs.node_id].shape)
-                .match_with_broadcast(state.ops.graph[pass.node_id].shape)
-                .match_with_broadcast(state.ops.graph[fail.node_id].shape)
+                .broadcast_with(state.ops.graph[rhs.node_id].shape)
+                .broadcast_with(state.ops.graph[pass.node_id].shape)
+                .broadcast_with(state.ops.graph[fail.node_id].shape)
         });
 
         let lhs = self.broadcast(op_shape).node_id;
@@ -149,11 +172,7 @@ impl<'g> Array<'g> {
     fn reduce_op(self, reduce_op: ReduceOp, axis: Axis) -> Self {
         let shape = self.shape();
         if shape[axis] == 1 {
-            if axis.index() == 0 {
-                self.remove_axis(0)
-            } else {
-                self
-            }
+            self
         } else {
             self.graph.with_state(|state| {
                 let shape = shape.reduce(axis);
@@ -169,30 +188,34 @@ impl<'g> Array<'g> {
         }
     }
 
+    fn keep_axis(self, axis: Axis, keep_axis: bool) -> Self {
+        if keep_axis {
+            self
+        } else {
+            self.remove_axis(axis)
+        }
+    }
+
     pub fn one_hot(self, count: usize) -> Self {
         let shape = self.shape().one_hot(count);
         self.graph.coord(shape, -1).select_eq(self, 1.0, 0.0)
     }
 
-    pub fn reduce_max(self, axis: isize) -> Self {
-        self.reduce_op(ReduceOp::Max, self.shape().axis(axis))
+    pub fn reduce_max(self, axis: isize, keep_axis: bool) -> Self {
+        let axis = self.shape().axis(axis);
+        self.reduce_op(ReduceOp::Max, axis)
+            .keep_axis(axis, keep_axis)
     }
-    pub fn reduce_sum(self, axis: isize) -> Self {
-        self.reduce_op(ReduceOp::Sum, self.shape().axis(axis))
+    pub fn reduce_sum(self, axis: isize, keep_axis: bool) -> Self {
+        let axis = self.shape().axis(axis);
+        self.reduce_op(ReduceOp::Sum, axis)
+            .keep_axis(axis, keep_axis)
     }
 
-    pub fn argmax(self, axis: isize) -> Self {
+    pub fn argmax(self, axis: isize, keep_axis: bool) -> Self {
         // implement with reduce_max for now
-        let coord_or_zero = self.select_eq(self.reduce_max(axis), self.coord(axis), 0.0);
-        coord_or_zero.reduce_max(axis)
-    }
-
-    fn reduce_onto_per_element(self, shape: Shape) -> Self {
-        let mut output = self;
-        while let Some(axis) = output.shape().match_with_reduce(shape) {
-            output = output.reduce_op(ReduceOp::Sum, axis);
-        }
-        output
+        let coord_or_zero = self.select_eq(self.reduce_max(axis, true), self.coord(axis), 0.0);
+        coord_or_zero.reduce_max(axis, keep_axis)
     }
 
     pub fn coord(self, axis: isize) -> Self {
@@ -234,7 +257,12 @@ impl<'g> Array<'g> {
         let rhs = rhs.broadcast(rhs_batch_shape);
 
         let result = lhs.batched_matmul(rhs);
-        result.view(result.shape().identity_view().remove_axis(0))
+        result.view(
+            result
+                .shape()
+                .identity_view()
+                .remove_axis(Axis::from_index(0)),
+        )
     }
 
     pub fn batched_matmul(self, rhs: Array) -> Self {
@@ -249,10 +277,14 @@ impl<'g> Array<'g> {
                 graph: self.graph,
             }
         });
-        result.reduce_sum(1).remove_axis(1)
+        result.reduce_sum(1, false)
     }
 
-    pub(crate) fn remove_axis(self, axis: isize) -> Self {
+    pub(crate) fn insert_axis(self, axis: Axis) -> Self {
+        self.view(self.shape().identity_view().insert_axis(axis))
+    }
+
+    pub(crate) fn remove_axis(self, axis: Axis) -> Self {
         self.view(self.shape().identity_view().remove_axis(axis))
     }
 
@@ -689,19 +721,40 @@ impl<'g> DualArray<'g> {
                 filter_h * filter_w,
                 group_nc,
             ])
-            .reduce_max(1)
+            .reduce_max(1, true)
             .reshape([m, output_h, output_w, groups * group_nc])
     }
 
-    pub fn reduce_max(self, axis: isize) -> Self {
+    fn reduce_op(self, reduce_op: ReduceOp, axis: Axis) -> Self {
         let (a, da) = self.into_inner();
 
-        let b = a.reduce_max(axis);
+        let b = a.reduce_op(reduce_op, axis);
 
         let db = b.clone_as_accumulator();
         da.accumulate(a.select_eq(b, db, 0.0));
 
         Self::new(b, db)
+    }
+
+    fn keep_axis(self, axis: Axis, keep_axis: bool) -> Self {
+        if keep_axis {
+            self
+        } else {
+            let (a, da) = self.into_inner();
+
+            let b = a.remove_axis(axis);
+
+            let db = b.clone_as_accumulator();
+            da.accumulate(b.insert_axis(axis));
+
+            Self::new(b, db)
+        }
+    }
+
+    pub fn reduce_max(self, axis: isize, keep_axis: bool) -> Self {
+        let axis = self.shape().axis(axis);
+        self.reduce_op(ReduceOp::Max, axis)
+            .keep_axis(axis, keep_axis)
     }
 
     pub fn flatten(self) -> Self {
@@ -732,8 +785,8 @@ where
         let c = a + b;
 
         let dc = c.clone_as_accumulator();
-        da.accumulate(dc.reduce_onto_per_element(a.shape()));
-        db.accumulate(dc.reduce_onto_per_element(b.shape()));
+        da.accumulate(dc.unbroadcast(a.shape()));
+        db.accumulate(dc.unbroadcast(b.shape()));
 
         Self::new(c, dc)
     }
