@@ -177,12 +177,11 @@ impl Shape {
 
     pub(crate) fn one_hot(&self, count: usize) -> Self {
         // expand last axis (innermost dimension) from 1 to n
-        let (last, prefix) = self.0.split_last().unwrap();
-        assert_eq!(*last, 1);
-        let mut v = ShapeVec::new();
-        v.extend_from_slice(prefix);
-        v.push(count);
-        Shape::new(v)
+        let axis = self.axis(-1);
+        let mut tmp = *self;
+        assert_eq!(tmp[axis], 1);
+        tmp[axis] = count;
+        tmp
     }
 
     pub(crate) fn strides(&self) -> TinyVec<[usize; MAX_DIM]> {
