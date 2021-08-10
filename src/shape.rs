@@ -230,6 +230,11 @@ impl<const N: usize> From<[usize; N]> for Shape {
         Self::new(s.iter().copied().collect())
     }
 }
+impl iter::FromIterator<usize> for Shape {
+    fn from_iter<T: IntoIterator<Item = usize>>(iter: T) -> Self {
+        Self::new(iter.into_iter().collect())
+    }
+}
 
 impl<const N: usize> TryFrom<Shape> for [usize; N] {
     type Error = array::TryFromSliceError;
@@ -535,6 +540,16 @@ impl View {
         false
     }
 
+    pub(crate) fn permute_axes(&self, perm: &[usize]) -> Self {
+        let mut tmp = *self;
+        tmp.output_mapping = perm
+            .iter()
+            .map(|&index| self.output_mapping[index])
+            .collect();
+        tmp.output_shape = perm.iter().map(|&index| self.output_shape[index]).collect();
+        tmp
+    }
+
     pub(crate) fn insert_axis(&self, axis: Axis) -> Self {
         let mut tmp = *self;
         tmp.output_mapping
@@ -545,6 +560,7 @@ impl View {
 
     pub(crate) fn remove_axis(&self, axis: Axis) -> Self {
         let mut tmp = *self;
+        assert_eq!(tmp.output_shape[axis], 1);
         tmp.output_mapping.remove(axis.index());
         tmp.output_shape.0.remove(axis.index());
         tmp

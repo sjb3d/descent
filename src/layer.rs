@@ -1,5 +1,5 @@
 use crate::common::*;
-use std::io::Write;
+use std::{io::Write, mem};
 
 pub struct EvalContext {
     is_training: bool,
@@ -91,19 +91,23 @@ impl Conv2DBuilder {
 
     pub fn build(self, env: &mut Environment) -> Conv2D {
         let Self {
-            input_channels: filter_ic,
-            output_channels: filter_oc,
+            input_channels,
+            output_channels,
             filter,
             pad,
             stride,
             groups,
             is_blur,
         } = self;
+        let filter_ic = input_channels / groups;
+        let filter_oc = output_channels / groups;
+        assert_eq!(filter_ic * groups, input_channels);
+        assert_eq!(filter_oc * groups, output_channels);
         let (filter_w, filter_h) = filter;
 
         let (f, b) = if is_blur {
-            let f = env.static_parameter([filter_oc, filter_h, filter_w, filter_ic], "f");
-            let b = env.static_parameter([filter_oc], "b");
+            let f = env.static_parameter([groups, filter_oc, filter_h, filter_w, filter_ic], "f");
+            let b = env.static_parameter([output_channels], "b");
 
             assert_eq!([filter_oc, filter_h, filter_w, filter_ic], [1, 3, 3, 1]);
             let f_data: [f32; 9] = [
@@ -118,29 +122,25 @@ impl Conv2DBuilder {
                 1.0 / 16.0,
             ];
 
-            env.writer(&f)
-                .write_all(bytemuck::bytes_of(&f_data))
-                .unwrap();
+            let mut w = env.writer(&f);
+            for _ in 0..groups {
+                w.write_all(bytemuck::bytes_of(&f_data)).unwrap();
+            }
+            mem::drop(w);
             env.writer(&b).zero_fill();
 
             (f, b)
         } else {
             let f = env.trainable_parameter(
-                [filter_oc, filter_h, filter_w, filter_ic],
+                [groups, filter_oc, filter_h, filter_w, filter_ic],
                 "f",
                 VariableContents::normal_from_fan_in(filter_h * filter_w * filter_ic),
             );
-            let b = env.trainable_parameter([filter_oc], "b", VariableContents::Zero);
+            let b = env.trainable_parameter([output_channels], "b", VariableContents::Zero);
             (f, b)
         };
 
-        Conv2D {
-            f,
-            b,
-            pad,
-            stride,
-            groups,
-        }
+        Conv2D { f, b, pad, stride }
     }
 }
 
@@ -149,7 +149,6 @@ pub struct Conv2D {
     b: Variable, // TODO: optional?
     pad: usize,
     stride: (usize, usize),
-    groups: usize,
 }
 
 impl Conv2D {
@@ -173,23 +172,9 @@ impl Conv2D {
 
 impl Module for Conv2D {
     fn eval<'g>(&self, input: DualArray<'g>, _ctx: &EvalContext) -> DualArray<'g> {
-        let conv = input
-            .next_colour()
-            .conv2d(&self.f, self.pad, self.stride, self.groups);
+        let conv = input.next_colour().conv2d(&self.f, self.pad, self.stride);
 
-        let out_shape = conv.shape();
-        let bias_shape = {
-            let (out_nc, prefix) = out_shape.split_last().unwrap();
-            let filter_oc = self.f.shape()[0];
-            assert_eq!(*out_nc, filter_oc * self.groups);
-
-            let mut v = ShapeVec::new();
-            v.extend_from_slice(prefix);
-            v.push(self.groups);
-            v.push(filter_oc);
-            Shape::new(v)
-        };
-        (conv.reshape(bias_shape) + &self.b).reshape(out_shape)
+        conv + &self.b
     }
 }
 
@@ -209,7 +194,7 @@ pub struct MaxBlurPool2D {
 impl MaxBlurPool2D {
     pub fn new(env: &mut Environment, channels: usize) -> Self {
         Self {
-            blur: Conv2D::builder(1, 1, 3, 3)
+            blur: Conv2D::builder(channels, channels, 3, 3)
                 .with_pad(1)
                 .with_stride(2, 2)
                 .with_groups(channels)

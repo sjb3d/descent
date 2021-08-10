@@ -3,6 +3,7 @@ use ordered_float::NotNan;
 use petgraph::prelude::*;
 use slotmap::SparseSecondaryMap;
 use std::{cell::RefCell, convert::TryInto, ops};
+use tinyvec::ArrayVec as TinyVec;
 
 #[derive(Clone, Copy)]
 pub struct Array<'g> {
@@ -249,23 +250,15 @@ impl<'g> Array<'g> {
         self.unary_op(UnaryOp::Log)
     }
 
-    pub fn matmul(self, rhs: Array) -> Self {
-        let lhs_batch_shape = Shape::from([1]) + self.shape();
-        let lhs = self.broadcast(lhs_batch_shape);
-
-        let rhs_batch_shape = Shape::from([1]) + rhs.shape();
-        let rhs = rhs.broadcast(rhs_batch_shape);
-
+    pub fn matmul(self, rhs: impl IntoArray<'g>) -> Self {
+        let axis = Axis::from_index(0);
+        let lhs = self.insert_axis(axis);
+        let rhs = rhs.into_array(self.graph).insert_axis(axis);
         let result = lhs.batched_matmul(rhs, MatMulOutputMode::Batches);
-        result.view(
-            result
-                .shape()
-                .identity_view()
-                .remove_axis(Axis::from_index(0)),
-        )
+        result.remove_axis(axis)
     }
 
-    fn batched_matmul(self, rhs: Array, output_mode: MatMulOutputMode) -> Self {
+    pub(crate) fn batched_matmul(self, rhs: Array, output_mode: MatMulOutputMode) -> Self {
         let chunks = self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape
@@ -279,7 +272,11 @@ impl<'g> Array<'g> {
                 graph: self.graph,
             }
         });
-        chunks.reduce_sum(0, false)
+        let output = chunks.reduce_sum(0, false);
+        match output_mode {
+            MatMulOutputMode::Batches => output,
+            MatMulOutputMode::Rows => output.permute_axes(&[1, 0, 2]),
+        }
     }
 
     pub(crate) fn insert_axis(self, axis: Axis) -> Self {
@@ -288,6 +285,10 @@ impl<'g> Array<'g> {
 
     pub(crate) fn remove_axis(self, axis: Axis) -> Self {
         self.view(self.shape().identity_view().remove_axis(axis))
+    }
+
+    pub(crate) fn permute_axes(self, perm: &[usize]) -> Self {
+        self.view(self.shape().identity_view().permute_axes(perm))
     }
 
     pub(crate) fn pad(self, axis: isize, pad: usize) -> Self {
@@ -589,19 +590,25 @@ impl<'g> DualArray<'g> {
         Self::new(b, db)
     }
 
-    pub fn matmul(self, rhs: impl IntoDualArray<'g>) -> Self {
-        let rhs = rhs.into_dual_array(self.graph);
-
+    pub(crate) fn batched_matmul(self, rhs: DualArray, output_mode: MatMulOutputMode) -> Self {
         let (a, da) = self.into_inner();
         let (b, db) = rhs.into_inner();
 
-        let c = a.matmul(b);
+        let c = a.batched_matmul(b, output_mode);
 
         let dc = c.clone_as_accumulator();
-        da.accumulate(dc.matmul(b.transpose()));
-        db.accumulate(a.transpose().matmul(dc));
+        da.accumulate(dc.batched_matmul(b.transpose(), MatMulOutputMode::Batches));
+        db.accumulate(a.transpose().batched_matmul(dc, MatMulOutputMode::Batches));
 
         Self::new(c, dc)
+    }
+
+    pub fn matmul(self, rhs: impl IntoDualArray<'g>) -> Self {
+        let axis = Axis::from_index(0);
+        let lhs = self.insert_axis(axis);
+        let rhs = rhs.into_dual_array(self.graph).insert_axis(axis);
+        let result = lhs.batched_matmul(rhs, MatMulOutputMode::Batches);
+        result.remove_axis(axis)
     }
 
     pub fn transpose(self) -> Self {
@@ -673,7 +680,6 @@ impl<'g> DualArray<'g> {
         filter: impl IntoDualArray<'g>,
         pad: usize,
         stride: (usize, usize),
-        groups: usize,
     ) -> Self {
         let filter = filter.into_dual_array(self.graph);
 
@@ -683,32 +689,34 @@ impl<'g> DualArray<'g> {
         // copy the input into windows that match the filter size
         let padded_shape = padded.shape();
         let filter_shape = filter.shape();
-        assert_eq!(padded_shape.len(), 4);
-        assert_eq!(filter_shape.len(), 4);
-        let [m, _input_h, _input_w, input_nc]: [usize; 4] = padded_shape.try_into().unwrap();
-        let [filter_oc, filter_h, filter_w, filter_ic]: [usize; 4] =
+        let [input_m, _input_h, _input_w, input_nc]: [usize; 4] = padded_shape.try_into().unwrap();
+        let [filter_g, filter_oc, filter_h, filter_w, filter_ic]: [usize; 5] =
             filter_shape.try_into().unwrap();
-        assert_eq!(input_nc, groups * filter_ic);
-        let windows = padded.image_to_windows((filter_w, filter_h), stride, groups);
+        assert_eq!(input_nc, filter_g * filter_ic);
+        let windows = padded.image_to_windows((filter_w, filter_h), stride, filter_g);
 
         // apply the filter using a matrix multiplication
         let windows_shape = windows.shape();
         let [windows_m, output_h, output_w, windows_g, windows_fh, windows_fw, windows_nc]: [usize;
             7] = windows_shape.try_into().unwrap();
-        assert_eq!(m, windows_m);
-        assert_eq!(groups, windows_g);
+        assert_eq!(input_m, windows_m);
+        assert_eq!(filter_g, windows_g);
         assert_eq!(filter_h, windows_fh);
         assert_eq!(filter_w, windows_fw);
         assert_eq!(filter_ic, windows_nc);
-        let a = windows.reshape([
-            m * output_h * output_w * groups,
-            filter_h * filter_w * filter_ic,
-        ]);
-        let b = filter.reshape([filter_oc, filter_h * filter_w * filter_ic]);
-        let c = a.matmul(b.transpose());
+        let a = windows
+            .reshape([
+                input_m * output_h * output_w,
+                filter_g,
+                filter_h * filter_w * filter_ic,
+            ])
+            .permute_axes(&[1, 0, 2]);
+        let b = filter.reshape([filter_g, filter_oc, filter_h * filter_w * filter_ic]);
+        let c = a.batched_matmul(b.transpose(), MatMulOutputMode::Rows);
 
         // reshape output back to 4D
-        c.reshape([m, output_h, output_w, groups * filter_oc])
+        c.permute_axes(&[1, 0, 2])
+            .reshape([input_m, output_h, output_w, filter_g * filter_oc])
     }
 
     pub fn max_pool2d(self, filter: (usize, usize), stride: (usize, usize)) -> Self {
@@ -738,18 +746,33 @@ impl<'g> DualArray<'g> {
         Self::new(b, db)
     }
 
+    fn insert_axis(self, axis: Axis) -> Self {
+        let (a, da) = self.into_inner();
+
+        let b = a.insert_axis(axis);
+
+        let db = b.clone_as_accumulator();
+        da.accumulate(db.remove_axis(axis));
+
+        Self::new(b, db)
+    }
+
+    fn remove_axis(self, axis: Axis) -> Self {
+        let (a, da) = self.into_inner();
+
+        let b = a.remove_axis(axis);
+
+        let db = b.clone_as_accumulator();
+        da.accumulate(db.insert_axis(axis));
+
+        Self::new(b, db)
+    }
+
     fn keep_axis(self, axis: Axis, keep_axis: bool) -> Self {
         if keep_axis {
             self
         } else {
-            let (a, da) = self.into_inner();
-
-            let b = a.remove_axis(axis);
-
-            let db = b.clone_as_accumulator();
-            da.accumulate(b.insert_axis(axis));
-
-            Self::new(b, db)
+            self.remove_axis(axis)
         }
     }
 
@@ -770,6 +793,28 @@ impl<'g> DualArray<'g> {
     pub fn set_loss(self) -> Array<'g> {
         self.grad().set_loss_grad();
         self.value()
+    }
+
+    pub(crate) fn permute_axes(self, perm: &[usize]) -> Self {
+        let mut inv_perm: TinyVec<[usize; MAX_DIM]> = TinyVec::new();
+        inv_perm.set_len(perm.len());
+        for (src, dst) in perm.iter().copied().enumerate() {
+            inv_perm[dst] = src;
+        }
+        assert!(inv_perm
+            .iter()
+            .copied()
+            .enumerate()
+            .all(|(dst, src)| perm[src] == dst));
+
+        let (a, da) = self.into_inner();
+
+        let b = a.permute_axes(perm);
+
+        let db = b.clone_as_accumulator();
+        da.accumulate(db.permute_axes(&inv_perm));
+
+        Self::new(b, db)
     }
 }
 

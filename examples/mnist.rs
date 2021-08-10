@@ -192,7 +192,10 @@ impl TestConvNet {
             } else {
                 Box::new(MaxPool2D::default())
             },
-            conv2: Conv2D::builder(c1, c2, 3, 3).with_pad(1).build(env),
+            conv2: Conv2D::builder(c1, c2, 3, 3)
+                .with_pad(1)
+                .with_groups(2)
+                .build(env),
             pool2: if use_blur_pool {
                 Box::new(MaxBlurPool2D::new(env, c2))
             } else {

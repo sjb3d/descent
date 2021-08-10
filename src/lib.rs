@@ -132,7 +132,7 @@ mod tests {
         let c_data: Vec<f32> = iter::repeat(9.0).take(64).collect();
 
         let a_var = env.static_parameter([1, 10, 10, 1], "a");
-        let b_var = env.static_parameter([1, 3, 3, 1], "b");
+        let b_var = env.static_parameter([1, 1, 3, 3, 1], "b");
         let c_var = env.static_parameter([1, 8, 8, 1], "c");
 
         env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
@@ -141,7 +141,7 @@ mod tests {
         let g = env.graph();
         g.write_variable(
             &c_var,
-            g.parameter(&a_var).conv2d(&b_var, 0, (1, 1), 1).value(),
+            g.parameter(&a_var).conv2d(&b_var, 0, (1, 1)).value(),
         );
 
         let g = g.build_schedule();
