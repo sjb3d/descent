@@ -256,7 +256,7 @@ impl<'g> Array<'g> {
         let rhs_batch_shape = Shape::from([1]) + rhs.shape();
         let rhs = rhs.broadcast(rhs_batch_shape);
 
-        let result = lhs.batched_matmul(rhs);
+        let result = lhs.batched_matmul(rhs, MatMulOutputMode::Batches);
         result.view(
             result
                 .shape()
@@ -265,19 +265,21 @@ impl<'g> Array<'g> {
         )
     }
 
-    pub fn batched_matmul(self, rhs: Array) -> Self {
-        let result = self.graph.with_state(|state| {
+    fn batched_matmul(self, rhs: Array, output_mode: MatMulOutputMode) -> Self {
+        let chunks = self.graph.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape
-                .batched_matmul(state.ops.graph[rhs.node_id].shape);
+                .batched_matmul(state.ops.graph[rhs.node_id].shape, output_mode);
             Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::MatMul, &[self.node_id, rhs.node_id]),
+                node_id: state.ops.new_node(
+                    shape,
+                    Op::MatMul { output_mode },
+                    &[self.node_id, rhs.node_id],
+                ),
                 graph: self.graph,
             }
         });
-        result.reduce_sum(1, false)
+        chunks.reduce_sum(0, false)
     }
 
     pub(crate) fn insert_axis(self, axis: Axis) -> Self {

@@ -277,6 +277,7 @@ impl Kernel for PerElementKernel {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct MatMulKernel {
     pub(crate) shape: Shape,
+    pub(crate) output_mode: MatMulOutputMode,
     pub(crate) inputs: [View; 2],
 }
 
@@ -286,8 +287,24 @@ impl MatMulKernel {
     const TILE_K: usize = 16;
     const GROUP_SIZE: usize = 64;
 
+    fn m(&self) -> usize {
+        self.inputs[0].output_shape[SignedIndex(-2)]
+    }
+    fn n(&self) -> usize {
+        self.inputs[1].output_shape[SignedIndex(-1)]
+    }
     fn k(&self) -> usize {
         self.inputs[0].output_shape[SignedIndex(-1)]
+    }
+
+    fn k_chunk_count(&self) -> usize {
+        self.shape[0]
+    }
+    fn batch_count(&self) -> usize {
+        self.shape[match self.output_mode {
+            MatMulOutputMode::Batches => 1,
+            MatMulOutputMode::Rows => 2,
+        }]
     }
 }
 
@@ -303,9 +320,12 @@ impl Kernel for MatMulKernel {
         assert_eq!(self.inputs[0].output_shape.len(), 3);
         assert_eq!(self.inputs[1].output_shape.len(), 3);
 
-        let [_batch_count, k_chunk_count, m, n]: [usize; 4] = self.shape.try_into().unwrap();
+        let m = self.m();
+        let n = self.n();
         let k = self.k();
+        let k_chunk_count = self.k_chunk_count();
         let k_chunk_size_in_tiles = k.div_round_up(Self::TILE_K).div_round_up(k_chunk_count);
+        let batch_count = self.batch_count();
 
         for i in 0..2 {
             writeln!(w, "int load_index{}(uint batch_index, uvec2 coord) {{", i)?;
@@ -348,19 +368,24 @@ impl Kernel for MatMulKernel {
             }}",
             n, k,
         )?;
+
+        let (batch_stride, row_stride) = match self.output_mode {
+            MatMulOutputMode::Batches => (m * n, n),
+            MatMulOutputMode::Rows => (n, batch_count * n),
+        };
         writeln!(
             w,
             "\
-            void store_c(uint batch_index, uint k_chunk_index, uvec2 coord, float value) {{
+            void store_c(uint k_chunk_index, uint batch_index, uvec2 coord, float value) {{
                 if (coord.x < {} && coord.y < {}) {{
-                    output0[batch_index*{} + k_chunk_index*{} + coord.y*{} + coord.x] = value;
+                    output0[k_chunk_index*{} + batch_index*{} + coord.y*{} + coord.x] = value;
                 }}
             }}",
             n,
             m,
-            k_chunk_count * m * n,
-            m * n,
-            n
+            batch_count * m * n,
+            batch_stride,
+            row_stride
         )?;
 
         writeln!(w, "const uint M = {};", m)?;
@@ -376,6 +401,7 @@ impl Kernel for MatMulKernel {
             k_chunk_size_in_tiles
         )?;
         writeln!(w, "const uint K_CHUNK_COUNT = {};", k_chunk_count)?;
+        writeln!(w, "const uint BATCH_COUNT = {};", batch_count)?;
 
         let load_a_in_columns = self.inputs[0].load_in_columns_hint();
         let load_b_in_columns = self.inputs[1].load_in_columns_hint();
@@ -402,11 +428,10 @@ impl Kernel for MatMulKernel {
     }
 
     fn group_count(&self) -> usize {
-        let [batch_count, k_chunk_count, m, n]: [usize; 4] = self.shape.try_into().unwrap();
-        batch_count
-            * k_chunk_count
-            * m.div_round_up(MatMulKernel::TILE_M)
-            * n.div_round_up(MatMulKernel::TILE_N)
+        self.batch_count()
+            * self.k_chunk_count()
+            * self.m().div_round_up(MatMulKernel::TILE_M)
+            * self.n().div_round_up(MatMulKernel::TILE_N)
     }
 
     fn label_name(&self) -> String {

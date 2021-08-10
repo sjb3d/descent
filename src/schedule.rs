@@ -461,7 +461,7 @@ impl Schedule {
                             outputs: vec![node_id],
                         }));
                     }
-                    Op::MatMul => {
+                    Op::MatMul { output_mode } => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
                         assert_eq!(arg_sources.len(), 2);
                         let kernel_inputs = arg_sources
@@ -473,6 +473,7 @@ impl Schedule {
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: GenericKernel::MatMul(MatMulKernel {
                                 shape: node.shape,
+                                output_mode,
                                 inputs: kernel_inputs,
                             }),
                             inputs: arg_sources.iter().map(|src| src.node_id).collect(),

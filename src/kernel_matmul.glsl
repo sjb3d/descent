@@ -10,6 +10,7 @@
 // const uint GROUP_SIZE
 // const uint K_CHUNK_SIZE_IN_TILES
 // const uint K_CHUNK_COUNT
+// const uint BATCH_COUNT
 // const bool LOAD_A_IN_COLUMNS
 // const bool LOAD_B_IN_COLUMNS
 
@@ -41,10 +42,10 @@ shared float s_b[B_TILE_H * B_TILE_STRIDE];
 
 void main() {
     int c_output_coord[4];
-    compute_grid_coord(gl_WorkGroupID.x, c_output_coord, 0, K_CHUNK_COUNT, M_TILE_COUNT, N_TILE_COUNT);
+    compute_grid_coord(gl_WorkGroupID.x, c_output_coord, K_CHUNK_COUNT, BATCH_COUNT, M_TILE_COUNT, N_TILE_COUNT);
     uvec2 c_tile_coord = uvec2(c_output_coord[3], c_output_coord[2]);
-    uint k_chunk_index = c_output_coord[1];
-    uint batch_index = c_output_coord[0];
+    uint batch_index = c_output_coord[1];
+    uint k_chunk_index = c_output_coord[0];
 
     uint thread_index = gl_LocalInvocationID.x;
 
@@ -91,6 +92,6 @@ void main() {
     for (uint i = 0; i < C_VALUES_PER_THREAD; ++i) {
         uint c_index = i*GROUP_SIZE + thread_index;
         uvec2 c_coord_in_tile = uvec2(c_index % C_TILE_W, c_index / C_TILE_W);
-        store_c(batch_index, k_chunk_index, c_tile_coord*uvec2(C_TILE_W, C_TILE_H) + c_coord_in_tile, result[i]);
+        store_c(k_chunk_index, batch_index, c_tile_coord*uvec2(C_TILE_W, C_TILE_H) + c_coord_in_tile, result[i]);
     }   
 }

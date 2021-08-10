@@ -89,13 +89,16 @@ impl Shape {
         )
     }
 
-    pub(crate) fn batched_matmul(&self, rhs: Shape) -> Self {
+    pub(crate) fn batched_matmul(&self, rhs: Shape, output_mode: MatMulOutputMode) -> Self {
         let [b0, m, k0]: [usize; 3] = self.try_into().unwrap();
         let [b1, k1, n]: [usize; 3] = rhs.try_into().unwrap();
         assert_eq!(b0, b1);
         assert_eq!(k0, k1);
         let r = k0.div_round_up(MATMUL_MAX_K_SIZE);
-        Shape::from([b0, r, m, n])
+        match output_mode {
+            MatMulOutputMode::Batches => Shape::from([r, b0, m, n]),
+            MatMulOutputMode::Rows => Shape::from([r, m, b0, n]),
+        }
     }
 
     pub(crate) fn unpad(&self, axis: Axis, pad: usize) -> Self {

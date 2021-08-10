@@ -57,6 +57,12 @@ pub(crate) const MAX_OP_ARGS: usize = 4;
 pub(crate) const MATMUL_MAX_K_SIZE: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum MatMulOutputMode {
+    Batches,
+    Rows,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Op {
     Input { variable_id: VariableId },
     Output { variable_id: VariableId },
@@ -65,7 +71,7 @@ pub(crate) enum Op {
     Unary(UnaryOp),
     Binary(BinaryOp),
     CompareAndSelect(CompareMode),
-    MatMul,
+    MatMul { output_mode: MatMulOutputMode },
     Reduce { reduce_op: ReduceOp, axis: Axis }, // TODO: 2D version?
     Unpad { axis: Axis, pad: usize },           // TODO: 2D version?
     WindowsToImage { stride: (usize, usize) },
