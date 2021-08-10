@@ -314,7 +314,7 @@ impl Schedule {
                             ))
                         {
                             has_kernel_neighbor = true;
-                            if !edge_ref.weight().view.is_identity() {
+                            if !edge_ref.weight().view.is_contiguous() {
                                 continue 'inner;
                             }
                         }
@@ -620,7 +620,7 @@ impl Schedule {
                 edge_ref.source().index(),
                 edge_ref.target().index()
             )?;
-            if !edge_ref.weight().view.is_identity() {
+            if !edge_ref.weight().view.is_contiguous() {
                 write!(w, " [label=\"V\"]")?;
             }
             writeln!(w, ";")?;

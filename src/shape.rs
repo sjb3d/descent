@@ -168,11 +168,6 @@ impl Shape {
         Shape::new(v)
     }
 
-    pub(crate) fn transposed(&self) -> Self {
-        let [a, b]: [usize; 2] = self.try_into().unwrap();
-        Shape::from([b, a])
-    }
-
     pub(crate) fn identity_view(&self) -> View {
         View::new(self)
     }
@@ -377,8 +372,22 @@ impl View {
         tmp
     }
 
-    pub(crate) fn is_identity(&self) -> bool {
-        Self::new(&self.output_shape).eq(self)
+    pub(crate) fn is_contiguous(&self) -> bool {
+        let input_strides = self.input_shape.strides();
+        let output_strides = self.output_shape.strides();
+        self.input_shape.element_count() == self.output_shape.element_count()
+            && self.input_offsets.iter().copied().all(|offset| offset == 0)
+            && self
+                .output_mapping
+                .iter()
+                .copied()
+                .zip(output_strides.iter().copied())
+                .all(|(output_mapping, output_stride)| match output_mapping {
+                    AxisMapping::Broadcast => true,
+                    AxisMapping::Source { axis, step } => {
+                        (input_strides[axis.index()] as isize) * step == (output_stride as isize)
+                    }
+                })
     }
 
     fn input_axis_mapping_count(&self, input_axis: Axis) -> usize {
@@ -422,7 +431,8 @@ impl View {
     }
 
     fn can_reshape_to(&self, view: &View) -> bool {
-        self.is_identity() && self.output_shape.element_count() == view.input_shape.element_count()
+        self.is_contiguous()
+            && self.output_shape.element_count() == view.input_shape.element_count()
     }
 
     pub(crate) fn input_needs_clamp(&self, input_axis: Axis) -> bool {
@@ -492,13 +502,12 @@ impl View {
     }
 
     pub(crate) fn transposed(&self) -> Self {
-        assert_eq!(self.output_mapping.len(), 2);
-        Self {
-            input_shape: self.input_shape,
-            input_offsets: self.input_offsets,
-            output_mapping: self.output_mapping.iter().copied().rev().collect(),
-            output_shape: self.output_shape.transposed(),
-        }
+        let len = self.output_mapping.len();
+        assert!(len >= 2);
+        let mut tmp = self.clone();
+        tmp.output_mapping.swap(len - 2, len - 1);
+        tmp.output_shape.0.swap(len - 2, len - 1);
+        tmp
     }
 
     pub(crate) fn broadcast(input_shape: &Shape, output_shape: &Shape) -> Self {

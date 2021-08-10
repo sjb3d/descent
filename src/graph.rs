@@ -66,23 +66,19 @@ impl<'g> Array<'g> {
     }
 
     fn view(self, view: View) -> Self {
-        if view.is_identity() {
-            self
-        } else {
-            self.graph.with_state(|state| {
-                let node_id = state
-                    .ops
-                    .new_node(view.output_shape, Op::Unary(UnaryOp::Mov), &[]);
-                state
-                    .ops
-                    .graph
-                    .add_edge(self.node_id, node_id, OpEdge { arg: 0, view });
-                Array {
-                    node_id,
-                    graph: self.graph,
-                }
-            })
-        }
+        self.graph.with_state(|state| {
+            let node_id = state
+                .ops
+                .new_node(view.output_shape, Op::Unary(UnaryOp::Mov), &[]);
+            state
+                .ops
+                .graph
+                .add_edge(self.node_id, node_id, OpEdge { arg: 0, view });
+            Array {
+                node_id,
+                graph: self.graph,
+            }
+        })
     }
 
     fn broadcast(self, shape: &Shape) -> Self {
