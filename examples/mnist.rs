@@ -109,8 +109,14 @@ struct AppParams {
     #[structopt(short, long, default_value = "40")]
     epoch_count: usize,
 
-    #[structopt(short, long, default_value = "5")]
+    #[structopt(short, long, default_value = "1")]
     trial_count: usize,
+
+    #[structopt(long)]
+    output_dot_files: bool,
+
+    #[structopt(long)]
+    show_timings: bool,
 }
 
 struct TestLinear {
@@ -279,8 +285,6 @@ fn main() {
 
         (scope.build_graph(), parameters, optimizer)
     };
-    train_graph.write_dot_file(KernelDotOutput::None, "train_s.dot");
-    train_graph.write_dot_file(KernelDotOutput::Color, "train_k.dot");
     println!(
         "trainable parameters: {}",
         parameters
@@ -304,7 +308,6 @@ fn main() {
             accuracy_sum + accuracy.reduce_sum(0, false)
         });
     });
-    test_graph.write_dot_file(KernelDotOutput::Cluster, "test.dot");
 
     // build a graph to evaluate the L2 norm of training parameters (to check weight decay)
     let norm_var = env.static_parameter([1], "norm");
@@ -318,6 +321,13 @@ fn main() {
         }
         scope.write_variable(&norm_var, sum);
     });
+
+    // write graphs out to disk if necessary
+    if app_params.output_dot_files {
+        train_graph.write_dot_file(KernelDotOutput::None, "train_s.dot");
+        train_graph.write_dot_file(KernelDotOutput::Color, "train_k.dot");
+        test_graph.write_dot_file(KernelDotOutput::Cluster, "test.dot");
+    }
 
     // load training data
     let train_images = load_gz_bytes("data/fashion/train-images-idx3-ubyte.gz").unwrap();
@@ -370,7 +380,7 @@ fn main() {
                 unpack_labels(&mut env, &y_var, &train_labels, batch_indices).unwrap();
                 env.run(&train_graph, rng.next_u32());
             }
-            if epoch_index < 2 {
+            if app_params.show_timings && epoch_index < 2 {
                 env.print_timings("training");
             }
             let train_loss = env.read_variable_scalar(&loss_sum_var) / (train_image_count as f32);
@@ -387,7 +397,7 @@ fn main() {
                 unpack_labels(&mut env, &y_var, &test_labels, batch_indices).unwrap();
                 env.run(&test_graph, rng.next_u32());
             }
-            if epoch_index < 2 {
+            if app_params.show_timings && epoch_index < 2 {
                 env.print_timings("testing");
             }
             let test_loss = env.read_variable_scalar(&loss_sum_var) / (test_image_count as f32);
