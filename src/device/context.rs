@@ -76,15 +76,6 @@ impl Context {
 
         let physical_device_memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
-        for (i, mt) in physical_device_memory_properties.types().iter().enumerate() {
-            println!(
-                "memory type {}: {}, heap {}",
-                i, mt.property_flags, mt.heap_index
-            );
-        }
-        for (i, mh) in physical_device_memory_properties.heaps().iter().enumerate() {
-            println!("heap {}: {} bytes {}", i, mh.size, mh.flags);
-        }
 
         let (queue_family_index, queue_family_properties) = {
             let queue_flags = vk::QueueFlags::COMPUTE;
