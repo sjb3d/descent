@@ -258,7 +258,7 @@ fn main() {
     let (train_graph, parameters, optimizer) = {
         let scope = env.scope();
 
-        // emit the graph for the network
+        // emit the ops for the network
         let x = module.train(scope.parameter(&x_var));
         let loss = softmax_cross_entropy_loss(x, &y_var).set_loss();
         let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
@@ -292,7 +292,7 @@ fn main() {
             )),
         };
 
-        (scope.build_schedule(), parameters, optimizer)
+        (scope.build_graph(), parameters, optimizer)
     };
     train_graph.write_dot_file(KernelDotOutput::None, "train_s.dot");
     train_graph.write_dot_file(KernelDotOutput::Color, "train_k.dot");
@@ -305,10 +305,8 @@ fn main() {
     );
 
     // build a graph to evaluate the test set (keeps parameters unchanged)
-    let test_graph = {
-        let scope = env.scope();
-
-        // emit the graph for the network
+    let test_graph = env.build_graph(|scope| {
+        // emit the ops for the network
         let x = module.test(scope.parameter(&x_var));
         let loss = softmax_cross_entropy_loss(x, &y_var).set_loss();
         let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
@@ -320,16 +318,12 @@ fn main() {
         scope.update_variable(&accuracy_sum_var, |accuracy_sum| {
             accuracy_sum + accuracy.reduce_sum(0, false)
         });
-
-        scope.build_schedule()
-    };
+    });
     test_graph.write_dot_file(KernelDotOutput::Cluster, "test.dot");
 
     // build a graph to evaluate the L2 norm of training parameters (to check weight decay)
     let norm_var = env.static_parameter([1], "norm");
-    let norm_graph = {
-        let scope = env.scope();
-
+    let norm_graph = env.build_graph(|scope| {
         let mut sum = scope.literal(0.0);
         for var in parameters.iter() {
             let x = scope.read_variable(&var);
@@ -338,9 +332,7 @@ fn main() {
             sum = sum + x.reduce_sum(0, true);
         }
         scope.write_variable(&norm_var, sum);
-
-        scope.build_schedule()
-    };
+    });
 
     // load training data
     let train_images = load_gz_bytes("data/fashion/train-images-idx3-ubyte.gz").unwrap();

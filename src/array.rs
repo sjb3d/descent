@@ -1044,7 +1044,7 @@ impl Scope {
         })
     }
 
-    pub fn build_schedule(self) -> Graph {
+    pub fn build_graph(self) -> Graph {
         self.with_state(|state| {
             Graph::new(
                 SharedVariables::clone(&state.variables),

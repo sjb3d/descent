@@ -75,10 +75,9 @@ mod tests {
         let a_var = env.static_parameter_with_data([10, 10], "a", &a_data);
         let b_var = env.static_parameter([10, 1], "b");
 
-        let g = env.scope();
-        g.write_variable(&b_var, g.read_variable(&a_var).reduce_sum(-1, true));
-
-        let g = g.build_schedule();
+        let g = env.build_graph(|scope| {
+            scope.write_variable(&b_var, scope.read_variable(&a_var).reduce_sum(-1, true));
+        });
         env.run(&g, TEST_RAND_SEED);
 
         assert_eq!(env.read_variable(&b_var), b_data);
@@ -94,10 +93,9 @@ mod tests {
         let a_var = env.static_parameter_with_data([1, 8, 8, 1], "a", &a_data);
         let b_var = env.static_parameter([1, 10, 10, 1], "b");
 
-        let g = env.scope();
-        g.write_variable(&b_var, g.read_variable(&a_var).pad_image(1));
-
-        let g = g.build_schedule();
+        let g = env.build_graph(|scope| {
+            scope.write_variable(&b_var, scope.read_variable(&a_var).pad_image(1));
+        });
         env.run(&g, TEST_RAND_SEED);
 
         assert_eq!(env.read_variable(&b_var), b_data);
@@ -120,10 +118,9 @@ mod tests {
         let a_var = env.static_parameter_with_data([1, 10, 10, 1], "a", &a_data);
         let b_var = env.static_parameter([1, 8, 8, 1], "b");
 
-        let g = env.scope();
-        g.write_variable(&b_var, g.read_variable(&a_var).unpad_image(1));
-
-        let g = g.build_schedule();
+        let g = env.build_graph(|scope| {
+            scope.write_variable(&b_var, scope.read_variable(&a_var).unpad_image(1));
+        });
         env.run(&g, TEST_RAND_SEED);
 
         assert_eq!(env.read_variable(&b_var), b_data);
@@ -141,13 +138,12 @@ mod tests {
         let b_var = env.static_parameter_with_data([1, 1, 3, 3, 1], "b", &b_data);
         let c_var = env.static_parameter([1, 8, 8, 1], "c");
 
-        let g = env.scope();
-        g.write_variable(
-            &c_var,
-            g.parameter(&a_var).conv2d(&b_var, 0, (1, 1)).value(),
-        );
-
-        let g = g.build_schedule();
+        let g = env.build_graph(|scope| {
+            scope.write_variable(
+                &c_var,
+                scope.parameter(&a_var).conv2d(&b_var, 0, (1, 1)).value(),
+            );
+        });
         env.run(&g, TEST_RAND_SEED);
 
         assert_eq!(env.read_variable(&c_var), c_data);
@@ -165,13 +161,12 @@ mod tests {
         let a_var = env.static_parameter_with_data([1, 10, 10, 1], "a", &a_data);
         let b_var = env.static_parameter([1, 5, 5, 1], "b");
 
-        let g = env.scope();
-        g.write_variable(
-            &b_var,
-            g.parameter(&a_var).max_pool2d((2, 2), (2, 2)).value(),
-        );
-
-        let g = g.build_schedule();
+        let g = env.build_graph(|scope| {
+            scope.write_variable(
+                &b_var,
+                scope.parameter(&a_var).max_pool2d((2, 2), (2, 2)).value(),
+            );
+        });
         env.run(&g, TEST_RAND_SEED);
 
         assert_eq!(env.read_variable(&b_var), b_data);

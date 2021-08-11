@@ -184,6 +184,12 @@ impl Environment {
         Scope::new(SharedVariables::clone(&self.variables))
     }
 
+    pub fn build_graph<F: FnOnce(&Scope)>(&self, f: F) -> Graph {
+        let scope = self.scope();
+        f(&scope);
+        scope.build_graph()
+    }
+
     pub fn run(&mut self, graph: &Graph, rand_seed: u32) {
         let mut variables = self.variables.borrow_mut();
 
