@@ -324,6 +324,7 @@ fn main() {
 
     // write graphs out to disk if necessary
     if app_params.output_dot_files {
+        train_graph.write_dot_file(KernelDotOutput::Cluster, "train.dot");
         train_graph.write_dot_file(KernelDotOutput::None, "train_s.dot");
         train_graph.write_dot_file(KernelDotOutput::Color, "train_k.dot");
         test_graph.write_dot_file(KernelDotOutput::Cluster, "test.dot");

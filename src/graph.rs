@@ -590,8 +590,13 @@ impl Graph {
                     };
                     write!(
                         w,
-                        "n{} [shape=box,style=filled,color=\"#{:06X}\",label=\"{}\\n",
+                        "n{} [shape=box,style={},color=\"#{:06X}\",label=\"{}\\n",
                         node_ref.id().index(),
+                        if matches!(node.op, Op::Input { .. } | Op::Output { .. }) {
+                            "solid"
+                        } else {
+                            "filled"
+                        },
                         col,
                         node.op
                     )?;

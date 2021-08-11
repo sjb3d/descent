@@ -13,12 +13,7 @@ fn main() {
         let m = scope.read_variable(&m_var);
         let x = scope.read_variable(&x_var);
         let y = scope.read_variable(&y_var);
-        scope.next_colour();
-
-        let z = 2.0 * m.matmul(x) + y * y + 1.0;
-
-        scope.next_colour();
-        scope.write_variable(&z_var, z);
+        scope.write_variable(&z_var, 2.0 * m.matmul(x) + y * y + 1.0);
     });
     graph.write_dot_file(KernelDotOutput::Cluster, "array.dot");
     env.run(&graph, 0x5EED5EED);
