@@ -78,7 +78,9 @@ impl Adam {
             scope.update_variable(var, |theta| theta - alpha * m / (v.sqrt() + epsilon));
         }
 
-        Self { state }
+        let tmp = Self { state };
+        tmp.reset_state(env);
+        tmp
     }
 }
 

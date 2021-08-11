@@ -4,7 +4,12 @@ use rand::{distributions::Open01, Rng};
 use slotmap::SlotMap;
 use spark::{vk, Builder};
 use std::{
-    cell::RefCell, collections::HashSet, f32::consts::PI, ffi::CString, io, io::Write, rc::Rc,
+    cell::RefCell,
+    collections::HashSet,
+    f32::consts::PI,
+    ffi::CString,
+    io::{self, prelude::*},
+    rc::Rc,
     slice,
 };
 
@@ -178,6 +183,33 @@ impl Environment {
                 write_rand_normal(writer, scale, shape.element_count(), rng)
             }
         }
+    }
+
+    pub fn static_parameter_with_data(
+        &mut self,
+        shape: impl Into<Shape>,
+        name: &str,
+        data: &[f32],
+    ) -> Variable {
+        let var = self.static_parameter(shape, name);
+        self.writer(&var)
+            .write_all(bytemuck::cast_slice(data))
+            .unwrap();
+        var
+    }
+
+    pub fn read_variable_to_vec(&mut self, variable: &Variable) -> Vec<f32> {
+        let mut r = self.reader(&variable);
+        let mut bytes = Vec::new();
+        r.read_to_end(&mut bytes).unwrap();
+        bytemuck::cast_slice(&bytes).to_vec() // TODO: avoid deep copy
+    }
+
+    pub fn read_variable_scalar(&mut self, variable: &Variable) -> f32 {
+        let mut r = self.reader(&variable);
+        let mut bytes = Vec::new();
+        r.read_to_end(&mut bytes).unwrap();
+        *bytemuck::from_bytes(&bytes)
     }
 
     pub fn scope(&self) -> Scope {

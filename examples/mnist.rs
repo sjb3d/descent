@@ -10,21 +10,6 @@ use std::{
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames, VariantNames};
 
-trait ReadFloat {
-    fn read_f32(&mut self) -> io::Result<f32>;
-}
-
-impl<R> ReadFloat for R
-where
-    R: io::Read,
-{
-    fn read_f32(&mut self) -> io::Result<f32> {
-        let mut res: f32 = 0.0;
-        self.read_exact(bytemuck::bytes_of_mut(&mut res))?;
-        Ok(res)
-    }
-}
-
 fn load_gz_bytes(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
     let reader = BufReader::new(File::open(path).unwrap());
     let mut decoder = GzDecoder::new(reader);
@@ -375,11 +360,11 @@ fn main() {
                 .unwrap();
 
             // loop over training mini-batches
+            env.writer(&loss_sum_var).zero_fill();
+            env.writer(&accuracy_sum_var).zero_fill();
             indices.clear();
             indices.extend(0..train_image_count);
             indices.shuffle(&mut rng);
-            env.writer(&loss_sum_var).zero_fill();
-            env.writer(&accuracy_sum_var).zero_fill();
             for batch_indices in indices.chunks(m) {
                 unpack_images(&mut env, &x_var, &train_images, batch_indices).unwrap();
                 unpack_labels(&mut env, &y_var, &train_labels, batch_indices).unwrap();
@@ -388,10 +373,9 @@ fn main() {
             if epoch_index < 2 {
                 env.print_timings("training");
             }
-            let train_loss =
-                env.reader(&loss_sum_var).read_f32().unwrap() / (train_image_count as f32);
+            let train_loss = env.read_variable_scalar(&loss_sum_var) / (train_image_count as f32);
             let train_accuracy =
-                env.reader(&accuracy_sum_var).read_f32().unwrap() / (train_image_count as f32);
+                env.read_variable_scalar(&accuracy_sum_var) / (train_image_count as f32);
 
             // loop over test mini-batches to evaluate loss and accuracy
             env.writer(&loss_sum_var).zero_fill();
@@ -406,14 +390,13 @@ fn main() {
             if epoch_index < 2 {
                 env.print_timings("testing");
             }
-            let test_loss =
-                env.reader(&loss_sum_var).read_f32().unwrap() / (test_image_count as f32);
+            let test_loss = env.read_variable_scalar(&loss_sum_var) / (test_image_count as f32);
             let test_accuracy =
-                env.reader(&accuracy_sum_var).read_f32().unwrap() / (test_image_count as f32);
+                env.read_variable_scalar(&accuracy_sum_var) / (test_image_count as f32);
 
             // compute the norm of all the parameters
             env.run(&norm_graph, rng.next_u32());
-            let norm = env.reader(&norm_var).read_f32().unwrap();
+            let norm = env.read_variable_scalar(&norm_var);
 
             println!(
                 "epoch: {}, loss: {}/{}, accuracy: {}/{}, w_norm: {}",

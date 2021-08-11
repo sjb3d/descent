@@ -19,41 +19,9 @@ pub mod variable;
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
-    use std::{io::prelude::*, iter};
+    use std::iter;
 
     const TEST_RAND_SEED: u32 = 0x5EED5EED;
-
-    trait EnvironmentExt {
-        fn static_parameter_with_data(
-            &mut self,
-            shape: impl Into<Shape>,
-            name: &str,
-            data: &[f32],
-        ) -> Variable;
-        fn read_variable(&mut self, variable: &Variable) -> Vec<f32>;
-    }
-
-    impl EnvironmentExt for Environment {
-        fn static_parameter_with_data(
-            &mut self,
-            shape: impl Into<Shape>,
-            name: &str,
-            data: &[f32],
-        ) -> Variable {
-            let var = self.static_parameter(shape, name);
-            self.writer(&var)
-                .write_all(bytemuck::cast_slice(data))
-                .unwrap();
-            var
-        }
-
-        fn read_variable(&mut self, variable: &Variable) -> Vec<f32> {
-            let mut r = self.reader(&variable);
-            let mut bytes = Vec::new();
-            r.read_to_end(&mut bytes).unwrap();
-            bytemuck::cast_slice(&bytes).to_vec()
-        }
-    }
 
     #[test]
     fn variables() {
@@ -62,7 +30,7 @@ mod tests {
         let a_data = vec![0f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         let a_var = env.static_parameter_with_data([10], "a", &a_data);
 
-        assert_eq!(env.read_variable(&a_var), a_data);
+        assert_eq!(env.read_variable_to_vec(&a_var), a_data);
     }
 
     #[test]
@@ -80,7 +48,7 @@ mod tests {
         });
         env.run(&g, TEST_RAND_SEED);
 
-        assert_eq!(env.read_variable(&b_var), b_data);
+        assert_eq!(env.read_variable_to_vec(&b_var), b_data);
     }
 
     #[test]
@@ -98,7 +66,7 @@ mod tests {
         });
         env.run(&g, TEST_RAND_SEED);
 
-        assert_eq!(env.read_variable(&b_var), b_data);
+        assert_eq!(env.read_variable_to_vec(&b_var), b_data);
     }
 
     #[test]
@@ -123,7 +91,7 @@ mod tests {
         });
         env.run(&g, TEST_RAND_SEED);
 
-        assert_eq!(env.read_variable(&b_var), b_data);
+        assert_eq!(env.read_variable_to_vec(&b_var), b_data);
     }
 
     #[test]
@@ -146,7 +114,7 @@ mod tests {
         });
         env.run(&g, TEST_RAND_SEED);
 
-        assert_eq!(env.read_variable(&c_var), c_data);
+        assert_eq!(env.read_variable_to_vec(&c_var), c_data);
     }
 
     #[test]
@@ -169,6 +137,6 @@ mod tests {
         });
         env.run(&g, TEST_RAND_SEED);
 
-        assert_eq!(env.read_variable(&b_var), b_data);
+        assert_eq!(env.read_variable_to_vec(&b_var), b_data);
     }
 }
