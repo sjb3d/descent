@@ -184,11 +184,11 @@ impl Environment {
         Scope::new(SharedVariables::clone(&self.variables))
     }
 
-    pub fn run(&mut self, schedule: &Graph, rand_seed: u32) {
+    pub fn run(&mut self, graph: &Graph, rand_seed: u32) {
         let mut variables = self.variables.borrow_mut();
 
         // collect input and output variables
-        let inputs: Vec<_> = schedule
+        let inputs: Vec<_> = graph
             .ops
             .node_references()
             .filter_map(|node_ref| {
@@ -199,7 +199,7 @@ impl Environment {
                 }
             })
             .collect();
-        let outputs: Vec<_> = schedule
+        let outputs: Vec<_> = graph
             .ops
             .node_references()
             .filter_map(|node_ref| {
@@ -212,16 +212,16 @@ impl Environment {
             .collect();
         let input_variable_ids: HashSet<_> = inputs
             .iter()
-            .map(|&node_id| schedule.ops[node_id].op.input_variable_id().unwrap())
+            .map(|&node_id| graph.ops[node_id].op.input_variable_id().unwrap())
             .collect();
         let output_variable_ids: HashSet<_> = outputs
             .iter()
-            .map(|&node_id| schedule.ops[node_id].op.output_variable_id().unwrap())
+            .map(|&node_id| graph.ops[node_id].op.output_variable_id().unwrap())
             .collect();
 
         // count up the number of times each node is used as an argument
-        let mut node_storage = vec![OpNodeStorage::default(); schedule.ops.node_bound()];
-        for node_id in schedule
+        let mut node_storage = vec![OpNodeStorage::default(); graph.ops.node_bound()];
+        for node_id in graph
             .clusters
             .values()
             .flat_map(|cluster| cluster.inputs.iter())
@@ -231,7 +231,7 @@ impl Environment {
 
         // copy inputs to node, increment usage when variable is not an output, to preserve the buffer
         for node_id in inputs.iter().copied() {
-            let variable_id = schedule.ops[node_id].op.input_variable_id().unwrap();
+            let variable_id = graph.ops[node_id].op.input_variable_id().unwrap();
             let var = &mut variables[variable_id];
             assert!(var.buffer_id.is_some());
             let storage = &mut node_storage[node_id.index()];
@@ -245,7 +245,7 @@ impl Environment {
 
         // free buffers for variables only used as outputs
         for node_id in outputs.iter().copied() {
-            let variable_id = schedule.ops[node_id].op.output_variable_id().unwrap();
+            let variable_id = graph.ops[node_id].op.output_variable_id().unwrap();
             if !input_variable_ids.contains(&variable_id) {
                 let var = &mut variables[variable_id];
                 if let Some(buffer_id) = var.buffer_id.take() {
@@ -260,14 +260,14 @@ impl Environment {
         let cmd = self.command_buffers.acquire(&self.fences);
         let descriptor_pool = self.descriptor_pools.acquire(&self.fences);
         let mut timestamps = self.timestamps.acquire(cmd.get(), &self.fences);
-        for cluster_id in schedule.clusters_sorted.iter().copied() {
-            let cluster = &schedule.clusters[cluster_id];
+        for cluster_id in graph.clusters_sorted.iter().copied() {
+            let cluster = &graph.clusters[cluster_id];
             for node_id in cluster.outputs.iter().copied() {
                 let node_state = &mut node_storage[node_id.index()];
                 assert!(node_state.buffer_id.is_none());
                 node_state.buffer_id = Some(
                     self.buffer_heap
-                        .alloc(schedule.ops[node_id].shape.buffer_size())
+                        .alloc(graph.ops[node_id].shape.buffer_size())
                         .unwrap(),
                 );
             }
@@ -383,9 +383,9 @@ impl Environment {
 
         // assign buffers to outputs
         for node_id in outputs.iter().copied() {
-            let variable_id = schedule.ops[node_id].op.output_variable_id().unwrap();
+            let variable_id = graph.ops[node_id].op.output_variable_id().unwrap();
             let var = &mut variables[variable_id];
-            let arg_sources = get_arg_sources(&schedule.ops, node_id);
+            let arg_sources = get_arg_sources(&graph.ops, node_id);
             assert_eq!(arg_sources.len(), 1);
             let src0 = &arg_sources[0];
             let source_storage = &mut node_storage[src0.node_id.index()];
