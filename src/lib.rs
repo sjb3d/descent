@@ -2,17 +2,17 @@ pub mod array;
 mod device;
 pub mod environment;
 pub mod prelude {
-    pub use crate::{array::*, environment::*, schedule::*, shape::*, variable::*};
+    pub use crate::{array::*, environment::*, graph::*, shape::*, variable::*};
 }
 mod common {
     pub(crate) use crate::{kernel::*, op::*, prelude::*};
 }
+pub mod graph;
 mod kernel;
 pub mod layer;
 pub mod loss;
 mod op;
 pub mod optimizer;
-pub mod schedule;
 pub mod shape;
 pub mod variable;
 

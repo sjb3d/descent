@@ -77,7 +77,7 @@ pub struct Schedule {
 
 impl Schedule {
     pub(crate) fn new(variables: SharedVariables, ops: OpGraph) -> Self {
-        let mut sched = Self {
+        let mut graph = Self {
             variables,
             ops,
             ops_sorted: Vec::new(),
@@ -85,22 +85,22 @@ impl Schedule {
             clusters_sorted: Vec::new(),
         };
 
-        sched.rebuild_ordering();
-        sched.eliminate_dead_code();
+        graph.rebuild_ordering();
+        graph.eliminate_dead_code();
 
-        sched.rebuild_ordering();
-        sched.eliminate_moves();
+        graph.rebuild_ordering();
+        graph.eliminate_moves();
 
-        sched.rebuild_ordering();
-        sched.eliminate_common_subgraphs();
+        graph.rebuild_ordering();
+        graph.eliminate_common_subgraphs();
 
-        sched.rebuild_ordering();
-        sched.make_built_ins_and_literals_unique();
+        graph.rebuild_ordering();
+        graph.make_built_ins_and_literals_unique();
 
-        sched.rebuild_ordering();
-        sched.build_clusters();
+        graph.rebuild_ordering();
+        graph.build_clusters();
 
-        sched
+        graph
     }
 
     fn rebuild_ordering(&mut self) {
