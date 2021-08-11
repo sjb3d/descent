@@ -67,7 +67,7 @@ pub enum KernelDotOutput {
     Color,
 }
 
-pub struct Schedule {
+pub struct Graph {
     pub(crate) variables: SharedVariables,
     pub(crate) ops: OpGraph,
     pub(crate) ops_sorted: Vec<OpNodeId>,
@@ -75,7 +75,7 @@ pub struct Schedule {
     pub(crate) clusters_sorted: Vec<ClusterId>,
 }
 
-impl Schedule {
+impl Graph {
     pub(crate) fn new(variables: SharedVariables, ops: OpGraph) -> Self {
         let mut graph = Self {
             variables,

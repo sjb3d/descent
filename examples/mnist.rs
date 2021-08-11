@@ -141,7 +141,7 @@ impl TestLinear {
 }
 
 impl Module for TestLinear {
-    fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
+    fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
         input.flatten().apply(&self.fc, ctx)
     }
 }
@@ -162,7 +162,7 @@ impl TestHidden300 {
 }
 
 impl Module for TestHidden300 {
-    fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
+    fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
         input
             .flatten()
             .apply(&self.fc1, ctx)
@@ -208,7 +208,7 @@ impl TestConvNet {
 }
 
 impl Module for TestConvNet {
-    fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
+    fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
         input
             .apply(&self.conv1, ctx)
             .leaky_relu(0.01)
@@ -256,34 +256,34 @@ fn main() {
 
     // build a graph for training, collect the trainable parameters
     let (train_graph, parameters, optimizer) = {
-        let graph = env.graph();
+        let scope = env.scope();
 
         // emit the graph for the network
-        let x = module.train(graph.parameter(&x_var));
+        let x = module.train(scope.parameter(&x_var));
         let loss = softmax_cross_entropy_loss(x, &y_var).set_loss();
         let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
 
         // update sum of loss and accuracy
-        graph.update_variable(&loss_sum_var, |loss_sum| {
+        scope.update_variable(&loss_sum_var, |loss_sum| {
             loss_sum + loss.reduce_sum(0, false)
         });
-        graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
+        scope.update_variable(&accuracy_sum_var, |accuracy_sum| {
             accuracy_sum + accuracy.reduce_sum(0, false)
         });
 
         // train using gradient of the loss (scaled for size of mini batch)
-        let learning_rate_scale = graph.read_variable(&learning_rate_scale_var);
-        let parameters = graph.trainable_parameters();
-        add_weight_decay_to_grad(&graph, &parameters, app_params.weight_decay);
+        let learning_rate_scale = scope.read_variable(&learning_rate_scale_var);
+        let parameters = scope.trainable_parameters();
+        add_weight_decay_to_grad(&scope, &parameters, app_params.weight_decay);
         let optimizer: Box<dyn Optimizer> = match app_params.optimizer {
             OptimizerType::Descent => Box::new(StochasticGradientDescent::new(
-                &graph,
+                &scope,
                 &parameters,
                 0.1 * learning_rate_scale,
             )),
             OptimizerType::Adam => Box::new(Adam::new(
                 &mut env,
-                &graph,
+                &scope,
                 &parameters,
                 0.005 * learning_rate_scale,
                 0.9,
@@ -292,7 +292,7 @@ fn main() {
             )),
         };
 
-        (graph.build_schedule(), parameters, optimizer)
+        (scope.build_schedule(), parameters, optimizer)
     };
     train_graph.write_dot_file(KernelDotOutput::None, "train_s.dot");
     train_graph.write_dot_file(KernelDotOutput::Color, "train_k.dot");
@@ -306,40 +306,40 @@ fn main() {
 
     // build a graph to evaluate the test set (keeps parameters unchanged)
     let test_graph = {
-        let graph = env.graph();
+        let scope = env.scope();
 
         // emit the graph for the network
-        let x = module.test(graph.parameter(&x_var));
+        let x = module.test(scope.parameter(&x_var));
         let loss = softmax_cross_entropy_loss(x, &y_var).set_loss();
         let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
 
         // update sum of loss and accuracy
-        graph.update_variable(&loss_sum_var, |loss_sum| {
+        scope.update_variable(&loss_sum_var, |loss_sum| {
             loss_sum + loss.reduce_sum(0, false)
         });
-        graph.update_variable(&accuracy_sum_var, |accuracy_sum| {
+        scope.update_variable(&accuracy_sum_var, |accuracy_sum| {
             accuracy_sum + accuracy.reduce_sum(0, false)
         });
 
-        graph.build_schedule()
+        scope.build_schedule()
     };
     test_graph.write_dot_file(KernelDotOutput::Cluster, "test.dot");
 
     // build a graph to evaluate the L2 norm of training parameters (to check weight decay)
     let norm_var = env.static_parameter([1], "norm");
     let norm_graph = {
-        let graph = env.graph();
+        let scope = env.scope();
 
-        let mut sum = graph.literal(0.0);
+        let mut sum = scope.literal(0.0);
         for var in parameters.iter() {
-            let x = graph.read_variable(&var);
+            let x = scope.read_variable(&var);
             let x = x.reshape([x.shape().element_count()]);
             let x = x * x * 0.5;
             sum = sum + x.reduce_sum(0, true);
         }
-        graph.write_variable(&norm_var, sum);
+        scope.write_variable(&norm_var, sum);
 
-        graph.build_schedule()
+        scope.build_schedule()
     };
 
     // load training data

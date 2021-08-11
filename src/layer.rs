@@ -6,15 +6,15 @@ pub struct EvalContext {
 }
 
 pub trait Module {
-    fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g>;
+    fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s>;
 }
 
 pub trait ModuleExt: Module {
-    fn train<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn train<'s>(&self, input: DualArray<'s>) -> DualArray<'s> {
         self.eval(input, &EvalContext { is_training: true })
     }
 
-    fn test<'g>(&self, input: DualArray<'g>) -> DualArray<'g> {
+    fn test<'s>(&self, input: DualArray<'s>) -> DualArray<'s> {
         self.eval(input, &EvalContext { is_training: false })
     }
 }
@@ -25,7 +25,7 @@ pub trait ApplyModule<M: Module + ?Sized> {
     fn apply(self, module: &M, ctx: &EvalContext) -> Self;
 }
 
-impl<'g, M> ApplyModule<M> for DualArray<'g>
+impl<'s, M> ApplyModule<M> for DualArray<'s>
 where
     M: Module + ?Sized,
 {
@@ -53,7 +53,7 @@ impl Dense {
 }
 
 impl Module for Dense {
-    fn eval<'g>(&self, input: DualArray<'g>, _ctx: &EvalContext) -> DualArray<'g> {
+    fn eval<'s>(&self, input: DualArray<'s>, _ctx: &EvalContext) -> DualArray<'s> {
         input.next_colour().matmul(&self.w) + &self.b
     }
 }
@@ -171,7 +171,7 @@ impl Conv2D {
 }
 
 impl Module for Conv2D {
-    fn eval<'g>(&self, input: DualArray<'g>, _ctx: &EvalContext) -> DualArray<'g> {
+    fn eval<'s>(&self, input: DualArray<'s>, _ctx: &EvalContext) -> DualArray<'s> {
         let conv = input.next_colour().conv2d(&self.f, self.pad, self.stride);
 
         conv + &self.b
@@ -182,7 +182,7 @@ impl Module for Conv2D {
 pub struct MaxPool2D {}
 
 impl Module for MaxPool2D {
-    fn eval<'g>(&self, input: DualArray<'g>, _ctx: &EvalContext) -> DualArray<'g> {
+    fn eval<'s>(&self, input: DualArray<'s>, _ctx: &EvalContext) -> DualArray<'s> {
         input.next_colour().max_pool2d((2, 2), (2, 2))
     }
 }
@@ -205,7 +205,7 @@ impl MaxBlurPool2D {
 }
 
 impl Module for MaxBlurPool2D {
-    fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
+    fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
         input
             .next_colour()
             .max_pool2d((2, 2), (1, 1))
@@ -224,16 +224,16 @@ impl Dropout {
 }
 
 impl Module for Dropout {
-    fn eval<'g>(&self, input: DualArray<'g>, ctx: &EvalContext) -> DualArray<'g> {
+    fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
         if !ctx.is_training {
             return input;
         }
 
-        let graph = input.graph();
+        let scope = input.scope();
         let shape = input.shape();
 
-        graph.next_colour();
-        let rv = graph.rand(shape);
+        scope.next_colour();
+        let rv = scope.rand(shape);
 
         let (a, da) = input.into_inner();
 

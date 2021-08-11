@@ -180,11 +180,11 @@ impl Environment {
         }
     }
 
-    pub fn graph(&self) -> Graph {
-        Graph::new(SharedVariables::clone(&self.variables))
+    pub fn scope(&self) -> Scope {
+        Scope::new(SharedVariables::clone(&self.variables))
     }
 
-    pub fn run(&mut self, schedule: &Schedule, rand_seed: u32) {
+    pub fn run(&mut self, schedule: &Graph, rand_seed: u32) {
         let mut variables = self.variables.borrow_mut();
 
         // collect input and output variables

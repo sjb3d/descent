@@ -1,4 +1,4 @@
-use crate::common::*;
+use crate::common::{Graph, *};
 use ordered_float::NotNan;
 use petgraph::prelude::*;
 use slotmap::SparseSecondaryMap;
@@ -6,68 +6,68 @@ use std::{cell::RefCell, convert::TryInto, ops};
 use tinyvec::ArrayVec as TinyVec;
 
 #[derive(Clone, Copy)]
-pub struct Array<'g> {
+pub struct Array<'s> {
     node_id: OpNodeId,
-    graph: &'g Graph,
+    scope: &'s Scope,
 }
 
 #[derive(Clone, Copy)]
-pub struct DualArray<'g> {
+pub struct DualArray<'s> {
     value_node_id: OpNodeId,
     grad_node_id: OpNodeId,
-    graph: &'g Graph,
+    scope: &'s Scope,
 }
 
-pub trait IntoArray<'g> {
-    fn into_array(self, graph: &'g Graph) -> Array<'g>;
+pub trait IntoArray<'s> {
+    fn into_array(self, scope: &'s Scope) -> Array<'s>;
 }
-impl<'g> IntoArray<'g> for Array<'g> {
-    fn into_array(self, _graph: &'g Graph) -> Array<'g> {
+impl<'s> IntoArray<'s> for Array<'s> {
+    fn into_array(self, _scope: &'s Scope) -> Array<'s> {
         self
     }
 }
-impl<'g> IntoArray<'g> for f32 {
-    fn into_array(self, graph: &'g Graph) -> Array<'g> {
-        graph.literal(self)
+impl<'s> IntoArray<'s> for f32 {
+    fn into_array(self, scope: &'s Scope) -> Array<'s> {
+        scope.literal(self)
     }
 }
-impl<'g> IntoArray<'g> for &Variable {
-    fn into_array(self, graph: &'g Graph) -> Array<'g> {
-        graph.read_variable(self)
+impl<'s> IntoArray<'s> for &Variable {
+    fn into_array(self, scope: &'s Scope) -> Array<'s> {
+        scope.read_variable(self)
     }
 }
 
-pub trait IntoDualArray<'g> {
-    fn into_dual_array(self, graph: &'g Graph) -> DualArray<'g>;
+pub trait IntoDualArray<'s> {
+    fn into_dual_array(self, scope: &'s Scope) -> DualArray<'s>;
 }
-impl<'g> IntoDualArray<'g> for DualArray<'g> {
-    fn into_dual_array(self, _graph: &'g Graph) -> DualArray<'g> {
+impl<'s> IntoDualArray<'s> for DualArray<'s> {
+    fn into_dual_array(self, _scope: &'s Scope) -> DualArray<'s> {
         self
     }
 }
-impl<'g> IntoDualArray<'g> for &Variable {
-    fn into_dual_array(self, graph: &'g Graph) -> DualArray<'g> {
-        graph.parameter(self)
+impl<'s> IntoDualArray<'s> for &Variable {
+    fn into_dual_array(self, scope: &'s Scope) -> DualArray<'s> {
+        scope.parameter(self)
     }
 }
 
-impl<'g> Array<'g> {
-    pub fn graph(&self) -> &'g Graph {
-        self.graph
+impl<'s> Array<'s> {
+    pub fn scope(&self) -> &'s Scope {
+        self.scope
     }
 
     pub fn clone_as_accumulator(&self) -> Self {
-        self.graph.with_state(|state| {
+        self.scope.with_state(|state| {
             let shape = state.ops.graph[self.node_id].shape;
             Array {
                 node_id: state.ops.new_node(shape, Op::Unary(UnaryOp::Mov), &[]),
-                graph: self.graph,
+                scope: self.scope,
             }
         })
     }
 
     fn view(self, view: View) -> Self {
-        self.graph.with_state(|state| {
+        self.scope.with_state(|state| {
             let node_id = state
                 .ops
                 .new_node(view.output_shape, Op::Unary(UnaryOp::Mov), &[]);
@@ -77,7 +77,7 @@ impl<'g> Array<'g> {
                 .add_edge(self.node_id, node_id, OpEdge { arg: 0, view });
             Array {
                 node_id,
-                graph: self.graph,
+                scope: self.scope,
             }
         })
     }
@@ -110,18 +110,18 @@ impl<'g> Array<'g> {
     }
 
     fn unary_op(self, op: UnaryOp) -> Self {
-        self.graph.with_state(|state| {
+        self.scope.with_state(|state| {
             let shape = state.ops.graph[self.node_id].shape;
             Array {
                 node_id: state.ops.new_node(shape, Op::Unary(op), &[self.node_id]),
-                graph: self.graph,
+                scope: self.scope,
             }
         })
     }
 
-    fn binary_op(self, rhs: impl IntoArray<'g>, op: BinaryOp) -> Self {
-        let rhs = rhs.into_array(self.graph);
-        let op_shape = self.graph.with_state(|state| {
+    fn binary_op(self, rhs: impl IntoArray<'s>, op: BinaryOp) -> Self {
+        let rhs = rhs.into_array(self.scope);
+        let op_shape = self.scope.with_state(|state| {
             state.ops.graph[self.node_id]
                 .shape
                 .broadcast_with(state.ops.graph[rhs.node_id].shape)
@@ -130,24 +130,24 @@ impl<'g> Array<'g> {
         let lhs = self.broadcast(op_shape).node_id;
         let rhs = rhs.broadcast(op_shape).node_id;
 
-        self.graph.with_state(|state| Array {
+        self.scope.with_state(|state| Array {
             node_id: state.ops.new_node(op_shape, Op::Binary(op), &[lhs, rhs]),
-            graph: self.graph,
+            scope: self.scope,
         })
     }
 
     fn compare_and_select(
         self,
         compare_mode: CompareMode,
-        rhs: impl IntoArray<'g>,
-        pass: impl IntoArray<'g>,
-        fail: impl IntoArray<'g>,
+        rhs: impl IntoArray<'s>,
+        pass: impl IntoArray<'s>,
+        fail: impl IntoArray<'s>,
     ) -> Self {
-        let rhs = rhs.into_array(self.graph);
-        let pass = pass.into_array(self.graph);
-        let fail = fail.into_array(self.graph);
+        let rhs = rhs.into_array(self.scope);
+        let pass = pass.into_array(self.scope);
+        let fail = fail.into_array(self.scope);
 
-        let op_shape = self.graph.with_state(|state| {
+        let op_shape = self.scope.with_state(|state| {
             state.ops.graph[self.node_id]
                 .shape
                 .broadcast_with(state.ops.graph[rhs.node_id].shape)
@@ -160,13 +160,13 @@ impl<'g> Array<'g> {
         let pass = pass.broadcast(op_shape).node_id;
         let fail = fail.broadcast(op_shape).node_id;
 
-        self.graph.with_state(|state| Array {
+        self.scope.with_state(|state| Array {
             node_id: state.ops.new_node(
                 op_shape,
                 Op::CompareAndSelect(compare_mode),
                 &[lhs, rhs, pass, fail],
             ),
-            graph: self.graph,
+            scope: self.scope,
         })
     }
 
@@ -175,7 +175,7 @@ impl<'g> Array<'g> {
         if shape[axis] == 1 {
             self
         } else {
-            self.graph.with_state(|state| {
+            self.scope.with_state(|state| {
                 let shape = shape.reduce(axis);
                 Array {
                     node_id: state.ops.new_node(
@@ -183,7 +183,7 @@ impl<'g> Array<'g> {
                         Op::Reduce { reduce_op, axis },
                         &[self.node_id],
                     ),
-                    graph: self.graph,
+                    scope: self.scope,
                 }
             })
         }
@@ -199,7 +199,7 @@ impl<'g> Array<'g> {
 
     pub fn one_hot(self, count: usize) -> Self {
         let shape = self.shape().one_hot(count);
-        self.graph.coord(shape, -1).select_eq(self, 1.0, 0.0)
+        self.scope.coord(shape, -1).select_eq(self, 1.0, 0.0)
     }
 
     pub fn reduce_max(self, axis: isize, keep_axis: bool) -> Self {
@@ -220,22 +220,22 @@ impl<'g> Array<'g> {
     }
 
     pub fn coord(self, axis: isize) -> Self {
-        self.graph.coord(self.shape(), axis)
+        self.scope.coord(self.shape(), axis)
     }
 
     pub fn select_eq(
         self,
-        rhs: impl IntoArray<'g>,
-        pass: impl IntoArray<'g>,
-        fail: impl IntoArray<'g>,
+        rhs: impl IntoArray<'s>,
+        pass: impl IntoArray<'s>,
+        fail: impl IntoArray<'s>,
     ) -> Self {
         self.compare_and_select(CompareMode::Eq, rhs, pass, fail)
     }
     pub fn select_gt(
         self,
-        rhs: impl IntoArray<'g>,
-        pass: impl IntoArray<'g>,
-        fail: impl IntoArray<'g>,
+        rhs: impl IntoArray<'s>,
+        pass: impl IntoArray<'s>,
+        fail: impl IntoArray<'s>,
     ) -> Self {
         self.compare_and_select(CompareMode::Gt, rhs, pass, fail)
     }
@@ -250,16 +250,16 @@ impl<'g> Array<'g> {
         self.unary_op(UnaryOp::Log)
     }
 
-    pub fn matmul(self, rhs: impl IntoArray<'g>) -> Self {
+    pub fn matmul(self, rhs: impl IntoArray<'s>) -> Self {
         let axis = Axis::from_index(0);
         let lhs = self.insert_axis(axis);
-        let rhs = rhs.into_array(self.graph).insert_axis(axis);
+        let rhs = rhs.into_array(self.scope).insert_axis(axis);
         let result = lhs.batched_matmul(rhs, MatMulOutputMode::Batches);
         result.remove_axis(axis)
     }
 
     pub(crate) fn batched_matmul(self, rhs: Array, output_mode: MatMulOutputMode) -> Self {
-        let chunks = self.graph.with_state(|state| {
+        let chunks = self.scope.with_state(|state| {
             let shape = state.ops.graph[self.node_id]
                 .shape
                 .batched_matmul(state.ops.graph[rhs.node_id].shape, output_mode);
@@ -269,7 +269,7 @@ impl<'g> Array<'g> {
                     Op::MatMul { output_mode },
                     &[self.node_id, rhs.node_id],
                 ),
-                graph: self.graph,
+                scope: self.scope,
             }
         });
         let output = chunks.reduce_sum(0, false);
@@ -303,7 +303,7 @@ impl<'g> Array<'g> {
         if pad == 0 {
             return self;
         }
-        self.graph.with_state(|state| {
+        self.scope.with_state(|state| {
             let shape = state.ops.graph[self.node_id].shape;
             let axis = shape.axis(axis);
             let shape = shape.unpad(axis, pad);
@@ -311,7 +311,7 @@ impl<'g> Array<'g> {
                 node_id: state
                     .ops
                     .new_node(shape, Op::Unpad { axis, pad }, &[self.node_id]),
-                graph: self.graph,
+                scope: self.scope,
             }
         })
     }
@@ -368,19 +368,19 @@ impl<'g> Array<'g> {
     }
 
     fn windows_to_image(self, stride: (usize, usize)) -> Self {
-        self.graph.with_state(|state| {
+        self.scope.with_state(|state| {
             let shape = state.ops.graph[self.node_id].shape.windows_to_image(stride);
             Array {
                 node_id: state
                     .ops
                     .new_node(shape, Op::WindowsToImage { stride }, &[self.node_id]),
-                graph: self.graph,
+                scope: self.scope,
             }
         })
     }
 
     pub fn reshape(self, shape: impl Into<Shape>) -> Self {
-        self.graph.with_state(|state| {
+        self.scope.with_state(|state| {
             let shape = shape.into();
             assert_eq!(
                 state.ops.graph[self.node_id].shape.element_count(),
@@ -390,7 +390,7 @@ impl<'g> Array<'g> {
                 node_id: state
                     .ops
                     .new_node(shape, Op::Unary(UnaryOp::Mov), &[self.node_id]),
-                graph: self.graph,
+                scope: self.scope,
             }
         })
     }
@@ -400,12 +400,12 @@ impl<'g> Array<'g> {
     }
 
     pub fn shape(&self) -> Shape {
-        self.graph
+        self.scope
             .with_state(|state| state.ops.graph[self.node_id].shape)
     }
 
     pub fn accumulate(&self, src: Array) {
-        self.graph.with_state(|state| {
+        self.scope.with_state(|state| {
             assert_eq!(state.ops.graph[self.node_id].op, Op::Unary(UnaryOp::Mov));
             assert_eq!(
                 state.ops.graph[self.node_id].shape,
@@ -448,10 +448,10 @@ impl<'g> Array<'g> {
         let grad_shape = self.shape();
         let mini_batch_size = grad_shape[0];
         let mini_batch_scale = self
-            .graph
+            .scope
             .literal(1.0 / (mini_batch_size as f32))
             .broadcast(grad_shape);
-        self.graph.with_state(|state| {
+        self.scope.with_state(|state| {
             assert_eq!(state.ops.graph[self.node_id].op, Op::Unary(UnaryOp::Mov));
             assert_eq!(
                 state
@@ -473,101 +473,101 @@ impl<'g> Array<'g> {
     }
 }
 
-impl<'g, T> ops::Add<T> for Array<'g>
+impl<'s, T> ops::Add<T> for Array<'s>
 where
-    T: IntoArray<'g>,
+    T: IntoArray<'s>,
 {
-    type Output = Array<'g>;
+    type Output = Array<'s>;
     fn add(self, rhs: T) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Add)
     }
 }
-impl<'g> ops::Add<Array<'g>> for f32 {
-    type Output = Array<'g>;
-    fn add(self, rhs: Array<'g>) -> Self::Output {
-        self.into_array(rhs.graph).binary_op(rhs, BinaryOp::Add)
+impl<'s> ops::Add<Array<'s>> for f32 {
+    type Output = Array<'s>;
+    fn add(self, rhs: Array<'s>) -> Self::Output {
+        self.into_array(rhs.scope).binary_op(rhs, BinaryOp::Add)
     }
 }
 
-impl<'g, T> ops::Sub<T> for Array<'g>
+impl<'s, T> ops::Sub<T> for Array<'s>
 where
-    T: IntoArray<'g>,
+    T: IntoArray<'s>,
 {
-    type Output = Array<'g>;
+    type Output = Array<'s>;
     fn sub(self, rhs: T) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Sub)
     }
 }
-impl<'g> ops::Sub<Array<'g>> for f32 {
-    type Output = Array<'g>;
-    fn sub(self, rhs: Array<'g>) -> Self::Output {
-        self.into_array(rhs.graph).binary_op(rhs, BinaryOp::Sub)
+impl<'s> ops::Sub<Array<'s>> for f32 {
+    type Output = Array<'s>;
+    fn sub(self, rhs: Array<'s>) -> Self::Output {
+        self.into_array(rhs.scope).binary_op(rhs, BinaryOp::Sub)
     }
 }
 
-impl<'g, T> ops::Mul<T> for Array<'g>
+impl<'s, T> ops::Mul<T> for Array<'s>
 where
-    T: IntoArray<'g>,
+    T: IntoArray<'s>,
 {
-    type Output = Array<'g>;
+    type Output = Array<'s>;
     fn mul(self, rhs: T) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Mul)
     }
 }
-impl<'g> ops::Mul<Array<'g>> for f32 {
-    type Output = Array<'g>;
-    fn mul(self, rhs: Array<'g>) -> Self::Output {
-        self.into_array(rhs.graph).binary_op(rhs, BinaryOp::Mul)
+impl<'s> ops::Mul<Array<'s>> for f32 {
+    type Output = Array<'s>;
+    fn mul(self, rhs: Array<'s>) -> Self::Output {
+        self.into_array(rhs.scope).binary_op(rhs, BinaryOp::Mul)
     }
 }
 
-impl<'g, T> ops::Div<T> for Array<'g>
+impl<'s, T> ops::Div<T> for Array<'s>
 where
-    T: IntoArray<'g>,
+    T: IntoArray<'s>,
 {
-    type Output = Array<'g>;
+    type Output = Array<'s>;
     fn div(self, rhs: T) -> Self::Output {
         self.binary_op(rhs, BinaryOp::Div)
     }
 }
-impl<'g> ops::Div<Array<'g>> for f32 {
-    type Output = Array<'g>;
-    fn div(self, rhs: Array<'g>) -> Self::Output {
-        self.into_array(rhs.graph).binary_op(rhs, BinaryOp::Div)
+impl<'s> ops::Div<Array<'s>> for f32 {
+    type Output = Array<'s>;
+    fn div(self, rhs: Array<'s>) -> Self::Output {
+        self.into_array(rhs.scope).binary_op(rhs, BinaryOp::Div)
     }
 }
 
-impl<'g> ops::Neg for Array<'g> {
-    type Output = Array<'g>;
+impl<'s> ops::Neg for Array<'s> {
+    type Output = Array<'s>;
     fn neg(self) -> Self::Output {
         self.unary_op(UnaryOp::Neg)
     }
 }
 
-impl<'g> DualArray<'g> {
-    pub fn new(value: Array<'g>, grad: Array<'g>) -> Self {
+impl<'s> DualArray<'s> {
+    pub fn new(value: Array<'s>, grad: Array<'s>) -> Self {
         Self {
             value_node_id: value.node_id,
             grad_node_id: grad.node_id,
-            graph: value.graph,
+            scope: value.scope,
         }
     }
 
-    pub fn value(self) -> Array<'g> {
+    pub fn value(self) -> Array<'s> {
         Array {
             node_id: self.value_node_id,
-            graph: self.graph,
+            scope: self.scope,
         }
     }
 
-    pub fn grad(self) -> Array<'g> {
+    pub fn grad(self) -> Array<'s> {
         Array {
             node_id: self.grad_node_id,
-            graph: self.graph,
+            scope: self.scope,
         }
     }
 
-    pub fn into_inner(self) -> (Array<'g>, Array<'g>) {
+    pub fn into_inner(self) -> (Array<'s>, Array<'s>) {
         (self.value(), self.grad())
     }
 
@@ -575,8 +575,8 @@ impl<'g> DualArray<'g> {
         self.value().shape()
     }
 
-    pub fn graph(&self) -> &'g Graph {
-        self.graph
+    pub fn scope(&self) -> &'s Scope {
+        self.scope
     }
 
     pub fn leaky_relu(self, leakiness: f32) -> Self {
@@ -603,10 +603,10 @@ impl<'g> DualArray<'g> {
         Self::new(c, dc)
     }
 
-    pub fn matmul(self, rhs: impl IntoDualArray<'g>) -> Self {
+    pub fn matmul(self, rhs: impl IntoDualArray<'s>) -> Self {
         let axis = Axis::from_index(0);
         let lhs = self.insert_axis(axis);
-        let rhs = rhs.into_dual_array(self.graph).insert_axis(axis);
+        let rhs = rhs.into_dual_array(self.scope).insert_axis(axis);
         let result = lhs.batched_matmul(rhs, MatMulOutputMode::Batches);
         result.remove_axis(axis)
     }
@@ -664,24 +664,24 @@ impl<'g> DualArray<'g> {
     }
 
     pub fn next_colour(self) -> Self {
-        self.graph().next_colour();
+        self.scope().next_colour();
         self
     }
 
     pub fn map<F>(self, f: F) -> Self
     where
-        F: FnOnce(DualArray<'g>) -> DualArray<'g>,
+        F: FnOnce(DualArray<'s>) -> DualArray<'s>,
     {
         f(self)
     }
 
     pub fn conv2d(
         self,
-        filter: impl IntoDualArray<'g>,
+        filter: impl IntoDualArray<'s>,
         pad: usize,
         stride: (usize, usize),
     ) -> Self {
-        let filter = filter.into_dual_array(self.graph);
+        let filter = filter.into_dual_array(self.scope);
 
         // pad the input
         let padded = self.pad_image(pad);
@@ -790,7 +790,7 @@ impl<'g> DualArray<'g> {
         self.reshape([m, count])
     }
 
-    pub fn set_loss(self) -> Array<'g> {
+    pub fn set_loss(self) -> Array<'s> {
         self.grad().set_loss_grad();
         self.value()
     }
@@ -818,13 +818,13 @@ impl<'g> DualArray<'g> {
     }
 }
 
-impl<'g, T> ops::Add<T> for DualArray<'g>
+impl<'s, T> ops::Add<T> for DualArray<'s>
 where
-    T: IntoDualArray<'g>,
+    T: IntoDualArray<'s>,
 {
-    type Output = DualArray<'g>;
+    type Output = DualArray<'s>;
     fn add(self, rhs: T) -> Self::Output {
-        let rhs = rhs.into_dual_array(self.graph);
+        let rhs = rhs.into_dual_array(self.scope);
 
         let (a, da) = self.into_inner();
         let (b, db) = rhs.into_inner();
@@ -881,11 +881,11 @@ struct GraphState {
     outputs: SparseSecondaryMap<VariableId, OpNodeId>,
 }
 
-pub struct Graph {
+pub struct Scope {
     state: RefCell<GraphState>,
 }
 
-impl Graph {
+impl Scope {
     pub(crate) fn new(variables: SharedVariables) -> Self {
         Self {
             state: RefCell::new(GraphState {
@@ -914,7 +914,7 @@ impl Graph {
             node_id: state
                 .ops
                 .new_node([1], Op::Literal(NotNan::new(value).unwrap()), &[]),
-            graph: self,
+            scope: self,
         })
     }
 
@@ -926,7 +926,7 @@ impl Graph {
                 node_id: state
                     .ops
                     .new_node(shape, Op::BuiltIn(BuiltInOp::Coord { axis }), &[]),
-                graph: self,
+                scope: self,
             }
         })
     }
@@ -940,7 +940,7 @@ impl Graph {
                 node_id: state
                     .ops
                     .new_node(shape, Op::BuiltIn(BuiltInOp::Rand { uid }), &[]),
-                graph: self,
+                scope: self,
             }
         })
     }
@@ -966,7 +966,7 @@ impl Graph {
         DualArray {
             value_node_id: input.value_node_id,
             grad_node_id: input.grad_node_id.unwrap(),
-            graph: self,
+            scope: self,
         }
     }
 
@@ -974,7 +974,7 @@ impl Graph {
         let input = self.input(variable);
         Array {
             node_id: input.value_node_id,
-            graph: self,
+            scope: self,
         }
     }
 
@@ -1006,11 +1006,11 @@ impl Graph {
         });
     }
 
-    pub fn update_variable<'g>(
-        &'g self,
+    pub fn update_variable<'s>(
+        &'s self,
         variable: &Variable,
-        f: impl FnOnce(Array<'g>) -> Array<'g>,
-    ) -> Array<'g> {
+        f: impl FnOnce(Array<'s>) -> Array<'s>,
+    ) -> Array<'s> {
         let result = f(self.read_variable(variable));
         self.write_variable(variable, result);
         result
@@ -1019,7 +1019,7 @@ impl Graph {
     pub fn accumulator(&self, shape: impl Into<Shape>) -> Array {
         self.with_state(|state| Array {
             node_id: state.ops.new_node(shape, Op::Unary(UnaryOp::Mov), &[]),
-            graph: self,
+            scope: self,
         })
     }
 
@@ -1044,9 +1044,9 @@ impl Graph {
         })
     }
 
-    pub fn build_schedule(self) -> Schedule {
+    pub fn build_schedule(self) -> Graph {
         self.with_state(|state| {
-            Schedule::new(
+            Graph::new(
                 SharedVariables::clone(&state.variables),
                 state.ops.graph.clone(),
             )
