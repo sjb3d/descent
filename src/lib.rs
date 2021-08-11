@@ -19,26 +19,38 @@ pub mod variable;
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
-    use bytemuck::{cast_slice, cast_slice_mut};
     use std::{io::prelude::*, iter};
 
     const TEST_RAND_SEED: u32 = 0x5EED5EED;
+
+    trait EnvironmentExt {
+        fn static_parameter_with_data(&mut self, shape: impl Into<Shape>, name: &str, data: &[f32]) -> Variable;
+        fn read_variable(&mut self, variable: &Variable) -> Vec<f32>;
+    }
+
+    impl EnvironmentExt for Environment {
+        fn static_parameter_with_data(&mut self, shape: impl Into<Shape>, name: &str, data: &[f32]) -> Variable {
+            let var = self.static_parameter(shape, name);
+            self.writer(&var).write_all(bytemuck::cast_slice(data)).unwrap();
+            var
+        }
+    
+        fn read_variable(&mut self, variable: &Variable) -> Vec<f32> {
+            let mut r = self.reader(&variable);
+            let mut bytes = Vec::new();
+            r.read_to_end(&mut bytes).unwrap();
+            bytemuck::cast_slice(&bytes).to_vec()
+        }
+    }
 
     #[test]
     fn variables() {
         let mut env = Environment::new();
 
-        let a_var = env.static_parameter([10], "a");
+        let a_data = vec![0f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        let a_var = env.static_parameter_with_data([10], "a", &a_data);
 
-        let a_data = [0f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-        env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
-
-        let mut a_result = [0f32; 10];
-        env.reader(&a_var)
-            .read_exact(cast_slice_mut(&mut a_result))
-            .unwrap();
-
-        assert_eq!(a_data, a_result);
+        assert_eq!(env.read_variable(&a_var), a_data);
     }
 
     #[test]
@@ -48,10 +60,8 @@ mod tests {
         let a_data: Vec<f32> = (0..100).map(|i| i as f32).collect();
         let b_data: Vec<f32> = a_data.chunks(10).map(|v| v.iter().sum::<f32>()).collect();
 
-        let a_var = env.static_parameter([10, 10], "a");
+        let a_var = env.static_parameter_with_data([10, 10], "a", &a_data);
         let b_var = env.static_parameter([10, 1], "b");
-
-        env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.graph();
         g.write_variable(&b_var, g.read_variable(&a_var).reduce_sum(-1, true));
@@ -59,11 +69,7 @@ mod tests {
         let g = g.build_schedule();
         env.run(&g, TEST_RAND_SEED);
 
-        let mut b_result = vec![0f32; b_data.len()];
-        env.reader(&b_var)
-            .read_exact(cast_slice_mut(&mut b_result))
-            .unwrap();
-        assert_eq!(b_result, b_data);
+        assert_eq!(env.read_variable(&b_var) , b_data);
     }
 
     #[test]
@@ -73,10 +79,8 @@ mod tests {
         let a_data: Vec<f32> = iter::repeat(1.0).take(64).collect();
         let b_data: Vec<f32> = iter::repeat(1.0).take(100).collect();
 
-        let a_var = env.static_parameter([1, 8, 8, 1], "a");
+        let a_var = env.static_parameter_with_data([1, 8, 8, 1], "a", &a_data);
         let b_var = env.static_parameter([1, 10, 10, 1], "b");
-
-        env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.graph();
         g.write_variable(&b_var, g.read_variable(&a_var).pad_image(1));
@@ -84,11 +88,7 @@ mod tests {
         let g = g.build_schedule();
         env.run(&g, TEST_RAND_SEED);
 
-        let mut b_result = vec![0f32; b_data.len()];
-        env.reader(&b_var)
-            .read_exact(cast_slice_mut(&mut b_result))
-            .unwrap();
-        assert_eq!(b_result, b_data);
+        assert_eq!(env.read_variable(&b_var), b_data);
     }
 
     #[test]
@@ -105,10 +105,8 @@ mod tests {
             })
             .collect();
 
-        let a_var = env.static_parameter([1, 10, 10, 1], "a");
+        let a_var = env.static_parameter_with_data([1, 10, 10, 1], "a", &a_data);
         let b_var = env.static_parameter([1, 8, 8, 1], "b");
-
-        env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.graph();
         g.write_variable(&b_var, g.read_variable(&a_var).unpad_image(1));
@@ -116,11 +114,7 @@ mod tests {
         let g = g.build_schedule();
         env.run(&g, TEST_RAND_SEED);
 
-        let mut b_result = vec![0f32; b_data.len()];
-        env.reader(&b_var)
-            .read_exact(cast_slice_mut(&mut b_result))
-            .unwrap();
-        assert_eq!(b_result, b_data);
+        assert_eq!(env.read_variable(&b_var), b_data);
     }
 
     #[test]
@@ -131,12 +125,9 @@ mod tests {
         let b_data: Vec<f32> = iter::repeat(1.0).take(9).collect();
         let c_data: Vec<f32> = iter::repeat(9.0).take(64).collect();
 
-        let a_var = env.static_parameter([1, 10, 10, 1], "a");
-        let b_var = env.static_parameter([1, 1, 3, 3, 1], "b");
+        let a_var = env.static_parameter_with_data([1, 10, 10, 1], "a", &a_data);
+        let b_var = env.static_parameter_with_data([1, 1, 3, 3, 1], "b", &b_data);
         let c_var = env.static_parameter([1, 8, 8, 1], "c");
-
-        env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
-        env.writer(&b_var).write_all(cast_slice(&b_data)).unwrap();
 
         let g = env.graph();
         g.write_variable(
@@ -147,11 +138,7 @@ mod tests {
         let g = g.build_schedule();
         env.run(&g, TEST_RAND_SEED);
 
-        let mut c_result = vec![0f32; c_data.len()];
-        env.reader(&c_var)
-            .read_exact(cast_slice_mut(&mut c_result))
-            .unwrap();
-        assert_eq!(c_result, c_data);
+        assert_eq!(env.read_variable(&c_var), c_data);
     }
 
     #[test]
@@ -163,10 +150,8 @@ mod tests {
             .map(|i| (11 + 2 * (i % 5) + 20 * (i / 5)) as f32)
             .collect();
 
-        let a_var = env.static_parameter([1, 10, 10, 1], "a");
+        let a_var = env.static_parameter_with_data([1, 10, 10, 1], "a", &a_data);
         let b_var = env.static_parameter([1, 5, 5, 1], "b");
-
-        env.writer(&a_var).write_all(cast_slice(&a_data)).unwrap();
 
         let g = env.graph();
         g.write_variable(
@@ -177,10 +162,6 @@ mod tests {
         let g = g.build_schedule();
         env.run(&g, TEST_RAND_SEED);
 
-        let mut b_result = vec![0f32; b_data.len()];
-        env.reader(&b_var)
-            .read_exact(cast_slice_mut(&mut b_result))
-            .unwrap();
-        assert_eq!(b_result, b_data);
+        assert_eq!(env.read_variable(&b_var), b_data);
     }
 }
