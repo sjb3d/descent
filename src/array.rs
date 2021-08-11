@@ -41,7 +41,7 @@ pub trait IntoDualArray<'s> {
     fn into_dual_array(self, scope: &'s Scope) -> DualArray<'s>;
 }
 impl<'s> IntoDualArray<'s> for DualArray<'s> {
-    fn into_dual_array(self, _scope: &'s Scope) -> DualArray<'s> {
+    fn into_dual_array(self, _graph: &'s Scope) -> DualArray<'s> {
         self
     }
 }
@@ -58,9 +58,11 @@ impl<'s> Array<'s> {
 
     pub fn clone_as_accumulator(&self) -> Self {
         self.scope.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape;
+            let shape = state.ops[self.node_id].shape;
             Array {
-                node_id: state.ops.new_node(shape, Op::Unary(UnaryOp::Mov), &[]),
+                node_id: state
+                    .ops
+                    .new_node(state.next_colour, shape, Op::Unary(UnaryOp::Mov), &[]),
                 scope: self.scope,
             }
         })
@@ -68,12 +70,14 @@ impl<'s> Array<'s> {
 
     fn view(self, view: View) -> Self {
         self.scope.with_state(|state| {
-            let node_id = state
-                .ops
-                .new_node(view.output_shape, Op::Unary(UnaryOp::Mov), &[]);
+            let node_id = state.ops.new_node(
+                state.next_colour,
+                view.output_shape,
+                Op::Unary(UnaryOp::Mov),
+                &[],
+            );
             state
                 .ops
-                .graph
                 .add_edge(self.node_id, node_id, OpEdge { arg: 0, view });
             Array {
                 node_id,
@@ -111,9 +115,14 @@ impl<'s> Array<'s> {
 
     fn unary_op(self, op: UnaryOp) -> Self {
         self.scope.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape;
+            let shape = state.ops[self.node_id].shape;
             Array {
-                node_id: state.ops.new_node(shape, Op::Unary(op), &[self.node_id]),
+                node_id: state.ops.new_node(
+                    state.next_colour,
+                    shape,
+                    Op::Unary(op),
+                    &[self.node_id],
+                ),
                 scope: self.scope,
             }
         })
@@ -122,16 +131,18 @@ impl<'s> Array<'s> {
     fn binary_op(self, rhs: impl IntoArray<'s>, op: BinaryOp) -> Self {
         let rhs = rhs.into_array(self.scope);
         let op_shape = self.scope.with_state(|state| {
-            state.ops.graph[self.node_id]
+            state.ops[self.node_id]
                 .shape
-                .broadcast_with(state.ops.graph[rhs.node_id].shape)
+                .broadcast_with(state.ops[rhs.node_id].shape)
         });
 
         let lhs = self.broadcast(op_shape).node_id;
         let rhs = rhs.broadcast(op_shape).node_id;
 
         self.scope.with_state(|state| Array {
-            node_id: state.ops.new_node(op_shape, Op::Binary(op), &[lhs, rhs]),
+            node_id: state
+                .ops
+                .new_node(state.next_colour, op_shape, Op::Binary(op), &[lhs, rhs]),
             scope: self.scope,
         })
     }
@@ -148,11 +159,11 @@ impl<'s> Array<'s> {
         let fail = fail.into_array(self.scope);
 
         let op_shape = self.scope.with_state(|state| {
-            state.ops.graph[self.node_id]
+            state.ops[self.node_id]
                 .shape
-                .broadcast_with(state.ops.graph[rhs.node_id].shape)
-                .broadcast_with(state.ops.graph[pass.node_id].shape)
-                .broadcast_with(state.ops.graph[fail.node_id].shape)
+                .broadcast_with(state.ops[rhs.node_id].shape)
+                .broadcast_with(state.ops[pass.node_id].shape)
+                .broadcast_with(state.ops[fail.node_id].shape)
         });
 
         let lhs = self.broadcast(op_shape).node_id;
@@ -162,6 +173,7 @@ impl<'s> Array<'s> {
 
         self.scope.with_state(|state| Array {
             node_id: state.ops.new_node(
+                state.next_colour,
                 op_shape,
                 Op::CompareAndSelect(compare_mode),
                 &[lhs, rhs, pass, fail],
@@ -179,6 +191,7 @@ impl<'s> Array<'s> {
                 let shape = shape.reduce(axis);
                 Array {
                     node_id: state.ops.new_node(
+                        state.next_colour,
                         shape,
                         Op::Reduce { reduce_op, axis },
                         &[self.node_id],
@@ -260,11 +273,12 @@ impl<'s> Array<'s> {
 
     pub(crate) fn batched_matmul(self, rhs: Array, output_mode: MatMulOutputMode) -> Self {
         let chunks = self.scope.with_state(|state| {
-            let shape = state.ops.graph[self.node_id]
+            let shape = state.ops[self.node_id]
                 .shape
-                .batched_matmul(state.ops.graph[rhs.node_id].shape, output_mode);
+                .batched_matmul(state.ops[rhs.node_id].shape, output_mode);
             Array {
                 node_id: state.ops.new_node(
+                    state.next_colour,
                     shape,
                     Op::MatMul { output_mode },
                     &[self.node_id, rhs.node_id],
@@ -304,13 +318,16 @@ impl<'s> Array<'s> {
             return self;
         }
         self.scope.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape;
+            let shape = state.ops[self.node_id].shape;
             let axis = shape.axis(axis);
             let shape = shape.unpad(axis, pad);
             Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::Unpad { axis, pad }, &[self.node_id]),
+                node_id: state.ops.new_node(
+                    state.next_colour,
+                    shape,
+                    Op::Unpad { axis, pad },
+                    &[self.node_id],
+                ),
                 scope: self.scope,
             }
         })
@@ -369,11 +386,14 @@ impl<'s> Array<'s> {
 
     fn windows_to_image(self, stride: (usize, usize)) -> Self {
         self.scope.with_state(|state| {
-            let shape = state.ops.graph[self.node_id].shape.windows_to_image(stride);
+            let shape = state.ops[self.node_id].shape.windows_to_image(stride);
             Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::WindowsToImage { stride }, &[self.node_id]),
+                node_id: state.ops.new_node(
+                    state.next_colour,
+                    shape,
+                    Op::WindowsToImage { stride },
+                    &[self.node_id],
+                ),
                 scope: self.scope,
             }
         })
@@ -383,13 +403,16 @@ impl<'s> Array<'s> {
         self.scope.with_state(|state| {
             let shape = shape.into();
             assert_eq!(
-                state.ops.graph[self.node_id].shape.element_count(),
+                state.ops[self.node_id].shape.element_count(),
                 shape.element_count()
             );
             Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::Unary(UnaryOp::Mov), &[self.node_id]),
+                node_id: state.ops.new_node(
+                    state.next_colour,
+                    shape,
+                    Op::Unary(UnaryOp::Mov),
+                    &[self.node_id],
+                ),
                 scope: self.scope,
             }
         })
@@ -400,45 +423,38 @@ impl<'s> Array<'s> {
     }
 
     pub fn shape(&self) -> Shape {
-        self.scope
-            .with_state(|state| state.ops.graph[self.node_id].shape)
+        self.scope.with_state(|state| state.ops[self.node_id].shape)
     }
 
     pub fn accumulate(&self, src: Array) {
         self.scope.with_state(|state| {
-            assert_eq!(state.ops.graph[self.node_id].op, Op::Unary(UnaryOp::Mov));
-            assert_eq!(
-                state.ops.graph[self.node_id].shape,
-                state.ops.graph[src.node_id].shape
-            );
-            let src_id = if let Some(edge_ref) = state
-                .ops
-                .graph
-                .edges_directed(self.node_id, Incoming)
-                .next()
-            {
-                // remove the edge from the current source to this move
-                let prev_edge_id = edge_ref.id();
-                let prev_src_id = edge_ref.source();
-                state.ops.graph.remove_edge(prev_edge_id);
+            assert_eq!(state.ops[self.node_id].op, Op::Unary(UnaryOp::Mov));
+            assert_eq!(state.ops[self.node_id].shape, state.ops[src.node_id].shape);
+            let src_id =
+                if let Some(edge_ref) = state.ops.edges_directed(self.node_id, Incoming).next() {
+                    // remove the edge from the current source to this move
+                    let prev_edge_id = edge_ref.id();
+                    let prev_src_id = edge_ref.source();
+                    state.ops.remove_edge(prev_edge_id);
 
-                // accumulate with the given array
-                state.ops.new_node(
-                    state.ops.graph[src.node_id].shape,
-                    Op::Binary(BinaryOp::Add),
-                    &[prev_src_id, src.node_id],
-                )
-            } else {
-                src.node_id
-            };
+                    // accumulate with the given array
+                    state.ops.new_node(
+                        state.next_colour,
+                        state.ops[src.node_id].shape,
+                        Op::Binary(BinaryOp::Add),
+                        &[prev_src_id, src.node_id],
+                    )
+                } else {
+                    src.node_id
+                };
 
             // add the edge to the move
-            state.ops.graph.add_edge(
+            state.ops.add_edge(
                 src_id,
                 self.node_id,
                 OpEdge {
                     arg: 0,
-                    view: state.ops.graph[src.node_id].shape.identity_view(),
+                    view: state.ops[src.node_id].shape.identity_view(),
                 },
             );
         })
@@ -452,16 +468,9 @@ impl<'s> Array<'s> {
             .literal(1.0 / (mini_batch_size as f32))
             .broadcast(grad_shape);
         self.scope.with_state(|state| {
-            assert_eq!(state.ops.graph[self.node_id].op, Op::Unary(UnaryOp::Mov));
-            assert_eq!(
-                state
-                    .ops
-                    .graph
-                    .edges_directed(self.node_id, Incoming)
-                    .count(),
-                0
-            );
-            state.ops.graph.add_edge(
+            assert_eq!(state.ops[self.node_id].op, Op::Unary(UnaryOp::Mov));
+            assert_eq!(state.ops.edges_directed(self.node_id, Incoming).count(), 0);
+            state.ops.add_edge(
                 mini_batch_scale.node_id,
                 self.node_id,
                 OpEdge {
@@ -839,61 +848,32 @@ where
     }
 }
 
-struct OpGraphState {
-    graph: OpGraph,
-    next_colour: usize,
-    next_rand_uid: usize,
-}
-
-impl OpGraphState {
-    fn new_node(&mut self, shape: impl Into<Shape>, op: Op, inputs: &[OpNodeId]) -> OpNodeId {
-        let shape = shape.into();
-        let node_id = self.graph.add_node(OpNode {
-            colour: self.next_colour,
-            shape,
-            op,
-            cluster_id: None,
-        });
-        for (index, input_id) in inputs.iter().copied().enumerate() {
-            self.graph.add_edge(
-                input_id,
-                node_id,
-                OpEdge {
-                    arg: index,
-                    view: self.graph[input_id].shape.identity_view(),
-                },
-            );
-        }
-        node_id
-    }
-}
-
 #[derive(Clone, Copy)]
 struct GraphInput {
     value_node_id: OpNodeId,
     grad_node_id: Option<OpNodeId>,
 }
 
-struct GraphState {
-    ops: OpGraphState,
+struct ScopeState {
+    ops: OpGraph,
+    next_colour: usize,
+    next_rand_uid: usize,
     variables: SharedVariables,
     inputs: SparseSecondaryMap<VariableId, GraphInput>,
     outputs: SparseSecondaryMap<VariableId, OpNodeId>,
 }
 
 pub struct Scope {
-    state: RefCell<GraphState>,
+    state: RefCell<ScopeState>,
 }
 
 impl Scope {
     pub(crate) fn new(variables: SharedVariables) -> Self {
         Self {
-            state: RefCell::new(GraphState {
-                ops: OpGraphState {
-                    graph: Default::default(),
-                    next_colour: 0,
-                    next_rand_uid: 0,
-                },
+            state: RefCell::new(ScopeState {
+                ops: Default::default(),
+                next_colour: 0,
+                next_rand_uid: 0,
                 variables,
                 inputs: SparseSecondaryMap::new(),
                 outputs: SparseSecondaryMap::new(),
@@ -903,7 +883,7 @@ impl Scope {
 
     fn with_state<F, T>(&self, f: F) -> T
     where
-        F: FnOnce(&mut GraphState) -> T,
+        F: FnOnce(&mut ScopeState) -> T,
     {
         let mut data = self.state.borrow_mut();
         f(&mut data)
@@ -911,9 +891,12 @@ impl Scope {
 
     pub fn literal(&self, value: f32) -> Array {
         self.with_state(|state| Array {
-            node_id: state
-                .ops
-                .new_node([1], Op::Literal(NotNan::new(value).unwrap()), &[]),
+            node_id: state.ops.new_node(
+                state.next_colour,
+                [1],
+                Op::Literal(NotNan::new(value).unwrap()),
+                &[],
+            ),
             scope: self,
         })
     }
@@ -923,9 +906,12 @@ impl Scope {
             let shape = shape.into();
             let axis = shape.axis(axis);
             Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::BuiltIn(BuiltInOp::Coord { axis }), &[]),
+                node_id: state.ops.new_node(
+                    state.next_colour,
+                    shape,
+                    Op::BuiltIn(BuiltInOp::Coord { axis }),
+                    &[],
+                ),
                 scope: self,
             }
         })
@@ -934,12 +920,15 @@ impl Scope {
     pub fn rand(&self, shape: impl Into<Shape>) -> Array {
         self.with_state(|state| {
             let shape = shape.into();
-            let uid = state.ops.next_rand_uid;
-            state.ops.next_rand_uid += 1;
+            let uid = state.next_rand_uid;
+            state.next_rand_uid += 1;
             Array {
-                node_id: state
-                    .ops
-                    .new_node(shape, Op::BuiltIn(BuiltInOp::Rand { uid }), &[]),
+                node_id: state.ops.new_node(
+                    state.next_colour,
+                    shape,
+                    Op::BuiltIn(BuiltInOp::Rand { uid }),
+                    &[],
+                ),
                 scope: self,
             }
         })
@@ -949,14 +938,20 @@ impl Scope {
         self.with_state(|state| {
             let variable_id = variable.checked_id(&state.variables);
             let shape = state.variables.borrow().get(variable_id).unwrap().shape;
+            let next_colour = state.next_colour;
             let ops = &mut state.ops;
             *state
                 .inputs
                 .entry(variable_id)
                 .unwrap()
                 .or_insert_with(|| GraphInput {
-                    value_node_id: ops.new_node(shape, Op::Input { variable_id }, &[]),
-                    grad_node_id: Some(ops.new_node(shape, Op::Unary(UnaryOp::Mov), &[])),
+                    value_node_id: ops.new_node(next_colour, shape, Op::Input { variable_id }, &[]),
+                    grad_node_id: Some(ops.new_node(
+                        next_colour,
+                        shape,
+                        Op::Unary(UnaryOp::Mov),
+                        &[],
+                    )),
                 })
         })
     }
@@ -981,18 +976,21 @@ impl Scope {
     pub fn write_variable(&self, variable: &Variable, rhs: Array) {
         self.with_state(|state| {
             let variable_id = variable.checked_id(&state.variables);
-            let shape = state.ops.graph[rhs.node_id].shape;
+            let shape = state.ops[rhs.node_id].shape;
             assert_eq!(
                 state.variables.borrow().get(variable_id).unwrap().shape,
                 shape
             );
 
             // update the output node for this variable (remove any old one)
-            let node_id = state
-                .ops
-                .new_node(shape, Op::Output { variable_id }, &[rhs.node_id]);
+            let node_id = state.ops.new_node(
+                state.next_colour,
+                shape,
+                Op::Output { variable_id },
+                &[rhs.node_id],
+            );
             if let Some(node_id) = state.outputs.insert(variable_id, node_id) {
-                state.ops.graph.remove_node(node_id);
+                state.ops.remove_node(node_id);
             }
 
             // ensure that if we read this variable again we read the latest value
@@ -1018,21 +1016,23 @@ impl Scope {
 
     pub fn accumulator(&self, shape: impl Into<Shape>) -> Array {
         self.with_state(|state| Array {
-            node_id: state.ops.new_node(shape, Op::Unary(UnaryOp::Mov), &[]),
+            node_id: state
+                .ops
+                .new_node(state.next_colour, shape, Op::Unary(UnaryOp::Mov), &[]),
             scope: self,
         })
     }
 
     pub fn next_colour(&self) {
         self.with_state(|state| {
-            state.ops.next_colour += 1;
+            state.next_colour += 1;
         })
     }
 
     pub fn trainable_parameters(&self) -> Vec<Variable> {
         self.with_state(|state| {
             let mut v = Vec::new();
-            for node in state.ops.graph.node_weights() {
+            for node in state.ops.node_weights() {
                 if let Op::Input { variable_id } = node.op {
                     let variable = Variable::new(variable_id, &state.variables);
                     if variable.is_trainable() {
@@ -1046,10 +1046,7 @@ impl Scope {
 
     pub fn build_graph(self) -> Graph {
         self.with_state(|state| {
-            Graph::new(
-                SharedVariables::clone(&state.variables),
-                state.ops.graph.clone(),
-            )
+            Graph::new(SharedVariables::clone(&state.variables), state.ops.clone())
         })
     }
 }

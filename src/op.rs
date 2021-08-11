@@ -121,3 +121,42 @@ pub(crate) struct OpEdge {
     pub(crate) arg: usize,
     pub(crate) view: View,
 }
+
+pub(crate) trait OpGraphExt {
+    fn new_node(
+        &mut self,
+        colour: usize,
+        shape: impl Into<Shape>,
+        op: Op,
+        inputs: &[OpNodeId],
+    ) -> OpNodeId;
+}
+
+impl OpGraphExt for OpGraph {
+    fn new_node(
+        &mut self,
+        colour: usize,
+        shape: impl Into<Shape>,
+        op: Op,
+        inputs: &[OpNodeId],
+    ) -> OpNodeId {
+        let shape = shape.into();
+        let node_id = self.add_node(OpNode {
+            colour,
+            shape,
+            op,
+            cluster_id: None,
+        });
+        for (index, input_id) in inputs.iter().copied().enumerate() {
+            self.add_edge(
+                input_id,
+                node_id,
+                OpEdge {
+                    arg: index,
+                    view: self[input_id].shape.identity_view(),
+                },
+            );
+        }
+        node_id
+    }
+}

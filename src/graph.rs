@@ -375,10 +375,10 @@ impl Graph {
             let mut arg_op_index = HashMap::new();
             let mut member_op_index = HashMap::new();
 
-            let graph = &self.ops;
+            let ops = &self.ops;
             for node_id in members.iter().copied() {
                 // gather the arguments (loading as necessary)
-                let arg_sources = get_arg_sources(graph, node_id);
+                let arg_sources = get_arg_sources(ops, node_id);
                 let args: TinyVec<[usize; MAX_OP_ARGS]> = arg_sources
                     .iter()
                     .map(|source| {
@@ -386,7 +386,7 @@ impl Graph {
                             *op_index
                         } else {
                             *arg_op_index.entry(*source).or_insert_with(|| {
-                                let source_node = &graph[source.node_id];
+                                let source_node = &ops[source.node_id];
                                 assert_ne!(source_node.cluster_id, Some(cluster_id));
                                 let op_index = kernel.ops.len();
                                 match source_node.op {
@@ -413,7 +413,7 @@ impl Graph {
                     .collect();
 
                 // emit the op
-                let op = match graph[node_id].op {
+                let op = match ops[node_id].op {
                     Op::Unary(op) => PerElementKernelOp::Unary { op, args: args[0] },
                     Op::Binary(op) => PerElementKernelOp::Binary {
                         op,
@@ -430,9 +430,9 @@ impl Graph {
                 member_op_index.insert(node_id, op_index);
 
                 // store the result if necessary
-                if graph
+                if ops
                     .neighbors_directed(node_id, Outgoing)
-                    .any(|other_id| graph[other_id].cluster_id != Some(cluster_id))
+                    .any(|other_id| ops[other_id].cluster_id != Some(cluster_id))
                 {
                     kernel.outputs.push(op_index);
                     outputs.push(node_id);
