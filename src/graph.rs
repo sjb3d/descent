@@ -590,7 +590,7 @@ impl Graph {
                     };
                     write!(
                         w,
-                        "n{} [shape=box,style=filled,color=\"#{:06X}\",label=\"{:?}\\n",
+                        "n{} [shape=box,style=filled,color=\"#{:06X}\",label=\"{}\\n",
                         node_ref.id().index(),
                         col,
                         node.op

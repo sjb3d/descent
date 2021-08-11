@@ -1,6 +1,8 @@
 use crate::common::*;
 use ordered_float::NotNan;
 use petgraph::prelude::*;
+use slotmap::Key;
+use std::fmt;
 
 pub(crate) trait Only: Iterator {
     fn only(&mut self) -> Option<Self::Item>;
@@ -105,6 +107,29 @@ impl Op {
 
     pub(crate) fn can_merge(&self) -> bool {
         !matches!(self, Self::Input { .. } | Self::Output { .. })
+    }
+}
+
+impl fmt::Display for Op {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Input { variable_id } => write!(f, "Input({:?})", variable_id.data()),
+            Self::Output { variable_id } => write!(f, "Output({:?})", variable_id.data()),
+            Self::Literal(value) => write!(f, "{:?}", value),
+            Self::BuiltIn(built_in_op) => match built_in_op {
+                BuiltInOp::Coord { axis } => write!(f, "Coord{}", axis.index()),
+                BuiltInOp::Rand { .. } => write!(f, "Rand"),
+            },
+            Self::Unary(unary_op) => write!(f, "{:?}", unary_op),
+            Self::Binary(binary_op) => write!(f, "{:?}", binary_op),
+            Self::CompareAndSelect(compare_mode) => write!(f, "Select{:?}", compare_mode),
+            Self::MatMul { .. } => write!(f, "MatMul"),
+            Self::Reduce { reduce_op, axis } => {
+                write!(f, "Reduce{:?}({})", reduce_op, axis.index())
+            }
+            Self::Unpad { axis, pad } => write!(f, "Unpad{}({})", pad, axis.index()),
+            Self::WindowsToImage { .. } => write!(f, "WindowsToImage"),
+        }
     }
 }
 
