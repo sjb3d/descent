@@ -246,7 +246,7 @@ impl Graph {
         for &node_id in roots {
             markers.visit(node_id);
         }
-        for node_id in self.ops_sorted.iter().copied().rev() {
+        for node_id in self.ops_sorted.iter().copied() {
             if self
                 .ops
                 .neighbors_directed(node_id, Incoming)
