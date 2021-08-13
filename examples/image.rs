@@ -35,6 +35,41 @@ impl Module for TestRelu {
     }
 }
 
+struct TestSiren {
+    hidden_layers: Vec<Dense>,
+    final_layer: Dense,
+}
+
+impl TestSiren {
+    fn new(env: &mut Environment, hidden_units: &[usize]) -> Self {
+        let mut hidden_layers = Vec::new();
+        let mut prev_units = 2;
+        for hidden_units in hidden_units.iter().copied() {
+            hidden_layers.push(
+                Dense::builder(prev_units, hidden_units)
+                    .with_initializer(Initializer::for_siren(prev_units))
+                    .build(env),
+            );
+            prev_units = hidden_units;
+        }
+        Self {
+            hidden_layers,
+            final_layer: Dense::builder(prev_units, 3).build(env),
+        }
+    }
+}
+
+impl Module for TestSiren {
+    fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
+        let mut x = input;
+        for (index, layer) in self.hidden_layers.iter().enumerate() {
+            let scale = if index == 0 { 30.0 } else { 1.0 };
+            x = (x.apply(layer, ctx) * scale).sin();
+        }
+        x.apply(&self.final_layer, ctx)
+    }
+}
+
 fn position_encoding<'s>(x: DualArray<'s>, freq_count: usize) -> DualArray<'s> {
     let scope = x.scope();
 
@@ -65,7 +100,8 @@ fn main() {
     let mut env = Environment::new();
 
     let freq_count = 6;
-    let module = TestRelu::new(&mut env, freq_count, &[256, 64, 64, 64]);
+    //let module = TestRelu::new(&mut env, freq_count, &[256, 128, 64, 64]);
+    let module = TestSiren::new(&mut env, &[256, 128, 64, 64]);
 
     let m = 4096;
     let x_var = env.static_parameter([m, 2], "x");

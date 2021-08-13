@@ -18,6 +18,11 @@ impl Initializer {
         let scale = (2.0 / (fan_in as f32)).sqrt();
         Self::RandNormal(scale)
     }
+
+    pub fn for_siren(fan_in: usize) -> Self {
+        let scale = (6.0 / (fan_in as f32)).sqrt();
+        Self::RandUniform(scale)
+    }
 }
 
 pub(crate) struct VariableStorage {
