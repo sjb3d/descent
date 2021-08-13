@@ -562,6 +562,10 @@ impl<'s> DualArray<'s> {
         }
     }
 
+    pub fn new_from_value(value: Array<'s>) -> Self {
+        Self::new(value, value.clone_as_accumulator())
+    }
+
     pub fn value(self) -> Array<'s> {
         Array {
             node_id: self.value_node_id,
@@ -586,6 +590,10 @@ impl<'s> DualArray<'s> {
 
     pub fn scope(&self) -> &'s Scope {
         self.scope
+    }
+
+    pub fn square(self) -> Self {
+        self * self
     }
 
     pub fn leaky_relu(self, leakiness: f32) -> Self {
@@ -750,7 +758,10 @@ impl<'s> DualArray<'s> {
         let b = a.reduce_op(reduce_op, axis);
 
         let db = b.clone_as_accumulator();
-        da.accumulate(a.select_eq(b, db, 0.0));
+        match reduce_op {
+            ReduceOp::Max => da.accumulate(a.select_eq(b, db, 0.0)),
+            ReduceOp::Sum => da.accumulate(db.broadcast(da.shape())),
+        }
 
         Self::new(b, db)
     }
@@ -785,6 +796,11 @@ impl<'s> DualArray<'s> {
         }
     }
 
+    pub fn reduce_sum(self, axis: isize, keep_axis: bool) -> Self {
+        let axis = self.shape().axis(axis);
+        self.reduce_op(ReduceOp::Sum, axis)
+            .keep_axis(axis, keep_axis)
+    }
     pub fn reduce_max(self, axis: isize, keep_axis: bool) -> Self {
         let axis = self.shape().axis(axis);
         self.reduce_op(ReduceOp::Max, axis)
@@ -843,6 +859,48 @@ where
         let dc = c.clone_as_accumulator();
         da.accumulate(dc.unbroadcast(a.shape()));
         db.accumulate(dc.unbroadcast(b.shape()));
+
+        Self::new(c, dc)
+    }
+}
+
+impl<'s, T> ops::Sub<T> for DualArray<'s>
+where
+    T: IntoDualArray<'s>,
+{
+    type Output = DualArray<'s>;
+    fn sub(self, rhs: T) -> Self::Output {
+        let rhs = rhs.into_dual_array(self.scope);
+
+        let (a, da) = self.into_inner();
+        let (b, db) = rhs.into_inner();
+
+        let c = a - b;
+
+        let dc = c.clone_as_accumulator();
+        da.accumulate(dc.unbroadcast(a.shape()));
+        db.accumulate(-dc.unbroadcast(b.shape()));
+
+        Self::new(c, dc)
+    }
+}
+
+impl<'s, T> ops::Mul<T> for DualArray<'s>
+where
+    T: IntoDualArray<'s>,
+{
+    type Output = DualArray<'s>;
+    fn mul(self, rhs: T) -> Self::Output {
+        let rhs = rhs.into_dual_array(self.scope);
+
+        let (a, da) = self.into_inner();
+        let (b, db) = rhs.into_inner();
+
+        let c = a * b;
+
+        let dc = c.clone_as_accumulator();
+        da.accumulate((b * dc).unbroadcast(a.shape()));
+        db.accumulate((a * dc).unbroadcast(b.shape()));
 
         Self::new(c, dc)
     }
