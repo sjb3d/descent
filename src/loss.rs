@@ -10,14 +10,16 @@ pub fn softmax_cross_entropy_loss<'s>(z: DualArray<'s>, y: impl IntoArray<'s>) -
     let p = t / t.reduce_sum(-1, true);
 
     // cross entropy loss
-    let loss = y.select_eq(p.coord(-1), -p.log(), 0.0).reduce_sum(-1, true); // TODO: pick element of p using value of y
-    let dloss = loss.clone_as_accumulator();
+    let (loss, dloss) = y
+        .select_eq(p.coord(-1), -p.log(), 0.0)
+        .reduce_sum(-1, true)
+        .with_grad(); // TODO: pick element of p using value of y
 
     // backprop (softmax with cross entropy directly)
     let n = p.shape()[SignedIndex(-1)];
     dz.accumulate((p - y.one_hot(n)) * dloss);
 
-    DualArray::new(loss, dloss)
+    (loss, dloss).into()
 }
 
 pub fn softmax_cross_entropy_accuracy<'s>(z: DualArray<'s>, y: impl IntoArray<'s>) -> Array<'s> {

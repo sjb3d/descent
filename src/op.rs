@@ -43,6 +43,7 @@ pub(crate) enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Pow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,6 +53,8 @@ pub(crate) enum UnaryOp {
     Sqrt,
     Exp,
     Log,
+    Sin,
+    Cos,
 }
 
 pub(crate) const MAX_OP_ARGS: usize = 4;

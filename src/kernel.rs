@@ -212,6 +212,8 @@ impl Kernel for PerElementKernel {
                         UnaryOp::Sqrt => write!(w, "sqrt(tmp{})", args)?,
                         UnaryOp::Exp => write!(w, "exp(tmp{})", args)?,
                         UnaryOp::Log => write!(w, "log(tmp{})", args)?,
+                        UnaryOp::Sin => write!(w, "sin(tmp{})", args)?,
+                        UnaryOp::Cos => write!(w, "cos(tmp{})", args)?,
                     }
                     writeln!(w, ";")?;
                 }
@@ -222,6 +224,7 @@ impl Kernel for PerElementKernel {
                         BinaryOp::Sub => write!(w, "tmp{} - tmp{}", args[0], args[1])?,
                         BinaryOp::Mul => write!(w, "tmp{} * tmp{}", args[0], args[1])?,
                         BinaryOp::Div => write!(w, "tmp{} / tmp{}", args[0], args[1])?,
+                        BinaryOp::Pow => write!(w, "pow(tmp{}, tmp{})", args[0], args[1])?,
                     }
                     writeln!(w, ";")?;
                 }

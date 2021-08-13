@@ -233,15 +233,16 @@ impl Module for Dropout {
         let shape = input.shape();
 
         scope.next_colour();
-        let rv = scope.rand(shape);
+        let rv = scope.rand(shape).value();
 
         let (a, da) = input.into_inner();
 
         let survivor_scale = 1.0 / (1.0 - self.amount);
-        let b = rv.select_gt(self.amount, survivor_scale * a, 0.0);
-        let db = b.clone_as_accumulator();
+        let (b, db) = rv
+            .select_gt(self.amount, survivor_scale * a, 0.0)
+            .with_grad();
         da.accumulate(rv.select_gt(self.amount, survivor_scale * db, 0.0));
 
-        DualArray::new(b, db)
+        (b, db).into()
     }
 }

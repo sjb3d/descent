@@ -312,7 +312,7 @@ fn main() {
     // build a graph to evaluate the L2 norm of training parameters (to check weight decay)
     let norm_var = env.static_parameter([1], "norm");
     let norm_graph = env.build_graph(|scope| {
-        let mut sum = scope.literal(0.0);
+        let mut sum = scope.literal(0.0).value();
         for var in parameters.iter() {
             let x = scope.read_variable(&var);
             let x = x.reshape([x.shape().element_count()]);

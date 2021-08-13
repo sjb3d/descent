@@ -28,7 +28,7 @@ impl<'s> IntoArray<'s> for Array<'s> {
 }
 impl<'s> IntoArray<'s> for f32 {
     fn into_array(self, scope: &'s Scope) -> Array<'s> {
-        scope.literal(self)
+        scope.literal(self).value()
     }
 }
 impl<'s> IntoArray<'s> for &Variable {
@@ -41,8 +41,13 @@ pub trait IntoDualArray<'s> {
     fn into_dual_array(self, scope: &'s Scope) -> DualArray<'s>;
 }
 impl<'s> IntoDualArray<'s> for DualArray<'s> {
-    fn into_dual_array(self, _graph: &'s Scope) -> DualArray<'s> {
+    fn into_dual_array(self, _scope: &'s Scope) -> DualArray<'s> {
         self
+    }
+}
+impl<'s> IntoDualArray<'s> for f32 {
+    fn into_dual_array(self, scope: &'s Scope) -> DualArray<'s> {
+        scope.literal(self)
     }
 }
 impl<'s> IntoDualArray<'s> for &Variable {
@@ -51,13 +56,19 @@ impl<'s> IntoDualArray<'s> for &Variable {
     }
 }
 
+impl<'s> From<(Array<'s>, Array<'s>)> for DualArray<'s> {
+    fn from((x, dx): (Array<'s>, Array<'s>)) -> Self {
+        DualArray::new(x, dx)
+    }
+}
+
 impl<'s> Array<'s> {
     pub fn scope(&self) -> &'s Scope {
         self.scope
     }
 
-    pub fn clone_as_accumulator(&self) -> Self {
-        self.scope.with_state(|state| {
+    pub fn with_grad(self) -> (Self, Self) {
+        let grad = self.scope.with_state(|state| {
             let shape = state.ops[self.node_id].shape;
             Array {
                 node_id: state
@@ -65,7 +76,8 @@ impl<'s> Array<'s> {
                     .new_node(state.next_colour, shape, Op::Unary(UnaryOp::Mov), &[]),
                 scope: self.scope,
             }
-        })
+        });
+        (self, grad)
     }
 
     fn view(self, view: View) -> Self {
@@ -211,7 +223,7 @@ impl<'s> Array<'s> {
     }
 
     pub fn one_hot(self, count: usize) -> Self {
-        self.scope.coord(count).select_eq(self, 1.0, 0.0)
+        self.scope.coord(count).value().select_eq(self, 1.0, 0.0)
     }
 
     pub fn reduce_max(self, axis: isize, keep_axis: bool) -> Self {
@@ -237,6 +249,7 @@ impl<'s> Array<'s> {
         let len = shape[axis];
         self.scope
             .coord(len)
+            .value()
             .reshape(Shape::from_axis(axis, len))
     }
 
@@ -265,6 +278,16 @@ impl<'s> Array<'s> {
     }
     pub fn log(self) -> Self {
         self.unary_op(UnaryOp::Log)
+    }
+    pub fn sin(self) -> Self {
+        self.unary_op(UnaryOp::Sin)
+    }
+    pub fn cos(self) -> Self {
+        self.unary_op(UnaryOp::Cos)
+    }
+
+    pub fn pow(self, rhs: impl IntoArray<'s>) -> Self {
+        self.binary_op(rhs, BinaryOp::Pow)
     }
 
     pub fn matmul(self, rhs: impl IntoArray<'s>) -> Self {
@@ -434,7 +457,8 @@ impl<'s> Array<'s> {
         self.scope.with_state(|state| state.ops[self.node_id].shape)
     }
 
-    pub fn accumulate(&self, src: Array) {
+    pub fn accumulate(&self, src: impl IntoArray<'s>) {
+        let src = src.into_array(self.scope);
         self.scope.with_state(|state| {
             assert_eq!(state.ops[self.node_id].op, Op::Unary(UnaryOp::Mov));
             assert_eq!(state.ops[self.node_id].shape, state.ops[src.node_id].shape);
@@ -474,6 +498,7 @@ impl<'s> Array<'s> {
         let mini_batch_scale = self
             .scope
             .literal(1.0 / (mini_batch_size as f32))
+            .value()
             .broadcast(grad_shape);
         self.scope.with_state(|state| {
             assert_eq!(state.ops[self.node_id].op, Op::Unary(UnaryOp::Mov));
@@ -570,10 +595,6 @@ impl<'s> DualArray<'s> {
         }
     }
 
-    pub fn new_from_value(value: Array<'s>) -> Self {
-        Self::new(value, value.clone_as_accumulator())
-    }
-
     pub fn value(self) -> Array<'s> {
         Array {
             node_id: self.value_node_id,
@@ -603,29 +624,33 @@ impl<'s> DualArray<'s> {
     pub fn square(self) -> Self {
         self * self
     }
+    pub fn sin(self) -> Self {
+        let (a, da) = self.into_inner();
+
+        let (b, db) = a.sin().with_grad();
+        da.accumulate(db * a.cos());
+
+        (b, db).into()
+    }
 
     pub fn leaky_relu(self, leakiness: f32) -> Self {
         let (a, da) = self.into_inner();
 
-        let b = a.select_gt(0.0, a, a * leakiness);
-
-        let db = b.clone_as_accumulator();
+        let (b, db) = a.select_gt(0.0, a, a * leakiness).with_grad();
         da.accumulate(a.select_gt(0.0, db, db * leakiness));
 
-        Self::new(b, db)
+        (b, db).into()
     }
 
     pub(crate) fn batched_matmul(self, rhs: DualArray, output_mode: MatMulOutputMode) -> Self {
         let (a, da) = self.into_inner();
         let (b, db) = rhs.into_inner();
 
-        let c = a.batched_matmul(b, output_mode);
-
-        let dc = c.clone_as_accumulator();
+        let (c, dc) = a.batched_matmul(b, output_mode).with_grad();
         da.accumulate(dc.batched_matmul(b.transpose(), MatMulOutputMode::Batches));
         db.accumulate(a.transpose().batched_matmul(dc, MatMulOutputMode::Batches));
 
-        Self::new(c, dc)
+        (c, dc).into()
     }
 
     pub fn matmul(self, rhs: impl IntoDualArray<'s>) -> Self {
@@ -639,12 +664,41 @@ impl<'s> DualArray<'s> {
     pub fn transpose(self) -> Self {
         let (a, da) = self.into_inner();
 
-        let b = a.transpose();
-
-        let db = b.clone_as_accumulator();
+        let (b, db) = a.transpose().with_grad();
         da.accumulate(db.transpose());
 
-        Self::new(b, db)
+        (b, db).into()
+    }
+
+    pub fn pow(self, rhs: impl IntoDualArray<'s>) -> Self {
+        let (a, da) = self.into_inner();
+        let (b, db) = rhs.into_dual_array(self.scope).into_inner();
+
+        // c = a ^ b
+        let (c, dc) = a.pow(b).with_grad();
+        da.accumulate((dc * b * a.pow(b - 1.0)).unbroadcast(a.shape()));
+        db.accumulate((dc * a.log() * c).unbroadcast(b.shape()));
+
+        (c, dc).into()
+    }
+
+    pub fn select_eq(
+        self,
+        rhs: impl IntoDualArray<'s>,
+        pass: impl IntoDualArray<'s>,
+        fail: impl IntoDualArray<'s>,
+    ) -> Self {
+        let (a, _da) = self.into_inner();
+        let (b, _db) = rhs.into_dual_array(self.scope).into_inner();
+        let (pass, dpass) = pass.into_dual_array(self.scope).into_inner();
+        let (fail, dfail) = fail.into_dual_array(self.scope).into_inner();
+
+        let (c, dc) = a.select_eq(b, pass, fail).with_grad();
+        // TODO: da and db derivative?
+        dpass.accumulate(a.select_eq(b, dc, 0.0).unbroadcast(pass.shape()));
+        dfail.accumulate(a.select_eq(b, 0.0, dc).unbroadcast(fail.shape()));
+
+        (c, dc).into()
     }
 
     pub fn reshape(self, shape: impl Into<Shape>) -> Self {
@@ -653,23 +707,19 @@ impl<'s> DualArray<'s> {
 
         let (a, da) = self.into_inner();
 
-        let b = a.reshape(new_shape);
-
-        let db = b.clone_as_accumulator();
+        let (b, db) = a.reshape(new_shape).with_grad();
         da.accumulate(db.reshape(old_shape));
 
-        Self::new(b, db)
+        (b, db).into()
     }
 
     pub(crate) fn pad_image(self, pad: usize) -> Self {
         let (a, da) = self.into_inner();
 
-        let b = a.pad_image(pad);
-
-        let db = b.clone_as_accumulator();
+        let (b, db) = a.pad_image(pad).with_grad();
         da.accumulate(db.unpad_image(pad));
 
-        Self::new(b, db)
+        (b, db).into()
     }
 
     pub(crate) fn image_to_windows(
@@ -680,12 +730,10 @@ impl<'s> DualArray<'s> {
     ) -> Self {
         let (a, da) = self.into_inner();
 
-        let b = a.image_to_windows(filter, stride, groups);
-
-        let db = b.clone_as_accumulator();
+        let (b, db) = a.image_to_windows(filter, stride, groups).with_grad();
         da.accumulate(db.windows_to_image(stride));
 
-        Self::new(b, db)
+        (b, db).into()
     }
 
     pub fn next_colour(self) -> Self {
@@ -763,37 +811,31 @@ impl<'s> DualArray<'s> {
     fn reduce_op(self, reduce_op: ReduceOp, axis: Axis) -> Self {
         let (a, da) = self.into_inner();
 
-        let b = a.reduce_op(reduce_op, axis);
-
-        let db = b.clone_as_accumulator();
+        let (b, db) = a.reduce_op(reduce_op, axis).with_grad();
         match reduce_op {
             ReduceOp::Max => da.accumulate(a.select_eq(b, db, 0.0)),
             ReduceOp::Sum => da.accumulate(db.broadcast(da.shape())),
         }
 
-        Self::new(b, db)
+        (b, db).into()
     }
 
     fn insert_axis(self, axis: Axis) -> Self {
         let (a, da) = self.into_inner();
 
-        let b = a.insert_axis(axis);
-
-        let db = b.clone_as_accumulator();
+        let (b, db) = a.insert_axis(axis).with_grad();
         da.accumulate(db.remove_axis(axis));
 
-        Self::new(b, db)
+        (b, db).into()
     }
 
     fn remove_axis(self, axis: Axis) -> Self {
         let (a, da) = self.into_inner();
 
-        let b = a.remove_axis(axis);
-
-        let db = b.clone_as_accumulator();
+        let (b, db) = a.remove_axis(axis).with_grad();
         da.accumulate(db.insert_axis(axis));
 
-        Self::new(b, db)
+        (b, db).into()
     }
 
     fn keep_axis(self, axis: Axis, keep_axis: bool) -> Self {
@@ -842,12 +884,10 @@ impl<'s> DualArray<'s> {
 
         let (a, da) = self.into_inner();
 
-        let b = a.permute_axes(perm);
-
-        let db = b.clone_as_accumulator();
+        let (b, db) = a.permute_axes(perm).with_grad();
         da.accumulate(db.permute_axes(&inv_perm));
 
-        Self::new(b, db)
+        (b, db).into()
     }
 }
 
@@ -862,13 +902,11 @@ where
         let (a, da) = self.into_inner();
         let (b, db) = rhs.into_inner();
 
-        let c = a + b;
-
-        let dc = c.clone_as_accumulator();
+        let (c, dc) = (a + b).with_grad();
         da.accumulate(dc.unbroadcast(a.shape()));
         db.accumulate(dc.unbroadcast(b.shape()));
 
-        Self::new(c, dc)
+        (c, dc).into()
     }
 }
 
@@ -883,13 +921,11 @@ where
         let (a, da) = self.into_inner();
         let (b, db) = rhs.into_inner();
 
-        let c = a - b;
-
-        let dc = c.clone_as_accumulator();
+        let (c, dc) = (a - b).with_grad();
         da.accumulate(dc.unbroadcast(a.shape()));
         db.accumulate(-dc.unbroadcast(b.shape()));
 
-        Self::new(c, dc)
+        (c, dc).into()
     }
 }
 
@@ -904,13 +940,11 @@ where
         let (a, da) = self.into_inner();
         let (b, db) = rhs.into_inner();
 
-        let c = a * b;
-
-        let dc = c.clone_as_accumulator();
+        let (c, dc) = (a * b).with_grad();
         da.accumulate((b * dc).unbroadcast(a.shape()));
         db.accumulate((a * dc).unbroadcast(b.shape()));
 
-        Self::new(c, dc)
+        (c, dc).into()
     }
 }
 
@@ -955,7 +989,7 @@ impl Scope {
         f(&mut data)
     }
 
-    pub fn literal(&self, value: f32) -> Array {
+    pub fn literal(&self, value: f32) -> DualArray {
         self.with_state(|state| Array {
             node_id: state.ops.new_node(
                 state.next_colour,
@@ -965,9 +999,11 @@ impl Scope {
             ),
             scope: self,
         })
+        .with_grad()
+        .into()
     }
 
-    pub fn coord(&self, len: usize) -> Array {
+    pub fn coord(&self, len: usize) -> DualArray {
         self.with_state(|state| {
             let shape = Shape::from([len]);
             Array {
@@ -980,9 +1016,11 @@ impl Scope {
                 scope: self,
             }
         })
+        .with_grad()
+        .into()
     }
 
-    pub fn rand(&self, shape: impl Into<Shape>) -> Array {
+    pub fn rand(&self, shape: impl Into<Shape>) -> DualArray {
         self.with_state(|state| {
             let shape = shape.into();
             let uid = state.next_rand_uid;
@@ -997,6 +1035,8 @@ impl Scope {
                 scope: self,
             }
         })
+        .with_grad()
+        .into()
     }
 
     fn input(&self, variable: &Variable) -> GraphInput {
