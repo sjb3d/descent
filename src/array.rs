@@ -211,8 +211,7 @@ impl<'s> Array<'s> {
     }
 
     pub fn one_hot(self, count: usize) -> Self {
-        let shape = self.shape().one_hot(count);
-        self.scope.coord(shape, -1).select_eq(self, 1.0, 0.0)
+        self.scope.coord(count).select_eq(self, 1.0, 0.0)
     }
 
     pub fn reduce_max(self, axis: isize, keep_axis: bool) -> Self {
@@ -233,7 +232,12 @@ impl<'s> Array<'s> {
     }
 
     pub fn coord(self, axis: isize) -> Self {
-        self.scope.coord(self.shape(), axis)
+        let shape = self.shape();
+        let axis = shape.axis(axis);
+        let len = shape[axis];
+        self.scope
+            .coord(len)
+            .reshape(Shape::from_axis(axis, len))
     }
 
     pub fn select_eq(
@@ -963,15 +967,14 @@ impl Scope {
         })
     }
 
-    pub fn coord(&self, shape: impl Into<Shape>, axis: isize) -> Array {
+    pub fn coord(&self, len: usize) -> Array {
         self.with_state(|state| {
-            let shape = shape.into();
-            let axis = shape.axis(axis);
+            let shape = Shape::from([len]);
             Array {
                 node_id: state.ops.new_node(
                     state.next_colour,
                     shape,
-                    Op::BuiltIn(BuiltInOp::Coord { axis }),
+                    Op::BuiltIn(BuiltInOp::Coord),
                     &[],
                 ),
                 scope: self,

@@ -80,10 +80,11 @@ fn main() {
     let pixel_count = height * width;
     let image_var = env.static_parameter([pixel_count, 3], "image");
     let test_graph = env.build_graph(|scope| {
-        let coord_shape = [height, width, 2];
-        let u = scope.coord(coord_shape, -2) / (width as f32);
-        let v = scope.coord(coord_shape, -3) / (height as f32);
-        let uv = scope.coord(coord_shape, -1).select_eq(0.0, u, v);
+        let u = scope.coord(width) / (width as f32);
+        let v = scope.coord(height) / (height as f32);
+        let uv = scope
+            .coord(2)
+            .select_eq(0.0, u.reshape([1, width, 1]), v.reshape([height, 1, 1]));
         let x = DualArray::new_from_value(uv).reshape([pixel_count, 2]);
         let x = module.test(x);
         scope.write_variable(&image_var, x.value());

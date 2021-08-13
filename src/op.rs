@@ -27,7 +27,7 @@ pub(crate) enum ReduceOp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BuiltInOp {
-    Coord { axis: Axis },
+    Coord,
     Rand { uid: usize },
 }
 
@@ -117,7 +117,7 @@ impl fmt::Display for Op {
             Self::Output { variable_id } => write!(f, "Output({:?})", variable_id.data()),
             Self::Literal(value) => write!(f, "{:?}", value),
             Self::BuiltIn(built_in_op) => match built_in_op {
-                BuiltInOp::Coord { axis } => write!(f, "Coord{}", axis.index()),
+                BuiltInOp::Coord => write!(f, "Coord"),
                 BuiltInOp::Rand { .. } => write!(f, "Rand"),
             },
             Self::Unary(unary_op) => write!(f, "{:?}", unary_op),

@@ -188,9 +188,9 @@ impl Kernel for PerElementKernel {
                     let coord_shape = view.output_shape;
                     let coord_name = get_coord_set_name(&mut coord_set_names, coord_shape, w);
                     match op {
-                        BuiltInOp::Coord { axis } => {
+                        BuiltInOp::Coord => {
                             write!(w, "float tmp{} = float(", op_index)?;
-                            generate_load_coord(view, *axis, &coord_name, w)?;
+                            generate_load_index(view, &coord_name, w)?;
                             writeln!(w, ");")?;
                         }
                         BuiltInOp::Rand { uid } => {
