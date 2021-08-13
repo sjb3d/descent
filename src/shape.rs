@@ -210,6 +210,14 @@ impl Shape {
     pub(crate) fn buffer_size(&self) -> usize {
         self.element_count() * mem::size_of::<f32>()
     }
+
+    pub(crate) fn insert_axis(&mut self, axis: Axis, len: usize) {
+        self.0.insert(axis.index(), len);
+    }
+
+    pub(crate) fn remove_axis(&mut self, axis: Axis) {
+        self.0.remove(axis.index());
+    }
 }
 
 impl ops::Deref for Shape {
@@ -369,6 +377,42 @@ impl View {
                         (input_strides[axis.index()] as isize) * step == (output_stride as isize)
                     }
                 })
+    }
+
+    pub(crate) fn try_from_reshape(input_shape: Shape, output_shape: Shape) -> Option<Self> {
+        if input_shape == output_shape {
+            return Some(input_shape.identity_view());
+        }
+
+        let mut output_mapping = TinyVec::new();
+        for (input_axis, input_len) in input_shape.iter_axes().zip(input_shape.iter().copied()) {
+            if input_len == 1 {
+                continue;
+            }
+            loop {
+                let output_len = *output_shape.get(output_mapping.len())?;
+                if output_len == input_len {
+                    output_mapping.push(AxisMapping::new(input_axis, input_len));
+                    break;
+                }
+                if output_len != 1 {
+                    return None;
+                }
+                output_mapping.push(AxisMapping::Broadcast);
+            }
+        }
+
+        while output_mapping.len() < output_shape.len() {
+            assert_eq!(output_shape[output_mapping.len()], 1);
+            output_mapping.push(AxisMapping::Broadcast);
+        }
+
+        Some(Self {
+            input_shape,
+            input_offsets: iter::repeat(0).take(input_shape.len()).collect(),
+            output_mapping,
+            output_shape,
+        })
     }
 
     fn input_axis_mapping_count(&self, input_axis: Axis) -> usize {
@@ -549,22 +593,6 @@ impl View {
         tmp.output_shape = perm.iter().map(|&index| self.output_shape[index]).collect();
         tmp
     }
-
-    pub(crate) fn insert_axis(&self, axis: Axis) -> Self {
-        let mut tmp = *self;
-        tmp.output_mapping
-            .insert(axis.index(), AxisMapping::Broadcast);
-        tmp.output_shape.0.insert(axis.index(), 1);
-        tmp
-    }
-
-    pub(crate) fn remove_axis(&self, axis: Axis) -> Self {
-        let mut tmp = *self;
-        assert_eq!(tmp.output_shape[axis], 1);
-        tmp.output_mapping.remove(axis.index());
-        tmp.output_shape.0.remove(axis.index());
-        tmp
-    }
 }
 
 fn display_list<I>(iter: I, f: &mut fmt::Formatter<'_>) -> fmt::Result
@@ -581,4 +609,21 @@ where
         }
     }
     f.write_str("]")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_from_reshape() {
+        assert!(View::try_from_reshape(Shape::from([8]), Shape::from([1, 1, 8])).is_some());
+        assert!(View::try_from_reshape(Shape::from([8]), Shape::from([1, 8, 1])).is_some());
+        assert!(View::try_from_reshape(Shape::from([8]), Shape::from([8, 1, 1])).is_some());
+
+        assert!(View::try_from_reshape(Shape::from([1, 8, 1]), Shape::from([1, 1, 8])).is_some());
+        assert!(View::try_from_reshape(Shape::from([1, 8, 1]), Shape::from([8, 1, 1])).is_some());
+
+        assert!(View::try_from_reshape(Shape::from([8]), Shape::from([1, 9, 1])).is_none());
+    }
 }

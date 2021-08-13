@@ -294,11 +294,15 @@ impl<'s> Array<'s> {
     }
 
     pub(crate) fn insert_axis(self, axis: Axis) -> Self {
-        self.view(self.shape().identity_view().insert_axis(axis))
+        let mut shape = self.shape();
+        shape.insert_axis(axis, 1);
+        self.reshape(shape)
     }
 
     pub(crate) fn remove_axis(self, axis: Axis) -> Self {
-        self.view(self.shape().identity_view().remove_axis(axis))
+        let mut shape = self.shape();
+        shape.remove_axis(axis);
+        self.reshape(shape)
     }
 
     pub(crate) fn permute_axes(self, perm: &[usize]) -> Self {

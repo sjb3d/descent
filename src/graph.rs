@@ -186,9 +186,19 @@ impl Graph {
     fn eliminate_moves(&mut self) {
         for node_id in self.ops_sorted.iter().copied() {
             if let Op::Unary(UnaryOp::Mov) = &self.ops[node_id].op {
+                // attempt to adjust the incoming edge view to match the target shape naturally
                 let in_edge_ref = self.ops.edges_directed(node_id, Incoming).only().unwrap();
                 let in_edge_id = in_edge_ref.id();
                 let in_node_id = in_edge_ref.source();
+                if let Some(view_match) = View::try_from_reshape(
+                    self.ops[in_edge_id].view.output_shape,
+                    self.ops[node_id].shape,
+                ) {
+                    let view = &mut self.ops[in_edge_id].view;
+                    *view = view.through(&view_match, false);
+                }
+
+                // then see if we can merge with outgoing edges
                 let can_reshape = self.ops[in_node_id].op.can_reshape();
                 let can_eliminate =
                     self.ops
