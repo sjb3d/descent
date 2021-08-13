@@ -34,21 +34,44 @@ where
     }
 }
 
+pub struct DenseBuilder {
+    input: usize,
+    output: usize,
+    initializer: Initializer,
+}
+
+impl DenseBuilder {
+    pub fn with_initializer(mut self, initializer: Initializer) -> Self {
+        self.initializer = initializer;
+        self
+    }
+
+    pub fn build(self, env: &mut Environment) -> Dense {
+        let DenseBuilder {
+            input,
+            output,
+            initializer,
+        } = self;
+
+        let w = env.trainable_parameter([input, output], "w", initializer);
+        let b = env.trainable_parameter([output], "b", Initializer::Zero);
+
+        Dense { w, b }
+    }
+}
+
 pub struct Dense {
     w: Variable,
     b: Variable, // TODO: optional?
 }
 
 impl Dense {
-    pub fn new(env: &mut Environment, input: usize, output: usize) -> Self {
-        let w = env.trainable_parameter(
-            [input, output],
-            "w",
-            VariableContents::normal_from_fan_in(input * output),
-        );
-        let b = env.trainable_parameter([output], "b", VariableContents::Zero);
-
-        Self { w, b }
+    pub fn builder(input: usize, output: usize) -> DenseBuilder {
+        DenseBuilder {
+            input,
+            output,
+            initializer: Initializer::for_relu(input),
+        }
     }
 }
 
@@ -134,9 +157,9 @@ impl Conv2DBuilder {
             let f = env.trainable_parameter(
                 [groups, filter_oc, filter_h, filter_w, filter_ic],
                 "f",
-                VariableContents::normal_from_fan_in(filter_h * filter_w * filter_ic),
+                Initializer::for_relu(filter_h * filter_w * filter_ic),
             );
-            let b = env.trainable_parameter([output_channels], "b", VariableContents::Zero);
+            let b = env.trainable_parameter([output_channels], "b", Initializer::Zero);
             (f, b)
         };
 

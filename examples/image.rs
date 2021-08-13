@@ -12,15 +12,15 @@ struct TestRelu {
 impl TestRelu {
     fn new(env: &mut Environment, freq_count: usize, hidden_units: &[usize]) -> Self {
         let mut hidden_layers = Vec::new();
-        let mut prev_units = 4*freq_count;
+        let mut prev_units = 4 * freq_count;
         for hidden_units in hidden_units.iter().copied() {
-            hidden_layers.push(Dense::new(env, prev_units, hidden_units));
+            hidden_layers.push(Dense::builder(prev_units, hidden_units).build(env));
             prev_units = hidden_units;
         }
         Self {
             freq_count,
             hidden_layers,
-            final_layer: Dense::new(env, prev_units, 3),
+            final_layer: Dense::builder(prev_units, 3).build(env),
         }
     }
 }
@@ -38,7 +38,7 @@ impl Module for TestRelu {
 fn position_encoding<'s>(x: DualArray<'s>, freq_count: usize) -> DualArray<'s> {
     let scope = x.scope();
 
-    let freq = scope.literal(2.0).pow(scope.coord(freq_count)) * 2.0 * PI;
+    let freq = scope.literal(2.0).pow(scope.coord(freq_count)) * PI;
     let phase = scope.coord(2).reshape([2, 1]) * 0.5 * PI;
 
     let shape = x.shape();
@@ -96,8 +96,8 @@ fn main() {
     let pixel_count = height * width;
     let image_var = env.static_parameter([pixel_count, 3], "image");
     let test_graph = env.build_graph(|scope| {
-        let u = (scope.coord(width) + 0.5) * (1.0 / (width as f32));
-        let v = (scope.coord(height) + 0.5) * (1.0 / (height as f32));
+        let u = (scope.coord(width) + 0.5) * (2.0 / (width as f32)) - 1.0;
+        let v = (scope.coord(height) + 0.5) * (2.0 / (height as f32)) - 1.0;
         let x = scope
             .coord(2)
             .select_eq(0.0, u.reshape([1, width, 1]), v.reshape([height, 1, 1]))
@@ -120,8 +120,8 @@ fn main() {
             let x0 = rng.gen_range(0..width);
             let x1 = rng.gen_range(0..height);
             let x_data: [f32; 2] = [
-                ((x0 as f32) + 0.5) * (1.0 / (width as f32)),
-                ((x1 as f32) + 0.5) * (1.0 / (height as f32)),
+                ((x0 as f32) + 0.5) * (2.0 / (width as f32)) - 1.0,
+                ((x1 as f32) + 0.5) * (2.0 / (height as f32)) - 1.0,
             ];
             w.write_all(bytemuck::cast_slice(&x_data)).unwrap();
             let pixel_index = x1 * width + x0;

@@ -126,7 +126,7 @@ struct TestLinear {
 impl TestLinear {
     fn new(env: &mut Environment) -> Self {
         Self {
-            fc: Dense::new(env, 28 * 28, 10),
+            fc: Dense::builder(28 * 28, 10).build(env),
         }
     }
 }
@@ -146,8 +146,8 @@ impl TestHidden300 {
     fn new(env: &mut Environment) -> Self {
         let hidden_units = 300;
         Self {
-            fc1: Dense::new(env, 28 * 28, hidden_units),
-            fc2: Dense::new(env, hidden_units, 10),
+            fc1: Dense::builder(28 * 28, hidden_units).build(env),
+            fc2: Dense::builder(hidden_units, 10).build(env),
         }
     }
 }
@@ -192,8 +192,8 @@ impl TestConvNet {
             } else {
                 Box::new(MaxPool2D::default())
             },
-            fc1: Dense::new(env, 7 * 7 * c2, hidden),
-            fc2: Dense::new(env, hidden, 10),
+            fc1: Dense::builder(7 * 7 * c2, hidden).build(env),
+            fc2: Dense::builder(hidden, 10).build(env),
         }
     }
 }

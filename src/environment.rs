@@ -26,6 +26,19 @@ fn write_rand_normal(mut writer: impl Write, scale: f32, element_count: usize, r
     }
 }
 
+fn write_rand_uniform(
+    mut writer: impl Write,
+    scale: f32,
+    element_count: usize,
+    rng: &mut impl Rng,
+) {
+    for _ in 0..element_count {
+        let u1: f32 = rng.sample(Open01);
+        let u = scale * (u1 * 2.0 - 1.0);
+        writer.write_all(bytemuck::bytes_of(&u)).unwrap();
+    }
+}
+
 pub struct VariableWriter<'a>(StagingWriter<'a>);
 
 impl<'a> VariableWriter<'a> {
@@ -114,7 +127,7 @@ impl Environment {
         &mut self,
         shape: impl Into<Shape>,
         name: impl Into<String>,
-        reset_to: Option<VariableContents>,
+        reset_to: Option<Initializer>,
     ) -> Variable {
         let shape = shape.into();
         let name = name.into();
@@ -139,7 +152,7 @@ impl Environment {
         &mut self,
         shape: impl Into<Shape>,
         name: impl Into<String>,
-        reset_to: VariableContents,
+        reset_to: Initializer,
     ) -> Variable {
         self.variable(shape, name, Some(reset_to))
     }
@@ -178,9 +191,12 @@ impl Environment {
         let shape = variable.shape();
         let writer = self.writer(variable);
         match variable.reset_to().unwrap() {
-            VariableContents::Zero => writer.zero_fill(),
-            VariableContents::RandNormal(scale) => {
+            Initializer::Zero => writer.zero_fill(),
+            Initializer::RandNormal(scale) => {
                 write_rand_normal(writer, scale, shape.element_count(), rng)
+            }
+            Initializer::RandUniform(scale) => {
+                write_rand_uniform(writer, scale, shape.element_count(), rng)
             }
         }
     }

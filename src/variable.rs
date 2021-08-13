@@ -7,13 +7,14 @@ slotmap::new_key_type! {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum VariableContents {
+pub enum Initializer {
     Zero,
     RandNormal(f32),
+    RandUniform(f32),
 }
 
-impl VariableContents {
-    pub fn normal_from_fan_in(fan_in: usize) -> Self {
+impl Initializer {
+    pub fn for_relu(fan_in: usize) -> Self {
         let scale = (2.0 / (fan_in as f32)).sqrt();
         Self::RandNormal(scale)
     }
@@ -23,7 +24,7 @@ pub(crate) struct VariableStorage {
     pub(crate) shape: Shape,
     pub(crate) name: String,
     pub(crate) buffer_id: Option<BufferId>,
-    pub(crate) reset_to: Option<VariableContents>,
+    pub(crate) reset_to: Option<Initializer>,
 }
 
 pub(crate) type SharedVariables = Rc<RefCell<SlotMap<VariableId, VariableStorage>>>;
@@ -57,7 +58,7 @@ impl Variable {
         self.owner.borrow().get(self.id).unwrap().name.clone()
     }
 
-    pub fn reset_to(&self) -> Option<VariableContents> {
+    pub fn reset_to(&self) -> Option<Initializer> {
         self.owner.borrow().get(self.id).unwrap().reset_to
     }
 
