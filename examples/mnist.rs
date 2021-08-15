@@ -241,7 +241,7 @@ fn main() {
     let x_var = env.static_parameter([m, 28, 28, 1], "x");
     let y_var = env.static_parameter([m, 1], "y");
 
-    let learning_rate_scale_var = env.static_parameter([1], "log_lr_scale");
+    let learning_rate_scale_var = env.static_parameter([1], "lr_scale");
     let loss_sum_var = env.static_parameter([1], "loss");
     let accuracy_sum_var = env.static_parameter([1], "accuracy");
 
