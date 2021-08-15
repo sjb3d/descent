@@ -100,7 +100,7 @@ struct AppParams {
     #[structopt(short, long, possible_values=&OptimizerType::VARIANTS, default_value="adam")]
     optimizer: OptimizerType,
 
-    #[structopt(short, long, default_value = "0.0005")]
+    #[structopt(short, long, default_value = "1.0E-8")]
     weight_decay: f32,
 
     #[structopt(short, long, default_value = "1000")]
