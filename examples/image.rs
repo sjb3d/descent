@@ -33,8 +33,7 @@ struct Relu {
 impl Relu {
     fn new(env: &mut Environment, freq_count: usize, hidden_units: &[usize]) -> Self {
         let mut hidden_layers = Vec::new();
-        let mut prev_units = if freq_count == 0 { 
-            2 } else { 4 * freq_count };
+        let mut prev_units = if freq_count == 0 { 2 } else { 4 * freq_count };
         for hidden_units in hidden_units.iter().copied() {
             hidden_layers.push(Dense::builder(prev_units, hidden_units).build(env));
             prev_units = hidden_units;
@@ -88,7 +87,7 @@ impl Siren {
 impl Module for Siren {
     fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
         let mut x = input;
-        for layer in self.hidden_layers.iter(){
+        for layer in self.hidden_layers.iter() {
             x = x.apply(layer, ctx).sin();
         }
         x.apply(&self.final_layer, ctx)
@@ -152,7 +151,15 @@ fn main() {
 
         let learning_rate_scale = scope.read_variable(&learning_rate_scale_var);
         let parameters = scope.trainable_parameters();
-        let optimizer = Adam::new(&mut env, &scope, &parameters, 0.02 * learning_rate_scale, 0.9, 0.99, 1.0E-8);
+        let optimizer = Adam::new(
+            &mut env,
+            &scope,
+            &parameters,
+            0.02 * learning_rate_scale,
+            0.9,
+            0.99,
+            1.0E-8,
+        );
 
         (scope.build_graph(), parameters, optimizer)
     };
@@ -193,7 +200,7 @@ fn main() {
 
         // loop over batches to roughly cover the whole image
         env.writer(&loss_sum_var).zero_fill();
-        let mini_batch_count = (width * height)/m;
+        let mini_batch_count = (width * height) / m;
         for _ in 0..mini_batch_count {
             // generate batch from a random set of pixels
             let mut y_data: Vec<f32> = Vec::new();
@@ -225,7 +232,10 @@ fn main() {
 
         let done_counter = epoch_index + 1;
         let train_loss = env.read_variable_scalar(&loss_sum_var) / (m as f32);
-        println!("epoch: {}, lr_scale: {}, loss: {}", done_counter, learning_rate_scale, train_loss);
+        println!(
+            "epoch: {}, lr_scale: {}, loss: {}",
+            done_counter, learning_rate_scale, train_loss
+        );
 
         env.run(&test_graph, rng.next_u32());
         let pixels: Vec<u8> = env
