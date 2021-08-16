@@ -119,11 +119,11 @@ struct AppParams {
     show_timings: bool,
 }
 
-struct TestLinear {
+struct Linear {
     fc: Dense,
 }
 
-impl TestLinear {
+impl Linear {
     fn new(env: &mut Environment) -> Self {
         Self {
             fc: Dense::builder(28 * 28, 10).build(env),
@@ -131,18 +131,18 @@ impl TestLinear {
     }
 }
 
-impl Module for TestLinear {
+impl Module for Linear {
     fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
         input.flatten().apply(&self.fc, ctx)
     }
 }
 
-struct TestHidden300 {
+struct Hidden300 {
     fc1: Dense,
     fc2: Dense,
 }
 
-impl TestHidden300 {
+impl Hidden300 {
     fn new(env: &mut Environment) -> Self {
         let hidden_units = 300;
         Self {
@@ -152,7 +152,7 @@ impl TestHidden300 {
     }
 }
 
-impl Module for TestHidden300 {
+impl Module for Hidden300 {
     fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
         input
             .flatten()
@@ -162,7 +162,7 @@ impl Module for TestHidden300 {
     }
 }
 
-struct TestConvNet {
+struct ConvNet {
     conv1: Conv2D,
     pool1: Box<dyn Module>,
     conv2: Conv2D,
@@ -171,7 +171,7 @@ struct TestConvNet {
     fc2: Dense,
 }
 
-impl TestConvNet {
+impl ConvNet {
     fn new(env: &mut Environment, use_blur_pool: bool) -> Self {
         let c1 = 16;
         let c2 = 32;
@@ -198,7 +198,7 @@ impl TestConvNet {
     }
 }
 
-impl Module for TestConvNet {
+impl Module for ConvNet {
     fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
         input
             .apply(&self.conv1, ctx)
@@ -230,10 +230,10 @@ fn main() {
     let module: Box<dyn Module> = {
         let env = &mut env;
         match app_params.network {
-            NetworkType::Linear => Box::new(TestLinear::new(env)),
-            NetworkType::SingleLayer => Box::new(TestHidden300::new(env)),
-            NetworkType::ConvNet => Box::new(TestConvNet::new(env, false)),
-            NetworkType::ConvBlurNet => Box::new(TestConvNet::new(env, true)),
+            NetworkType::Linear => Box::new(Linear::new(env)),
+            NetworkType::SingleLayer => Box::new(Hidden300::new(env)),
+            NetworkType::ConvNet => Box::new(ConvNet::new(env, false)),
+            NetworkType::ConvBlurNet => Box::new(ConvNet::new(env, true)),
         }
     };
 
