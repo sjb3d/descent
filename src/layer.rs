@@ -37,12 +37,18 @@ where
 pub struct DenseBuilder {
     input: usize,
     output: usize,
-    initializer: Initializer,
+    w_initializer: Initializer,
+    b_initializer: Initializer,
 }
 
 impl DenseBuilder {
-    pub fn with_initializer(mut self, initializer: Initializer) -> Self {
-        self.initializer = initializer;
+    pub fn with_w_initializer(mut self, w_initializer: Initializer) -> Self {
+        self.w_initializer = w_initializer;
+        self
+    }
+
+    pub fn with_b_initializer(mut self, b_initializer: Initializer) -> Self {
+        self.b_initializer = b_initializer;
         self
     }
 
@@ -50,11 +56,12 @@ impl DenseBuilder {
         let DenseBuilder {
             input,
             output,
-            initializer,
+            w_initializer,
+            b_initializer,
         } = self;
 
-        let w = env.trainable_parameter([input, output], "w", initializer);
-        let b = env.trainable_parameter([output], "b", Initializer::Zero);
+        let w = env.trainable_parameter([input, output], "w", w_initializer);
+        let b = env.trainable_parameter([output], "b", b_initializer);
 
         Dense { w, b }
     }
@@ -70,7 +77,8 @@ impl Dense {
         DenseBuilder {
             input,
             output,
-            initializer: Initializer::for_relu(input),
+            w_initializer: Initializer::for_relu(input),
+            b_initializer: Initializer::Zero,
         }
     }
 }

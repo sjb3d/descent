@@ -19,8 +19,8 @@ impl Initializer {
         Self::RandNormal(scale)
     }
 
-    pub fn for_siren(fan_in: usize) -> Self {
-        let scale = (6.0 / (fan_in as f32)).sqrt();
+    pub fn for_siren(fan_in: usize, is_first_layer: bool) -> Self {
+        let scale = (6.0 / (fan_in as f32)).sqrt() * if is_first_layer { 30.0 } else { 1.0 };
         Self::RandUniform(scale)
     }
 }
