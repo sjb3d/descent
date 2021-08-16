@@ -268,9 +268,11 @@ fn main() {
         add_weight_decay_to_grad(&scope, &parameters, app_params.weight_decay);
         let optimizer: Box<dyn Optimizer> = match app_params.optimizer {
             OptimizerType::Descent => Box::new(StochasticGradientDescent::new(
+                &mut env,
                 &scope,
                 &parameters,
                 0.1 * learning_rate_scale,
+                0.9,
             )),
             OptimizerType::Adam => Box::new(Adam::new(
                 &mut env,

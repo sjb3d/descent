@@ -16,28 +16,45 @@ pub trait Optimizer {
     fn reset_state(&self, env: &mut Environment);
 }
 
-pub struct StochasticGradientDescent {}
+pub struct StochasticGradientDescent {
+    state: Vec<Variable>,
+}
 
 impl StochasticGradientDescent {
     pub fn new<'s>(
+        env: &mut Environment,
         scope: &'s Scope,
         variables: &[Variable],
         learning_rate: impl IntoArray<'s>,
+        momentum: f32,
     ) -> Self {
         scope.next_colour();
+        let mut state = Vec::new();
 
         let learning_rate = learning_rate.into_array(scope);
         for var in variables.iter() {
             let g = scope.parameter(var).grad();
-            scope.update_variable(var, |theta| theta - learning_rate * g);
+            if momentum == 0.0 {
+                scope.update_variable(var, |theta| theta - learning_rate * g);
+            } else {
+                let shape = var.shape();
+                let v_var = env.static_parameter(shape, "v");
+                let v = scope.update_variable(&v_var, |v| v * momentum + g);
+                scope.update_variable(var, |theta| theta - learning_rate * v);
+                state.push(v_var);
+            }
         }
 
-        Self {}
+        Self { state }
     }
 }
 
 impl Optimizer for StochasticGradientDescent {
-    fn reset_state(&self, _env: &mut Environment) {}
+    fn reset_state(&self, env: &mut Environment) {
+        for var in self.state.iter() {
+            env.writer(var).zero_fill()
+        }
+    }
 }
 
 pub struct Adam {
