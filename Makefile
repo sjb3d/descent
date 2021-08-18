@@ -1,7 +1,7 @@
 GNUPLOT=gnuplot
 RESULTS_DIR=results
 
-MNIST_APP=cargo run --release --example mnist -- --quiet -t 4
+MNIST_APP=cargo run --release --example fashion_mnist -- --quiet -t 4
 MNIST_PLOT=$(RESULTS_DIR)/mnist.gnuplot
 MNIST_STATS=\
 	$(RESULTS_DIR)/mnist_linear.csv \

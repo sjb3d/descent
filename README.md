@@ -95,7 +95,7 @@ Please the follow the link in the title of each example for a more detailed READ
 
 Demonstrates the lowest-level API reading and writing (value-only) arrays.
 
-### [mnist](examples/mnist)
+### [fashion_mnist](examples/fashion_mnist)
 
 Trains a few different network types on the [Fashion-MNIST dataset](https://github.com/zalandoresearch/fashion-mnist).  Demonstrates the use of anti-aliasing during max pooling for improved accuracy.
 

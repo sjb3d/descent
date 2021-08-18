@@ -90,7 +90,7 @@ enum OptimizerType {
 #[derive(Debug, StructOpt)]
 #[structopt(
     no_version,
-    name = "mnist",
+    name = "fashion_mnist",
     about = "Example networks to train using the Fashion MNIST dataset."
 )]
 struct AppParams {
