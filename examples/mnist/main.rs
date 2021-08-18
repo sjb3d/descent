@@ -143,12 +143,12 @@ impl Module for Linear {
     }
 }
 
-struct Hidden300 {
+struct SingleLayer {
     fc1: Dense,
     fc2: Dense,
 }
 
-impl Hidden300 {
+impl SingleLayer {
     fn new(env: &mut Environment) -> Self {
         let hidden_units = 300;
         Self {
@@ -158,7 +158,7 @@ impl Hidden300 {
     }
 }
 
-impl Module for Hidden300 {
+impl Module for SingleLayer {
     fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
         input
             .flatten()
@@ -229,7 +229,7 @@ fn main() {
         let env = &mut env;
         match app_params.network {
             NetworkType::Linear => Box::new(Linear::new(env)),
-            NetworkType::SingleLayer => Box::new(Hidden300::new(env)),
+            NetworkType::SingleLayer => Box::new(SingleLayer::new(env)),
             NetworkType::ConvNet => Box::new(ConvNet::new(env, false)),
             NetworkType::ConvBlurNet => Box::new(ConvNet::new(env, true)),
         }

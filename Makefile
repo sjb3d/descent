@@ -8,7 +8,7 @@ MNIST_STATS=\
 	$(RESULTS_DIR)/mnist_single_layer.csv \
 	$(RESULTS_DIR)/mnist_conv_net.csv \
 	$(RESULTS_DIR)/mnist_conv_blur_net.csv
-MNIST_GRAPHS=$(MNIST_STATS:%.csv=%.png)
+MNIST_GRAPHS=$(MNIST_STATS:%.csv=%.svg)
 
 DIRS=$(RESULTS_DIR)
 
@@ -22,7 +22,7 @@ clean:
 
 mnist: $(MNIST_GRAPHS)
 
-$(RESULTS_DIR)/mnist_%.png : $(RESULTS_DIR)/mnist_%.csv $(MNIST_PLOT)
+$(RESULTS_DIR)/mnist_%.svg : $(RESULTS_DIR)/mnist_%.csv $(MNIST_PLOT)
 	$(GNUPLOT) -c $(MNIST_PLOT) "$<" "$@"
 
 $(RESULTS_DIR)/mnist_linear.csv:
