@@ -4,8 +4,8 @@ use rand::{prelude::SliceRandom, RngCore, SeedableRng};
 use std::{
     convert::TryInto,
     fs::File,
-    io::{self, prelude::*, BufReader},
-    path::Path,
+    io::{self, prelude::*, BufReader, BufWriter},
+    path::{Path, PathBuf},
 };
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames, VariantNames};
@@ -117,6 +117,12 @@ struct AppParams {
 
     #[structopt(long)]
     show_timings: bool,
+
+    #[structopt(long)]
+    quiet: bool,
+
+    #[structopt(long)]
+    csv_file_name: Option<PathBuf>,
 }
 
 struct Linear {
@@ -213,14 +219,6 @@ impl Module for ConvNet {
             .leaky_relu(0.01)
             .apply(&self.fc2, ctx)
     }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct Result {
-    trial_index: usize,
-    epoch_index: usize,
-    train_accuracy: f32,
-    test_accuracy: f32,
 }
 
 fn main() {
@@ -353,8 +351,12 @@ fn main() {
     assert_eq!(test_image_rows, 28);
     assert_eq!(test_image_cols, 28);
 
+    // maybe writing stats to file
+    let mut stats_w = app_params
+        .csv_file_name
+        .map(|path| BufWriter::new(File::create(path).unwrap()));
+
     // attempt to train 5 times with different random seeds
-    let mut best_result = Result::default();
     for trial_index in 0..app_params.trial_count {
         // reset all trainable variables and optimizer state
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(trial_index as u64);
@@ -411,24 +413,36 @@ fn main() {
             env.run(&norm_graph, rng.next_u32());
             let norm = env.read_variable_scalar(&norm_var);
 
-            println!(
-                "epoch: {}, loss: {}/{}, accuracy: {}/{}, w_norm: {}",
-                epoch_index,
-                train_loss,
-                test_loss,
-                train_accuracy,
-                test_accuracy,
-                norm.sqrt()
-            );
-            if test_accuracy > best_result.test_accuracy {
-                best_result = Result {
-                    trial_index,
-                    epoch_index,
+            let done_counter = epoch_index + 1;
+            if !app_params.quiet {
+                println!(
+                    "epoch: {}, loss: {}/{}, accuracy: {}/{}, w_norm: {}",
+                    done_counter,
+                    train_loss,
+                    test_loss,
                     train_accuracy,
                     test_accuracy,
+                    norm.sqrt()
+                );
+            }
+            if let Some(w) = stats_w.as_mut() {
+                if epoch_index == 0 {
+                    writeln!(
+                        w,
+                        "# epoch, train_loss, test_loss, train_accuracy, test_accuracy"
+                    )
+                    .unwrap();
+                }
+                writeln!(
+                    w,
+                    "{}, {}, {}, {}, {}",
+                    done_counter, train_loss, test_loss, train_accuracy, test_accuracy
+                )
+                .unwrap();
+                if done_counter == app_params.epoch_count {
+                    writeln!(w).unwrap();
                 }
             }
         }
     }
-    println!("best result {:#?}", best_result);
 }
