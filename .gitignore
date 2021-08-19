@@ -1,5 +1,7 @@
 /target
 /.vscode
-/data
+/data/cifar-10-batches-bin/*
+/data/fashion_mnist/*.gz
+/data/mnist/*.gz
 /temp
 *.dot

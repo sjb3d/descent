@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="51.307816mm"
+   height="40.014103mm"
+   viewBox="0 0 51.307815 40.014102"
+   version="1.1"
+   id="svg5"
+   sodipodi:docname="mnist_single_layer.svg"
+   inkscape:version="1.1 (c68e22c387, 2021-05-23)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageshadow="2"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="true"
+     inkscape:document-units="mm"
+     showgrid="true"
+     inkscape:zoom="2"
+     inkscape:cx="116.75"
+     inkscape:cy="84.75"
+     inkscape:window-width="2560"
+     inkscape:window-height="1377"
+     inkscape:window-x="-8"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1"
+     showguides="true"
+     inkscape:lockguides="false"
+     inkscape:guide-bbox="true"
+     inkscape:snap-grids="true"
+     lock-margins="true"
+     fit-margin-top="1.5"
+     fit-margin-left="1.5"
+     fit-margin-right="1.5"
+     fit-margin-bottom="1.5"
+     showborder="true"
+     borderlayer="false">
+    <inkscape:grid
+       type="xygrid"
+       id="grid9"
+       originx="-11.596876"
+       originy="-9.2431924" />
+  </sodipodi:namedview>
+  <defs
+     id="defs2" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-11.596875,-9.2431939)">
+    <rect
+       style="fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.149255;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect57961"
+       width="52.916668"
+       height="43.65625"
+       x="10.583331"
+       y="7.9375014" />
+    <rect
+       style="fill:#ffe680;fill-opacity:1;fill-rule:evenodd;stroke:#000000;stroke-width:0.264583;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect174"
+       width="2.6458282"
+       height="31.75"
+       x="43.656265"
+       y="15.875004" />
+    <rect
+       style="fill:#ffe680;fill-opacity:1;fill-rule:evenodd;stroke:#000000;stroke-width:0.264583;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect2833"
+       width="15.875"
+       height="15.875001"
+       x="13.229167"
+       y="23.8125" />
+    <text
+       xml:space="preserve"
+       style="font-size:3.52777px;line-height:1.25;font-family:sans-serif;stroke-width:0.264583"
+       x="15.368531"
+       y="17.035139"
+       id="text9149"><tspan
+         sodipodi:role="line"
+         id="tspan9147"
+         style="stroke-width:0.264583"
+         x="15.368531"
+         y="17.035139">1@</tspan><tspan
+         sodipodi:role="line"
+         style="stroke-width:0.264583"
+         x="15.368531"
+         y="21.444851"
+         id="tspan14703">28x28</tspan></text>
+    <rect
+       style="fill:#ffe680;fill-opacity:1;fill-rule:evenodd;stroke:#000000;stroke-width:0.264583;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect21423"
+       width="2.6458232"
+       height="6.614584"
+       x="58.208344"
+       y="27.78125" />
+    <text
+       xml:space="preserve"
+       style="font-size:3.52777px;line-height:1.25;font-family:sans-serif;stroke-width:0.264583"
+       x="29.998205"
+       y="37.663048"
+       id="text21528"><tspan
+         sodipodi:role="line"
+         style="stroke-width:0.264583"
+         x="29.998205"
+         y="37.663048"
+         id="tspan21526">Dense</tspan><tspan
+         sodipodi:role="line"
+         style="stroke-width:0.264583"
+         x="29.998205"
+         y="42.072762"
+         id="tspan1424">+ ReLU</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:3.52777px;line-height:1.25;font-family:sans-serif;stroke-width:0.264583"
+       x="47.460709"
+       y="38.589085"
+       id="text23286"><tspan
+         sodipodi:role="line"
+         style="stroke-width:0.264583"
+         x="47.460709"
+         y="38.589085"
+         id="tspan23284">Dense</tspan></text>
+    <path
+       style="fill:#80c4ff;fill-opacity:1;stroke:none;stroke-width:0.264583px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       d="m 33.07291,30.427084 h 2.64584 v -1.322916 l 2.64583,2.645833 -2.64583,2.645833 v -1.322916 h -2.64584 z"
+       id="path32850" />
+    <path
+       style="fill:#80c4ff;fill-opacity:1;stroke:none;stroke-width:0.264583px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       d="m 50.270833,30.427085 h 2.64584 v -1.322916 l 2.64583,2.645833 -2.64583,2.645833 v -1.322916 h -2.64584 z"
+       id="path32852" />
+    <text
+       xml:space="preserve"
+       style="font-size:3.52777px;line-height:1.25;font-family:sans-serif;stroke-width:0.264583"
+       x="41.539581"
+       y="13.361461"
+       id="text52152"><tspan
+         sodipodi:role="line"
+         id="tspan52150"
+         style="stroke-width:0.264583"
+         x="41.539581"
+         y="13.361461">128</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:3.52777px;line-height:1.25;font-family:sans-serif;stroke-width:0.264583"
+       x="57.150009"
+       y="25.796875"
+       id="text53926"><tspan
+         sodipodi:role="line"
+         id="tspan53924"
+         style="stroke-width:0.264583"
+         x="57.150009"
+         y="25.796875">10</tspan></text>
+  </g>
+</svg>

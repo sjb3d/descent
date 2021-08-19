@@ -53,6 +53,8 @@ In this slightly higher-level API, expressions in rust generate graph operations
 
 This lets us build the full graph for back-propagation in small (composable) chunks of forward-like code, with the final loss function connecting the value and grad ops into a single graph.  See the examples for more details.
 
+TODO: extend array example, add diagram 
+
 ## Neural Network Modules
 
 Finally there is an optional top-level API that provides neural network building blocks, such as fully-connected layers or 2D convolutions.

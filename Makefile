@@ -1,38 +1,40 @@
 GNUPLOT=gnuplot
-RESULTS_DIR=results
 
-MNIST_APP=cargo run --release --example fashion_mnist -- --quiet -t 4
-MNIST_PLOT=$(RESULTS_DIR)/mnist.gnuplot
-MNIST_STATS=\
-	$(RESULTS_DIR)/mnist_linear.csv \
-	$(RESULTS_DIR)/mnist_single_layer.csv \
-	$(RESULTS_DIR)/mnist_conv_net.csv \
-	$(RESULTS_DIR)/mnist_conv_blur_net.csv
-MNIST_GRAPHS=$(MNIST_STATS:%.csv=%.svg)
+TEMP_DIR=temp
+DOCS_DIR=docs
 
-DIRS=$(RESULTS_DIR)
+FASHION_MNIST_APP=cargo run --release --example fashion_mnist -- --quiet -t 4
+FASHION_MNIST_PLOT=$(DOCS_DIR)/fashion_mnist.gnuplot
+FASHION_MNIST_STATS=\
+	$(TEMP_DIR)/fashion_mnist_stats_linear.csv \
+	$(TEMP_DIR)/fashion_mnist_stats_single_layer.csv \
+	$(TEMP_DIR)/fashion_mnist_stats_conv_net.csv \
+	$(TEMP_DIR)/fashion_mnist_stats_conv_blur_net.csv
+FASHION_MNIST_GRAPHS=$(FASHION_MNIST_STATS:$(TEMP_DIR)/%.csv=$(DOCS_DIR)/%.svg)
+
+DIRS=$(TEMP_DIR) $(DOCS_DIR)
 
 $(info $(shell mkdir -p $(DIRS)))
 
-all: mnist
-.PHONY: all clean mnist
+all: fashion_mnist
+.PHONY: all clean fashion_mnist
 
 clean:
-	$(RM) $(MNIST_STATS) $(MNIST_GRAPHS)
+	$(RM) $(FASHION_MNIST_STATS) $(FASHION_MNIST_GRAPHS)
 
-mnist: $(MNIST_GRAPHS)
+fashion_mnist: $(FASHION_MNIST_GRAPHS)
 
-$(RESULTS_DIR)/mnist_%.svg : $(RESULTS_DIR)/mnist_%.csv $(MNIST_PLOT)
-	$(GNUPLOT) -c $(MNIST_PLOT) "$<" "$@"
+$(DOCS_DIR)/fashion_mnist_%.svg : $(TEMP_DIR)/fashion_mnist_%.csv $(FASHION_MNIST_PLOT)
+	$(GNUPLOT) -c $(FASHION_MNIST_PLOT) "$<" "$@"
 
-$(RESULTS_DIR)/mnist_linear.csv:
-	$(MNIST_APP) --csv-file-name "$@" linear
+$(TEMP_DIR)/fashion_mnist_stats_linear.csv:
+	$(FASHION_MNIST_APP) --csv-file-name "$@" linear
 
-$(RESULTS_DIR)/mnist_single_layer.csv:
-	$(MNIST_APP) --csv-file-name "$@" single-layer
+$(TEMP_DIR)/fashion_mnist_stats_single_layer.csv:
+	$(FASHION_MNIST_APP) --csv-file-name "$@" single-layer
 
-$(RESULTS_DIR)/mnist_conv_net.csv:
-	$(MNIST_APP) --csv-file-name "$@" conv-net
+$(TEMP_DIR)/fashion_mnist_stats_conv_net.csv:
+	$(FASHION_MNIST_APP) --csv-file-name "$@" conv-net
 
-$(RESULTS_DIR)/mnist_conv_blur_net.csv:
-	$(MNIST_APP) --csv-file-name "$@" conv-blur-net
+$(TEMP_DIR)/fashion_mnist_stats_conv_blur_net.csv:
+	$(FASHION_MNIST_APP) --csv-file-name "$@" conv-blur-net
