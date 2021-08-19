@@ -331,8 +331,8 @@ fn main() {
     }
 
     // load training data
-    let train_images = load_gz_bytes("data/fashion/train-images-idx3-ubyte.gz").unwrap();
-    let train_labels = load_gz_bytes("data/fashion/train-labels-idx1-ubyte.gz").unwrap();
+    let train_images = load_gz_bytes("data/fashion_mnist/train-images-idx3-ubyte.gz").unwrap();
+    let train_labels = load_gz_bytes("data/fashion_mnist/train-labels-idx1-ubyte.gz").unwrap();
     let ((train_image_count, train_image_rows, train_image_cols), _) =
         read_images_info(&train_images);
     let (train_label_count, _) = read_labels_info(&train_labels);
@@ -342,8 +342,8 @@ fn main() {
     assert_eq!(train_image_cols, 28);
 
     // load test data
-    let test_images = load_gz_bytes("data/fashion/t10k-images-idx3-ubyte.gz").unwrap();
-    let test_labels = load_gz_bytes("data/fashion/t10k-labels-idx1-ubyte.gz").unwrap();
+    let test_images = load_gz_bytes("data/fashion_mnist/t10k-images-idx3-ubyte.gz").unwrap();
+    let test_labels = load_gz_bytes("data/fashion_mnist/t10k-labels-idx1-ubyte.gz").unwrap();
     let ((test_image_count, test_image_rows, test_image_cols), _) = read_images_info(&test_images);
     let (test_label_count, _) = read_labels_info(&test_labels);
     assert_eq!(test_image_count, test_label_count);
