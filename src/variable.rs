@@ -3,7 +3,7 @@ use slotmap::SlotMap;
 use std::{cell::RefCell, rc::Rc};
 
 slotmap::new_key_type! {
-    pub(crate) struct VariableId;
+    pub(crate) struct ParameterId;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -25,32 +25,32 @@ impl Initializer {
     }
 }
 
-pub(crate) struct VariableStorage {
+pub(crate) struct ParameterStorage {
     pub(crate) shape: Shape,
     pub(crate) name: String,
     pub(crate) buffer_id: Option<BufferId>,
     pub(crate) reset_to: Option<Initializer>,
 }
 
-pub(crate) type SharedVariables = Rc<RefCell<SlotMap<VariableId, VariableStorage>>>;
+pub(crate) type SharedParameters = Rc<RefCell<SlotMap<ParameterId, ParameterStorage>>>;
 
 #[derive(Clone)]
-pub struct Variable {
-    id: VariableId,
-    owner: SharedVariables,
+pub struct Parameter {
+    id: ParameterId,
+    owner: SharedParameters,
 }
 
-impl Variable {
-    pub(crate) fn new(variable_id: VariableId, owner: &SharedVariables) -> Self {
+impl Parameter {
+    pub(crate) fn new(parameter_id: ParameterId, owner: &SharedParameters) -> Self {
         Self {
-            id: variable_id,
-            owner: SharedVariables::clone(owner),
+            id: parameter_id,
+            owner: SharedParameters::clone(owner),
         }
     }
 
-    pub(crate) fn checked_id(&self, owner: &SharedVariables) -> VariableId {
-        if !SharedVariables::ptr_eq(&self.owner, owner) {
-            panic!("variable does not come from the same environment");
+    pub(crate) fn checked_id(&self, owner: &SharedParameters) -> ParameterId {
+        if !SharedParameters::ptr_eq(&self.owner, owner) {
+            panic!("parameter does not come from the same environment");
         }
         self.id
     }

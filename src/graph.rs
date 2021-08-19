@@ -1,5 +1,6 @@
 use crate::common::*;
 use arrayvec::ArrayVec;
+use ordered_float::NotNan;
 use petgraph::{
     prelude::*,
     visit::{
@@ -68,7 +69,7 @@ pub enum KernelDotOutput {
 }
 
 pub struct Graph {
-    pub(crate) variables: SharedVariables,
+    pub(crate) parameters: SharedParameters,
     pub(crate) ops: OpGraph,
     pub(crate) ops_sorted: Vec<OpNodeId>,
     pub(crate) clusters: SlotMap<ClusterId, Cluster>,
@@ -76,9 +77,9 @@ pub struct Graph {
 }
 
 impl Graph {
-    pub(crate) fn new(variables: SharedVariables, ops: OpGraph) -> Self {
+    pub(crate) fn new(parameters: SharedParameters, ops: OpGraph) -> Self {
         let mut graph = Self {
-            variables,
+            parameters,
             ops,
             ops_sorted: Vec::new(),
             clusters: SlotMap::with_key(),
@@ -90,6 +91,9 @@ impl Graph {
 
         graph.rebuild_ordering();
         graph.eliminate_moves();
+
+        graph.rebuild_ordering();
+        graph.simplify_arithmetic();
 
         graph.rebuild_ordering();
         graph.eliminate_common_subgraphs();
@@ -183,6 +187,40 @@ impl Graph {
         }
     }
 
+    fn simplify_arithmetic(&mut self) {
+        let mut mov_added = false;
+        for node_id in self.ops_sorted.iter().copied() {
+            match &self.ops[node_id].op {
+                Op::Binary(BinaryOp::Mul) => {
+                    let arg_edge_ids = get_arg_edge_ids(&self.ops, node_id);
+                    assert_eq!(arg_edge_ids.len(), 2);
+                    let literal_one_edge_id = arg_edge_ids.iter().copied().find(|&edge_id| {
+                        let src_node_id = self.ops.edge_endpoints(edge_id).unwrap().0;
+                        match &self.ops[src_node_id].op {
+                            Op::Literal(value) => *value == unsafe { NotNan::new_unchecked(1.0) },
+                            _ => false,
+                        }
+                    });
+                    if let Some(literal_one_edge_id) = literal_one_edge_id {
+                        for edge_id in arg_edge_ids.iter().copied() {
+                            if edge_id == literal_one_edge_id {
+                                self.ops.remove_edge(edge_id);
+                            } else {
+                                self.ops[node_id].op = Op::Unary(UnaryOp::Mov);
+                                self.ops[edge_id].arg = 0;
+                            }
+                        }
+                        mov_added = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if mov_added {
+            self.eliminate_moves();
+        }
+    }
+
     fn eliminate_moves(&mut self) {
         for node_id in self.ops_sorted.iter().copied() {
             if let Op::Unary(UnaryOp::Mov) = &self.ops[node_id].op {
@@ -206,7 +244,7 @@ impl Graph {
                         .all(|out_edge_ref| {
                             self.ops[out_edge_ref.target()]
                                 .op
-                                .output_variable_id()
+                                .output_parameter_id()
                                 .is_none()
                                 && self.ops[in_edge_id].view.can_view_through(
                                     &self.ops[out_edge_ref.id()].view,
@@ -610,14 +648,14 @@ impl Graph {
                         col,
                         node.op
                     )?;
-                    if let Op::Input { variable_id } | Op::Output { variable_id } = node.op {
+                    if let Op::Input { parameter_id } | Op::Output { parameter_id } = node.op {
                         write!(
                             w,
                             "{}",
-                            self.variables
+                            self.parameters
                                 .as_ref()
                                 .borrow()
-                                .get(variable_id)
+                                .get(parameter_id)
                                 .unwrap()
                                 .name
                         )?;

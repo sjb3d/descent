@@ -136,20 +136,20 @@ fn main() {
     };
 
     let m = 1 << 14;
-    let x_var = env.static_parameter([m, 2], "x");
-    let y_var = env.static_parameter([m, 3], "y");
-    let learning_rate_scale_var = env.static_parameter([1], "lr_scale");
-    let loss_sum_var = env.static_parameter([1], "loss");
+    let x_param = env.static_parameter([m, 2], "x");
+    let y_param = env.static_parameter([m, 3], "y");
+    let learning_rate_scale_param = env.static_parameter([1], "lr_scale");
+    let loss_sum_param = env.static_parameter([1], "loss");
     let (train_graph, parameters, _optimizer) = {
         let scope = env.scope();
 
-        let x = module.train(scope.parameter(&x_var));
-        let loss = (x - &y_var).square().reduce_sum(-1, true).set_loss();
-        scope.update_variable(&loss_sum_var, |loss_sum| {
+        let x = module.train(scope.parameter(&x_param));
+        let loss = (x - &y_param).square().reduce_sum(-1, true).set_loss();
+        scope.update_parameter_value(&loss_sum_param, |loss_sum| {
             loss_sum + loss.reduce_sum(0, false)
         });
 
-        let learning_rate_scale = scope.read_variable(&learning_rate_scale_var);
+        let learning_rate_scale = scope.parameter_value(&learning_rate_scale_param);
         let parameters = scope.trainable_parameters();
         let optimizer = Adam::new(
             &mut env,
@@ -168,12 +168,12 @@ fn main() {
         "trainable parameters: {}",
         parameters
             .iter()
-            .map(|var| var.shape().element_count())
+            .map(|param| param.shape().element_count())
             .sum::<usize>()
     );
 
     let pixel_count = height * width;
-    let image_var = env.static_parameter([pixel_count, 3], "image");
+    let image_param = env.static_parameter([pixel_count, 3], "image");
     let test_graph = env.build_graph(|scope| {
         let u = (scope.coord(width) + 0.5) * (2.0 / (width as f32)) - 1.0;
         let v = (scope.coord(height) + 0.5) * (2.0 / (height as f32)) - 1.0;
@@ -182,29 +182,29 @@ fn main() {
             .select_eq(0.0, u.reshape([1, width, 1]), v.reshape([height, 1, 1]))
             .reshape([pixel_count, 2]);
         let x = module.test(x);
-        scope.write_variable(&image_var, x.value());
+        scope.write_parameter_value(&image_param, x.value());
     });
     test_graph.write_dot_file(KernelDotOutput::Cluster, "test.dot");
 
     let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
-    for var in parameters.iter() {
-        env.reset_variable(var, &mut rng);
+    for param in parameters.iter() {
+        env.reset_parameter(param, &mut rng);
     }
 
     for epoch_index in 0..200 {
         let epoch_t = (epoch_index as f32) + 0.5;
         let learning_rate_scale = (epoch_t / 10.0).min(1.0) * 0.5f32.powf(epoch_t / 40.0);
-        env.writer(&learning_rate_scale_var)
+        env.writer(&learning_rate_scale_param)
             .write_all(bytemuck::bytes_of(&learning_rate_scale))
             .unwrap();
 
         // loop over batches to roughly cover the whole image
-        env.writer(&loss_sum_var).zero_fill();
+        env.writer(&loss_sum_param).zero_fill();
         let mini_batch_count = (width * height) / m;
         for _ in 0..mini_batch_count {
             // generate batch from a random set of pixels
             let mut y_data: Vec<f32> = Vec::new();
-            let mut w = env.writer(&x_var);
+            let mut w = env.writer(&x_param);
             for _ in 0..m {
                 let x0 = rng.gen_range(0..width);
                 let x1 = rng.gen_range(0..height);
@@ -219,7 +219,7 @@ fn main() {
                 }
             }
             mem::drop(w);
-            env.writer(&y_var)
+            env.writer(&y_param)
                 .write_all(bytemuck::cast_slice(&y_data))
                 .unwrap();
 
@@ -231,7 +231,7 @@ fn main() {
         }
 
         let done_counter = epoch_index + 1;
-        let train_loss = env.read_variable_scalar(&loss_sum_var) / (m as f32);
+        let train_loss = env.read_parameter_scalar(&loss_sum_param) / (m as f32);
         println!(
             "epoch: {}, lr_scale: {}, loss: {}",
             done_counter, learning_rate_scale, train_loss
@@ -239,7 +239,7 @@ fn main() {
 
         env.run(&test_graph, rng.next_u32());
         let pixels: Vec<u8> = env
-            .read_variable_to_vec(&image_var)
+            .read_parameter_to_vec(&image_param)
             .iter()
             .map(|&x| (x * 255.0 + 0.5).clamp(0.0, 255.0) as u8)
             .collect();

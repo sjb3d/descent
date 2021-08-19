@@ -83,7 +83,7 @@ Training this for 40 epochs produces the following results:
 
 Test accuracy is now up to 92%, which seems to be fairly respectable for a small network.  However, the network is still not generalising very well to the test set since test performance levels out while the training performance is still rising.
 
-### Adding Anti-Aliasing
+### Convolutional Neural Network With Anti-Aliasing
 
 This network can be trained by passing `conv-blur-net` as the network type:
 

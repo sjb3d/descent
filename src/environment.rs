@@ -39,15 +39,15 @@ fn write_rand_uniform(
     }
 }
 
-pub struct VariableWriter<'a>(StagingWriter<'a>);
+pub struct ParameterWriter<'a>(StagingWriter<'a>);
 
-impl<'a> VariableWriter<'a> {
+impl<'a> ParameterWriter<'a> {
     pub fn zero_fill(self) {
         // consume self, will zero to the end on drop
     }
 }
 
-impl<'a> io::Write for VariableWriter<'a> {
+impl<'a> io::Write for ParameterWriter<'a> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         Ok(self.0.write_slice(buf))
     }
@@ -58,15 +58,15 @@ impl<'a> io::Write for VariableWriter<'a> {
     }
 }
 
-pub struct VariableReader<'a>(StagingReader<'a>);
+pub struct ParameterReader<'a>(StagingReader<'a>);
 
-impl<'a> io::Read for VariableReader<'a> {
+impl<'a> io::Read for ParameterReader<'a> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         Ok(self.0.read_slice(buf))
     }
 }
 
-impl<'a> io::BufRead for VariableReader<'a> {
+impl<'a> io::BufRead for ParameterReader<'a> {
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
         Ok(self.0.peek().unwrap_or(&[]))
     }
@@ -88,7 +88,7 @@ pub struct Environment {
     command_buffers: CommandBuffers,
     buffer_heap: BufferHeap,
     staging_buffer: StagingBuffer,
-    variables: SharedVariables,
+    parameters: SharedParameters,
     kernel_cache: KernelCache,
     descriptor_pools: DescriptorPools,
     timestamps: TimestampSets,
@@ -116,36 +116,36 @@ impl Environment {
             command_buffers,
             buffer_heap,
             staging_buffer,
-            variables: Rc::new(RefCell::new(SlotMap::with_key())),
+            parameters: Rc::new(RefCell::new(SlotMap::with_key())),
             kernel_cache,
             descriptor_pools,
             timestamps,
         }
     }
 
-    fn variable(
+    fn parameter(
         &mut self,
         shape: impl Into<Shape>,
         name: impl Into<String>,
         reset_to: Option<Initializer>,
-    ) -> Variable {
+    ) -> Parameter {
         let shape = shape.into();
         let name = name.into();
-        let variable_id = self.variables.borrow_mut().insert(VariableStorage {
+        let parameter_id = self.parameters.borrow_mut().insert(ParameterStorage {
             shape,
             name,
             reset_to,
             buffer_id: None,
         });
-        Variable::new(variable_id, &self.variables)
+        Parameter::new(parameter_id, &self.parameters)
     }
 
     pub fn static_parameter(
         &mut self,
         shape: impl Into<Shape>,
         name: impl Into<String>,
-    ) -> Variable {
-        self.variable(shape, name, None)
+    ) -> Parameter {
+        self.parameter(shape, name, None)
     }
 
     pub fn trainable_parameter(
@@ -153,20 +153,20 @@ impl Environment {
         shape: impl Into<Shape>,
         name: impl Into<String>,
         reset_to: Initializer,
-    ) -> Variable {
-        self.variable(shape, name, Some(reset_to))
+    ) -> Parameter {
+        self.parameter(shape, name, Some(reset_to))
     }
 
-    pub fn writer(&mut self, variable: &Variable) -> VariableWriter {
-        let variable_id = variable.checked_id(&self.variables);
-        let mut variables = self.variables.borrow_mut();
-        let var = variables.get_mut(variable_id).unwrap();
-        if let Some(buffer_id) = var.buffer_id.take() {
+    pub fn writer(&mut self, parameter: &Parameter) -> ParameterWriter {
+        let parameter_id = parameter.checked_id(&self.parameters);
+        let mut parameters = self.parameters.borrow_mut();
+        let param = parameters.get_mut(parameter_id).unwrap();
+        if let Some(buffer_id) = param.buffer_id.take() {
             self.buffer_heap.free(buffer_id);
         }
-        let buffer_id = self.buffer_heap.alloc(var.shape.buffer_size()).unwrap();
-        var.buffer_id = Some(buffer_id);
-        VariableWriter(StagingWriter::new(
+        let buffer_id = self.buffer_heap.alloc(param.shape.buffer_size()).unwrap();
+        param.buffer_id = Some(buffer_id);
+        ParameterWriter(StagingWriter::new(
             &mut self.staging_buffer,
             &mut self.command_buffers,
             &mut self.fences,
@@ -174,12 +174,12 @@ impl Environment {
         ))
     }
 
-    pub fn reader(&mut self, variable: &Variable) -> VariableReader {
-        let variable_id = variable.checked_id(&self.variables);
-        let variables = self.variables.borrow();
-        let var = variables.get(variable_id).unwrap();
-        let buffer_id = var.buffer_id.unwrap();
-        VariableReader(StagingReader::new(
+    pub fn reader(&mut self, parameter: &Parameter) -> ParameterReader {
+        let parameter_id = parameter.checked_id(&self.parameters);
+        let parameters = self.parameters.borrow();
+        let param = parameters.get(parameter_id).unwrap();
+        let buffer_id = param.buffer_id.unwrap();
+        ParameterReader(StagingReader::new(
             &mut self.staging_buffer,
             &mut self.command_buffers,
             &mut self.fences,
@@ -187,10 +187,10 @@ impl Environment {
         ))
     }
 
-    pub fn reset_variable(&mut self, variable: &Variable, rng: &mut impl Rng) {
-        let shape = variable.shape();
-        let writer = self.writer(variable);
-        match variable.reset_to().unwrap() {
+    pub fn reset_parameter(&mut self, parameter: &Parameter, rng: &mut impl Rng) {
+        let shape = parameter.shape();
+        let writer = self.writer(parameter);
+        match parameter.reset_to().unwrap() {
             Initializer::Zero => writer.zero_fill(),
             Initializer::RandNormal(scale) => {
                 write_rand_normal(writer, scale, shape.element_count(), rng)
@@ -206,30 +206,30 @@ impl Environment {
         shape: impl Into<Shape>,
         name: &str,
         data: &[f32],
-    ) -> Variable {
-        let var = self.static_parameter(shape, name);
-        self.writer(&var)
+    ) -> Parameter {
+        let param = self.static_parameter(shape, name);
+        self.writer(&param)
             .write_all(bytemuck::cast_slice(data))
             .unwrap();
-        var
+        param
     }
 
-    pub fn read_variable_to_vec(&mut self, variable: &Variable) -> Vec<f32> {
-        let mut r = self.reader(&variable);
+    pub fn read_parameter_to_vec(&mut self, parameter: &Parameter) -> Vec<f32> {
+        let mut r = self.reader(&parameter);
         let mut bytes = Vec::new();
         r.read_to_end(&mut bytes).unwrap();
         bytemuck::cast_slice(&bytes).to_vec() // TODO: avoid deep copy
     }
 
-    pub fn read_variable_scalar(&mut self, variable: &Variable) -> f32 {
-        let mut r = self.reader(&variable);
+    pub fn read_parameter_scalar(&mut self, parameter: &Parameter) -> f32 {
+        let mut r = self.reader(&parameter);
         let mut bytes = Vec::new();
         r.read_to_end(&mut bytes).unwrap();
         *bytemuck::from_bytes(&bytes)
     }
 
     pub fn scope(&self) -> Scope {
-        Scope::new(SharedVariables::clone(&self.variables))
+        Scope::new(SharedParameters::clone(&self.parameters))
     }
 
     pub fn build_graph<F: FnOnce(&Scope)>(&self, f: F) -> Graph {
@@ -239,9 +239,9 @@ impl Environment {
     }
 
     pub fn run(&mut self, graph: &Graph, rand_seed: u32) {
-        let mut variables = self.variables.borrow_mut();
+        let mut parameters = self.parameters.borrow_mut();
 
-        // collect input and output variables
+        // collect input and output parameters
         let inputs: Vec<_> = graph
             .ops
             .node_references()
@@ -264,13 +264,13 @@ impl Environment {
                 }
             })
             .collect();
-        let input_variable_ids: HashSet<_> = inputs
+        let input_parameter_ids: HashSet<_> = inputs
             .iter()
-            .map(|&node_id| graph.ops[node_id].op.input_variable_id().unwrap())
+            .map(|&node_id| graph.ops[node_id].op.input_parameter_id().unwrap())
             .collect();
-        let output_variable_ids: HashSet<_> = outputs
+        let output_parameter_ids: HashSet<_> = outputs
             .iter()
-            .map(|&node_id| graph.ops[node_id].op.output_variable_id().unwrap())
+            .map(|&node_id| graph.ops[node_id].op.output_parameter_id().unwrap())
             .collect();
 
         // count up the number of times each node is used as an argument
@@ -283,26 +283,26 @@ impl Environment {
             node_storage[node_id.index()].usage_count += 1;
         }
 
-        // copy inputs to node, increment usage when variable is not an output, to preserve the buffer
+        // copy inputs to node, increment usage when parameter is not an output, to preserve the buffer
         for node_id in inputs.iter().copied() {
-            let variable_id = graph.ops[node_id].op.input_variable_id().unwrap();
-            let var = &mut variables[variable_id];
-            assert!(var.buffer_id.is_some());
+            let parameter_id = graph.ops[node_id].op.input_parameter_id().unwrap();
+            let param = &mut parameters[parameter_id];
+            assert!(param.buffer_id.is_some());
             let storage = &mut node_storage[node_id.index()];
-            if !output_variable_ids.contains(&variable_id) {
-                storage.buffer_id = var.buffer_id;
+            if !output_parameter_ids.contains(&parameter_id) {
+                storage.buffer_id = param.buffer_id;
                 storage.usage_count += 1;
             } else {
-                storage.buffer_id = var.buffer_id.take();
+                storage.buffer_id = param.buffer_id.take();
             }
         }
 
-        // free buffers for variables only used as outputs
+        // free buffers for parameters only used as outputs
         for node_id in outputs.iter().copied() {
-            let variable_id = graph.ops[node_id].op.output_variable_id().unwrap();
-            if !input_variable_ids.contains(&variable_id) {
-                let var = &mut variables[variable_id];
-                if let Some(buffer_id) = var.buffer_id.take() {
+            let parameter_id = graph.ops[node_id].op.output_parameter_id().unwrap();
+            if !input_parameter_ids.contains(&parameter_id) {
+                let param = &mut parameters[parameter_id];
+                if let Some(buffer_id) = param.buffer_id.take() {
                     self.buffer_heap.free(buffer_id);
                 }
             }
@@ -437,14 +437,14 @@ impl Environment {
 
         // assign buffers to outputs
         for node_id in outputs.iter().copied() {
-            let variable_id = graph.ops[node_id].op.output_variable_id().unwrap();
-            let var = &mut variables[variable_id];
+            let parameter_id = graph.ops[node_id].op.output_parameter_id().unwrap();
+            let param = &mut parameters[parameter_id];
             let arg_sources = get_arg_sources(&graph.ops, node_id);
             assert_eq!(arg_sources.len(), 1);
             let src0 = &arg_sources[0];
             let source_storage = &mut node_storage[src0.node_id.index()];
             assert!(source_storage.buffer_id.is_some());
-            var.buffer_id = source_storage.buffer_id.take();
+            param.buffer_id = source_storage.buffer_id.take();
         }
     }
 

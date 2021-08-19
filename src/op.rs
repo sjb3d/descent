@@ -69,8 +69,8 @@ pub(crate) enum MatMulOutputMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Op {
-    Input { variable_id: VariableId },
-    Output { variable_id: VariableId },
+    Input { parameter_id: ParameterId },
+    Output { parameter_id: ParameterId },
     Literal(NotNan<f32>),
     BuiltIn(BuiltInOp),
     Unary(UnaryOp),
@@ -83,16 +83,16 @@ pub(crate) enum Op {
 }
 
 impl Op {
-    pub(crate) fn input_variable_id(&self) -> Option<VariableId> {
+    pub(crate) fn input_parameter_id(&self) -> Option<ParameterId> {
         match self {
-            Self::Input { variable_id } => Some(*variable_id),
+            Self::Input { parameter_id } => Some(*parameter_id),
             _ => None,
         }
     }
 
-    pub(crate) fn output_variable_id(&self) -> Option<VariableId> {
+    pub(crate) fn output_parameter_id(&self) -> Option<ParameterId> {
         match self {
-            Self::Output { variable_id } => Some(*variable_id),
+            Self::Output { parameter_id } => Some(*parameter_id),
             _ => None,
         }
     }
@@ -116,8 +116,8 @@ impl Op {
 impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Input { variable_id } => write!(f, "Input({:?})", variable_id.data()),
-            Self::Output { variable_id } => write!(f, "Output({:?})", variable_id.data()),
+            Self::Input { parameter_id } => write!(f, "Input({:?})", parameter_id.data()),
+            Self::Output { parameter_id } => write!(f, "Output({:?})", parameter_id.data()),
             Self::Literal(value) => write!(f, "{:?}", value),
             Self::BuiltIn(built_in_op) => match built_in_op {
                 BuiltInOp::Coord => write!(f, "Coord"),

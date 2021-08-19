@@ -14,7 +14,7 @@ pub struct Array<'s> {
 #[derive(Clone, Copy)]
 pub struct DualArray<'s> {
     value_node_id: OpNodeId,
-    grad_node_id: OpNodeId,
+    loss_grad_node_id: OpNodeId,
     scope: &'s Scope,
 }
 
@@ -31,9 +31,9 @@ impl<'s> IntoArray<'s> for f32 {
         scope.literal(self).value()
     }
 }
-impl<'s> IntoArray<'s> for &Variable {
+impl<'s> IntoArray<'s> for &Parameter {
     fn into_array(self, scope: &'s Scope) -> Array<'s> {
-        scope.read_variable(self)
+        scope.parameter_value(self)
     }
 }
 
@@ -50,7 +50,7 @@ impl<'s> IntoDualArray<'s> for f32 {
         scope.literal(self)
     }
 }
-impl<'s> IntoDualArray<'s> for &Variable {
+impl<'s> IntoDualArray<'s> for &Parameter {
     fn into_dual_array(self, scope: &'s Scope) -> DualArray<'s> {
         scope.parameter(self)
     }
@@ -492,7 +492,7 @@ impl<'s> Array<'s> {
         })
     }
 
-    fn set_loss_grad(&self) {
+    fn set_loss_grad_root(&self) {
         let grad_shape = self.shape();
         let mini_batch_size = grad_shape[0];
         let mini_batch_scale = self
@@ -587,10 +587,10 @@ impl<'s> ops::Neg for Array<'s> {
 }
 
 impl<'s> DualArray<'s> {
-    pub fn new(value: Array<'s>, grad: Array<'s>) -> Self {
+    pub fn new(value: Array<'s>, loss_grad: Array<'s>) -> Self {
         Self {
             value_node_id: value.node_id,
-            grad_node_id: grad.node_id,
+            loss_grad_node_id: loss_grad.node_id,
             scope: value.scope,
         }
     }
@@ -602,15 +602,15 @@ impl<'s> DualArray<'s> {
         }
     }
 
-    pub fn grad(self) -> Array<'s> {
+    pub fn loss_grad(self) -> Array<'s> {
         Array {
-            node_id: self.grad_node_id,
+            node_id: self.loss_grad_node_id,
             scope: self.scope,
         }
     }
 
     pub fn into_inner(self) -> (Array<'s>, Array<'s>) {
-        (self.value(), self.grad())
+        (self.value(), self.loss_grad())
     }
 
     pub fn shape(&self) -> Shape {
@@ -866,7 +866,7 @@ impl<'s> DualArray<'s> {
     }
 
     pub fn set_loss(self) -> Array<'s> {
-        self.grad().set_loss_grad();
+        self.loss_grad().set_loss_grad_root();
         self.value()
     }
 
@@ -958,9 +958,9 @@ struct ScopeState {
     ops: OpGraph,
     next_colour: usize,
     next_rand_uid: usize,
-    variables: SharedVariables,
-    inputs: SparseSecondaryMap<VariableId, GraphInput>,
-    outputs: SparseSecondaryMap<VariableId, OpNodeId>,
+    parameters: SharedParameters,
+    inputs: SparseSecondaryMap<ParameterId, GraphInput>,
+    outputs: SparseSecondaryMap<ParameterId, OpNodeId>,
 }
 
 pub struct Scope {
@@ -968,13 +968,13 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub(crate) fn new(variables: SharedVariables) -> Self {
+    pub(crate) fn new(parameters: SharedParameters) -> Self {
         Self {
             state: RefCell::new(ScopeState {
                 ops: Default::default(),
                 next_colour: 0,
                 next_rand_uid: 0,
-                variables,
+                parameters,
                 inputs: SparseSecondaryMap::new(),
                 outputs: SparseSecondaryMap::new(),
             }),
@@ -1039,18 +1039,23 @@ impl Scope {
         .into()
     }
 
-    fn input(&self, variable: &Variable) -> GraphInput {
+    fn input(&self, parameter: &Parameter) -> GraphInput {
         self.with_state(|state| {
-            let variable_id = variable.checked_id(&state.variables);
-            let shape = state.variables.borrow().get(variable_id).unwrap().shape;
+            let parameter_id = parameter.checked_id(&state.parameters);
+            let shape = state.parameters.borrow().get(parameter_id).unwrap().shape;
             let next_colour = state.next_colour;
             let ops = &mut state.ops;
             *state
                 .inputs
-                .entry(variable_id)
+                .entry(parameter_id)
                 .unwrap()
                 .or_insert_with(|| GraphInput {
-                    value_node_id: ops.new_node(next_colour, shape, Op::Input { variable_id }, &[]),
+                    value_node_id: ops.new_node(
+                        next_colour,
+                        shape,
+                        Op::Input { parameter_id },
+                        &[],
+                    ),
                     grad_node_id: Some(ops.new_node(
                         next_colour,
                         shape,
@@ -1061,46 +1066,46 @@ impl Scope {
         })
     }
 
-    pub fn parameter(&self, variable: &Variable) -> DualArray {
-        let input = self.input(variable);
+    pub fn parameter(&self, parameter: &Parameter) -> DualArray {
+        let input = self.input(parameter);
         DualArray {
             value_node_id: input.value_node_id,
-            grad_node_id: input.grad_node_id.unwrap(),
+            loss_grad_node_id: input.grad_node_id.unwrap(),
             scope: self,
         }
     }
 
-    pub fn read_variable(&self, variable: &Variable) -> Array {
-        let input = self.input(variable);
+    pub fn parameter_value(&self, parameter: &Parameter) -> Array {
+        let input = self.input(parameter);
         Array {
             node_id: input.value_node_id,
             scope: self,
         }
     }
 
-    pub fn write_variable(&self, variable: &Variable, rhs: Array) {
+    pub fn write_parameter_value(&self, parameter: &Parameter, rhs: Array) {
         self.with_state(|state| {
-            let variable_id = variable.checked_id(&state.variables);
+            let parameter_id = parameter.checked_id(&state.parameters);
             let shape = state.ops[rhs.node_id].shape;
             assert_eq!(
-                state.variables.borrow().get(variable_id).unwrap().shape,
+                state.parameters.borrow().get(parameter_id).unwrap().shape,
                 shape
             );
 
-            // update the output node for this variable (remove any old one)
+            // update the output node for this parameter (remove any old one)
             let node_id = state.ops.new_node(
                 state.next_colour,
                 shape,
-                Op::Output { variable_id },
+                Op::Output { parameter_id },
                 &[rhs.node_id],
             );
-            if let Some(node_id) = state.outputs.insert(variable_id, node_id) {
+            if let Some(node_id) = state.outputs.insert(parameter_id, node_id) {
                 state.ops.remove_node(node_id);
             }
 
-            // ensure that if we read this variable again we read the latest value
+            // ensure that if we read this parameter again we read the latest value
             state.inputs.insert(
-                variable_id,
+                parameter_id,
                 GraphInput {
                     value_node_id: rhs.node_id,
                     grad_node_id: None,
@@ -1109,13 +1114,13 @@ impl Scope {
         });
     }
 
-    pub fn update_variable<'s>(
+    pub fn update_parameter_value<'s>(
         &'s self,
-        variable: &Variable,
+        parameter: &Parameter,
         f: impl FnOnce(Array<'s>) -> Array<'s>,
     ) -> Array<'s> {
-        let result = f(self.read_variable(variable));
-        self.write_variable(variable, result);
+        let result = f(self.parameter_value(parameter));
+        self.write_parameter_value(parameter, result);
         result
     }
 
@@ -1134,14 +1139,14 @@ impl Scope {
         })
     }
 
-    pub fn trainable_parameters(&self) -> Vec<Variable> {
+    pub fn trainable_parameters(&self) -> Vec<Parameter> {
         self.with_state(|state| {
             let mut v = Vec::new();
             for node in state.ops.node_weights() {
-                if let Op::Input { variable_id } = node.op {
-                    let variable = Variable::new(variable_id, &state.variables);
-                    if variable.is_trainable() {
-                        v.push(variable);
+                if let Op::Input { parameter_id } = node.op {
+                    let parameter = Parameter::new(parameter_id, &state.parameters);
+                    if parameter.is_trainable() {
+                        v.push(parameter);
                     }
                 }
             }
@@ -1151,7 +1156,10 @@ impl Scope {
 
     pub fn build_graph(self) -> Graph {
         self.with_state(|state| {
-            Graph::new(SharedVariables::clone(&state.variables), state.ops.clone())
+            Graph::new(
+                SharedParameters::clone(&state.parameters),
+                state.ops.clone(),
+            )
         })
     }
 }

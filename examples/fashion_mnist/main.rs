@@ -41,13 +41,13 @@ fn read_labels_info(bytes: &[u8]) -> (usize, &[u8]) {
 
 fn unpack_images(
     env: &mut Environment,
-    variable: &Variable,
+    parameter: &Parameter,
     bytes: &[u8],
     indices: &[usize],
 ) -> io::Result<()> {
     let ((_, rows, cols), bytes) = read_images_info(bytes);
     let pixel_count = rows * cols;
-    let mut w = env.writer(variable);
+    let mut w = env.writer(parameter);
     let mut image = Vec::<f32>::with_capacity(pixel_count);
     for index in indices.iter().copied() {
         let begin = index * pixel_count;
@@ -61,13 +61,13 @@ fn unpack_images(
 
 fn unpack_labels(
     env: &mut Environment,
-    variable: &Variable,
+    parameter: &Parameter,
     bytes: &[u8],
     indices: &[usize],
 ) -> io::Result<()> {
     let (_, bytes) = read_labels_info(bytes);
     let labels: Vec<f32> = indices.iter().map(|&index| bytes[index] as f32).collect();
-    let mut w = env.writer(variable);
+    let mut w = env.writer(parameter);
     w.write_all(bytemuck::cast_slice(&labels))
 }
 
@@ -236,32 +236,32 @@ fn main() {
     };
 
     let m = app_params.mini_batch_size;
-    let x_var = env.static_parameter([m, 28, 28, 1], "x");
-    let y_var = env.static_parameter([m, 1], "y");
+    let x_param = env.static_parameter([m, 28, 28, 1], "x");
+    let y_param = env.static_parameter([m, 1], "y");
 
-    let learning_rate_scale_var = env.static_parameter([1], "lr_scale");
-    let loss_sum_var = env.static_parameter([1], "loss");
-    let accuracy_sum_var = env.static_parameter([1], "accuracy");
+    let learning_rate_scale_param = env.static_parameter([1], "lr_scale");
+    let loss_sum_param = env.static_parameter([1], "loss");
+    let accuracy_sum_param = env.static_parameter([1], "accuracy");
 
     // build a graph for training, collect the trainable parameters
     let (train_graph, parameters, optimizer) = {
         let scope = env.scope();
 
         // emit the ops for the network
-        let x = module.train(scope.parameter(&x_var));
-        let loss = softmax_cross_entropy_loss(x, &y_var).set_loss();
-        let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
+        let x = module.train(scope.parameter(&x_param));
+        let loss = softmax_cross_entropy_loss(x, &y_param).set_loss();
+        let accuracy = softmax_cross_entropy_accuracy(x, &y_param);
 
         // update sum of loss and accuracy
-        scope.update_variable(&loss_sum_var, |loss_sum| {
+        scope.update_parameter_value(&loss_sum_param, |loss_sum| {
             loss_sum + loss.reduce_sum(0, false)
         });
-        scope.update_variable(&accuracy_sum_var, |accuracy_sum| {
+        scope.update_parameter_value(&accuracy_sum_param, |accuracy_sum| {
             accuracy_sum + accuracy.reduce_sum(0, false)
         });
 
         // train using gradient of the loss (scaled for size of mini batch)
-        let learning_rate_scale = scope.read_variable(&learning_rate_scale_var);
+        let learning_rate_scale = scope.parameter_value(&learning_rate_scale_param);
         let parameters = scope.trainable_parameters();
         add_weight_decay_to_grad(&scope, &parameters, app_params.weight_decay);
         let optimizer: Box<dyn Optimizer> = match app_params.optimizer {
@@ -289,37 +289,37 @@ fn main() {
         "trainable parameters: {}",
         parameters
             .iter()
-            .map(|var| var.shape().element_count())
+            .map(|param| param.shape().element_count())
             .sum::<usize>()
     );
 
     // build a graph to evaluate the test set (keeps parameters unchanged)
     let test_graph = env.build_graph(|scope| {
         // emit the ops for the network
-        let x = module.test(scope.parameter(&x_var));
-        let loss = softmax_cross_entropy_loss(x, &y_var).set_loss();
-        let accuracy = softmax_cross_entropy_accuracy(x, &y_var);
+        let x = module.test(scope.parameter(&x_param));
+        let loss = softmax_cross_entropy_loss(x, &y_param).set_loss();
+        let accuracy = softmax_cross_entropy_accuracy(x, &y_param);
 
         // update sum of loss and accuracy
-        scope.update_variable(&loss_sum_var, |loss_sum| {
+        scope.update_parameter_value(&loss_sum_param, |loss_sum| {
             loss_sum + loss.reduce_sum(0, false)
         });
-        scope.update_variable(&accuracy_sum_var, |accuracy_sum| {
+        scope.update_parameter_value(&accuracy_sum_param, |accuracy_sum| {
             accuracy_sum + accuracy.reduce_sum(0, false)
         });
     });
 
     // build a graph to evaluate the L2 norm of training parameters (to check weight decay)
-    let norm_var = env.static_parameter([1], "norm");
+    let norm_param = env.static_parameter([1], "norm");
     let norm_graph = env.build_graph(|scope| {
         let mut sum = scope.literal(0.0).value();
-        for var in parameters.iter() {
-            let x = scope.read_variable(&var);
+        for param in parameters.iter() {
+            let x = scope.parameter_value(&param);
             let x = x.reshape([x.shape().element_count()]);
             let x = x * x * 0.5;
             sum = sum + x.reduce_sum(0, true);
         }
-        scope.write_variable(&norm_var, sum);
+        scope.write_parameter_value(&norm_param, sum);
     });
 
     // write graphs out to disk if necessary
@@ -358,10 +358,10 @@ fn main() {
 
     // attempt to train 5 times with different random seeds
     for trial_index in 0..app_params.trial_count {
-        // reset all trainable variables and optimizer state
+        // reset all trainable parameters and optimizer state
         let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(trial_index as u64);
-        for var in parameters.iter() {
-            env.reset_variable(var, &mut rng);
+        for param in parameters.iter() {
+            env.reset_parameter(param, &mut rng);
         }
         optimizer.reset_state(&mut env);
 
@@ -370,48 +370,49 @@ fn main() {
         for epoch_index in 0..app_params.epoch_count {
             // update learning for this epoch (halve every 40 epochs)
             let learning_rate_scale = 0.5f32.powf((epoch_index as f32) / 40.0);
-            env.writer(&learning_rate_scale_var)
+            env.writer(&learning_rate_scale_param)
                 .write_all(bytemuck::bytes_of(&learning_rate_scale))
                 .unwrap();
 
             // loop over training mini-batches
-            env.writer(&loss_sum_var).zero_fill();
-            env.writer(&accuracy_sum_var).zero_fill();
+            env.writer(&loss_sum_param).zero_fill();
+            env.writer(&accuracy_sum_param).zero_fill();
             indices.clear();
             indices.extend(0..train_image_count);
             indices.shuffle(&mut rng);
             for batch_indices in indices.chunks(m) {
-                unpack_images(&mut env, &x_var, &train_images, batch_indices).unwrap();
-                unpack_labels(&mut env, &y_var, &train_labels, batch_indices).unwrap();
+                unpack_images(&mut env, &x_param, &train_images, batch_indices).unwrap();
+                unpack_labels(&mut env, &y_param, &train_labels, batch_indices).unwrap();
                 env.run(&train_graph, rng.next_u32());
             }
             if app_params.show_timings && epoch_index < 2 {
                 env.print_timings("training");
             }
-            let train_loss = env.read_variable_scalar(&loss_sum_var) / (train_image_count as f32);
+            let train_loss =
+                env.read_parameter_scalar(&loss_sum_param) / (train_image_count as f32);
             let train_accuracy =
-                env.read_variable_scalar(&accuracy_sum_var) / (train_image_count as f32);
+                env.read_parameter_scalar(&accuracy_sum_param) / (train_image_count as f32);
 
             // loop over test mini-batches to evaluate loss and accuracy
-            env.writer(&loss_sum_var).zero_fill();
-            env.writer(&accuracy_sum_var).zero_fill();
+            env.writer(&loss_sum_param).zero_fill();
+            env.writer(&accuracy_sum_param).zero_fill();
             indices.clear();
             indices.extend(0..test_image_count);
             for batch_indices in indices.chunks(m) {
-                unpack_images(&mut env, &x_var, &test_images, batch_indices).unwrap();
-                unpack_labels(&mut env, &y_var, &test_labels, batch_indices).unwrap();
+                unpack_images(&mut env, &x_param, &test_images, batch_indices).unwrap();
+                unpack_labels(&mut env, &y_param, &test_labels, batch_indices).unwrap();
                 env.run(&test_graph, rng.next_u32());
             }
             if app_params.show_timings && epoch_index < 2 {
                 env.print_timings("testing");
             }
-            let test_loss = env.read_variable_scalar(&loss_sum_var) / (test_image_count as f32);
+            let test_loss = env.read_parameter_scalar(&loss_sum_param) / (test_image_count as f32);
             let test_accuracy =
-                env.read_variable_scalar(&accuracy_sum_var) / (test_image_count as f32);
+                env.read_parameter_scalar(&accuracy_sum_param) / (test_image_count as f32);
 
             // compute the norm of all the parameters
             env.run(&norm_graph, rng.next_u32());
-            let norm = env.read_variable_scalar(&norm_var);
+            let norm = env.read_parameter_scalar(&norm_param);
 
             let done_counter = epoch_index + 1;
             if !app_params.quiet {

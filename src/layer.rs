@@ -68,8 +68,8 @@ impl DenseBuilder {
 }
 
 pub struct Dense {
-    w: Variable,
-    b: Variable, // TODO: optional?
+    w: Parameter,
+    b: Parameter, // TODO: optional?
 }
 
 impl Dense {
@@ -176,8 +176,8 @@ impl Conv2DBuilder {
 }
 
 pub struct Conv2D {
-    f: Variable,
-    b: Variable, // TODO: optional?
+    f: Parameter,
+    b: Parameter, // TODO: optional?
     pad: usize,
     stride: (usize, usize),
 }
