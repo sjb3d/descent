@@ -55,11 +55,11 @@ cargo run --release --example fashion_mnist -- single-layer
 
 This network adds a single hidden layer with 300 units and a (leaky) ReLU activation function:
 
-![](../../docs/fashion_mnist_network_single_layer.svg)
+![](../../docs/fashion_mnist_network_single-layer.svg)
 
 Repeating the same experiment with 4 random starting conditions for 40 epochs produces the following:
 
-![](../../docs/fashion_mnist_stats_single_layer.svg)
+![](../../docs/fashion_mnist_stats_single-layer.svg)
 
 Accuracy on the test set is up to 89%, but we very quickly start overfitting to the training set (the loss function on the test set starts to increase after only 20 epochs).
 
@@ -73,13 +73,13 @@ cargo run --release --example fashion_mnist -- conv-net
 
 This network performs two rounds of 3x3 convolutions, with a ReLU activation and 2x2 max pooling after each one.
 
-![](../../docs/fashion_mnist_network_conv_net.svg)
+![](../../docs/fashion_mnist_network_conv-net.svg)
 
 To make the network slightly smaller, the second convolution is split into 2 groups, with the first 16 output channels reading from the first 8 input channels, and the second 16 output channels reading from the second 8 input channels.
 
 Training this for 40 epochs produces the following results:
 
-![](../../docs/fashion_mnist_stats_conv_net.svg)
+![](../../docs/fashion_mnist_stats_conv-net.svg)
 
 Test accuracy is now up to 92%, which seems to be fairly respectable for a small network.  However, the network is still not generalising very well to the test set since test performance levels out while the training performance is still rising.
 
@@ -104,6 +104,6 @@ Back-propagation through the extra convolution step does add to the training tim
 
 Training this for 40 epochs produces the following:
 
-![](../../docs/fashion_mnist_stats_conv_blur_net.svg)
+![](../../docs/fashion_mnist_stats_conv-blur-net.svg)
 
 This seems to confirm the results of the paper: test accuracy has increased slightly to 92.5% and there is less of a gap between the training set and test set performance, indicating that the model has generalised more effectively.
