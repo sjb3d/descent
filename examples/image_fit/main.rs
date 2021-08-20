@@ -1,4 +1,4 @@
-use descent::{layer::*, optimizer::*, prelude::*};
+use descent::{module::*, optimizer::*, prelude::*};
 use rand::{Rng, RngCore, SeedableRng};
 use stb::image;
 use std::{f32::consts::PI, ffi::CString, fs, io::Write, mem};

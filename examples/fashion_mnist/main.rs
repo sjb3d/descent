@@ -1,4 +1,4 @@
-use descent::{layer::*, loss::*, optimizer::*, prelude::*};
+use descent::{loss::*, module::*, optimizer::*, prelude::*};
 use flate2::bufread::GzDecoder;
 use rand::{prelude::SliceRandom, RngCore, SeedableRng};
 use std::{

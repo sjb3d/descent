@@ -2,19 +2,19 @@ pub mod array;
 mod device;
 pub mod environment;
 pub mod prelude {
-    pub use crate::{array::*, environment::*, graph::*, shape::*, variable::*};
+    pub use crate::{array::*, environment::*, graph::*, parameter::*, shape::*};
 }
 mod common {
     pub(crate) use crate::{kernel::*, op::*, prelude::*};
 }
 pub mod graph;
 mod kernel;
-pub mod layer;
 pub mod loss;
+pub mod module;
 mod op;
 pub mod optimizer;
+pub mod parameter;
 pub mod shape;
-pub mod variable;
 
 #[cfg(test)]
 mod tests {
