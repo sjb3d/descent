@@ -12,7 +12,7 @@ Toy library for machine learning in Rust using Vulkan compute shaders.
 - Supports one level of automatic derivatives for back-propagation
 - Softmax cross entropy loss, L2 weight decay
 - Some example optimisers:
-  - Stochatic gradient descent (with momentum)
+  - Stochastic gradient descent (with momentum)
   - Adam
 - Optional higher-level API of neural network building blocks
 
