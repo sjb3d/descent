@@ -1,12 +1,12 @@
 # descent
 
-Toy library for machine learning in Rust using Vulkan compute shaders.
+Toy library for neural networks in Rust using Vulkan compute shaders.
 
 ## Features
 
 - Multi-dimensional arrays backed by Vulkan device memory
-- Use Rust syntax to build a computation graph, run as to Vulkan compute shaders
-  - Supports vector arithmetic and functions such as sin/cos/exp/log/etc
+- Use Rust syntax to build a computation graph, run as Vulkan compute shaders
+  - Supports vector arithmetic and per-element sin/cos/exp/log/etc
   - 1D reduction, 2D matrix multiply, 2D convolutions and 2D max pool supported
   - Softmax cross entropy loss
   - Implements broadcasts/padding/windowing/reshapes as views (zero copy) where possible
