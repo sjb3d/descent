@@ -1,7 +1,14 @@
 use descent::{module::*, optimizer::*, prelude::*};
 use rand::{Rng, RngCore, SeedableRng};
 use stb::image;
-use std::{f32::consts::PI, ffi::CString, fs, io::Write, mem};
+use std::{
+    f32::consts::PI,
+    ffi::CString,
+    fs::File,
+    io::{BufWriter, Write},
+    mem,
+    path::PathBuf,
+};
 use structopt::StructOpt;
 use strum::{EnumString, EnumVariantNames, VariantNames};
 
@@ -16,12 +23,27 @@ enum NetworkType {
 #[derive(Debug, StructOpt)]
 #[structopt(
     no_version,
-    name = "image",
+    name = "image_fit",
     about = "Example networks to fit a single image."
 )]
 struct AppParams {
     #[structopt(possible_values=&NetworkType::VARIANTS, default_value="siren")]
     network: NetworkType,
+
+    #[structopt(long)]
+    show_timings: bool,
+
+    #[structopt(long)]
+    quiet: bool,
+
+    #[structopt(long)]
+    csv_file_name: Option<PathBuf>,
+
+    #[structopt(long)]
+    image_prefix: Option<String>,
+
+    #[structopt(long)]
+    output_all_images: bool,
 }
 
 struct Relu {
@@ -114,7 +136,7 @@ fn position_encoding<'s>(x: DualArray<'s>, freq_count: usize) -> DualArray<'s> {
 
 fn main() {
     let (info, data) = image::stbi_load_from_reader(
-        &mut fs::File::open("data/images/cat.png").unwrap(),
+        &mut File::open("data/images/cat.jpg").unwrap(),
         stb::image::Channels::Rgb,
     )
     .unwrap();
@@ -191,7 +213,12 @@ fn main() {
         env.reset_parameter(param, &mut rng);
     }
 
-    for epoch_index in 0..200 {
+    let mut stats_w = app_params
+        .csv_file_name
+        .map(|path| BufWriter::new(File::create(path).unwrap()));
+
+    let epoch_count = 200;
+    for epoch_index in 0..epoch_count {
         let epoch_t = (epoch_index as f32) + 0.5;
         let learning_rate_scale = (epoch_t / 10.0).min(1.0) * 0.5f32.powf(epoch_t / 40.0);
         env.writer(&learning_rate_scale_param)
@@ -226,32 +253,46 @@ fn main() {
             // run training
             env.run(&train_graph, rng.next_u32());
         }
-        if epoch_index < 2 {
+        if app_params.show_timings && epoch_index < 2 {
             env.print_timings("training")
         }
 
         let done_counter = epoch_index + 1;
         let train_loss = env.read_parameter_scalar(&loss_sum_param) / (m as f32);
-        println!(
-            "epoch: {}, lr_scale: {}, loss: {}",
-            done_counter, learning_rate_scale, train_loss
-        );
-
-        env.run(&test_graph, rng.next_u32());
-        let pixels: Vec<u8> = env
-            .read_parameter_to_vec(&image_param)
-            .iter()
-            .map(|&x| (x * 255.0 + 0.5).clamp(0.0, 255.0) as u8)
-            .collect();
-        let name = format!("temp/image_{}.png", done_counter);
-        stb::image_write::stbi_write_png(
-            CString::new(name).unwrap().as_c_str(),
-            info.width,
-            info.height,
-            3,
-            &pixels,
-            3 * info.width,
-        )
-        .unwrap();
+        if !app_params.quiet {
+            println!(
+                "epoch: {}, lr_scale: {}, loss: {}",
+                done_counter, learning_rate_scale, train_loss
+            );
+        }
+        if let Some(w) = stats_w.as_mut() {
+            if epoch_index == 0 {
+                writeln!(w, "# epoch, loss").unwrap();
+            }
+            writeln!(w, "{}, {}", done_counter, train_loss).unwrap();
+            if done_counter == epoch_count {
+                writeln!(w).unwrap();
+            }
+        }
+        if let Some(image_prefix) = app_params.image_prefix.as_ref() {
+            if app_params.output_all_images || done_counter == epoch_count {
+                env.run(&test_graph, rng.next_u32());
+                let pixels: Vec<u8> = env
+                    .read_parameter_to_vec(&image_param)
+                    .iter()
+                    .map(|&x| (x * 255.0 + 0.5).clamp(0.0, 255.0) as u8)
+                    .collect();
+                let name = format!("{}_{}.jpg", image_prefix, done_counter);
+                stb::image_write::stbi_write_jpg(
+                    CString::new(name).unwrap().as_c_str(),
+                    info.width,
+                    info.height,
+                    3,
+                    &pixels,
+                    90,
+                )
+                .unwrap();
+            }
+        }
     }
 }

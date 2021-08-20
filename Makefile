@@ -12,21 +12,36 @@ FASHION_MNIST_STATS=\
 	$(TEMP_DIR)/fashion_mnist_stats_conv-blur-net.csv
 FASHION_MNIST_GRAPHS=$(FASHION_MNIST_STATS:$(TEMP_DIR)/%.csv=$(DOCS_DIR)/%.svg)
 
+IMAGE_FIT_APP=cargo run --release --example image_fit --
+IMAGE_FIT_PLOT=$(DOCS_DIR)/image_fit.gnuplot
+IMAGE_FIT_STATS=\
+	$(TEMP_DIR)/image_fit_stats_relu.csv \
+	$(TEMP_DIR)/image_fit_stats_relu-pe.csv \
+	$(TEMP_DIR)/image_fit_stats_siren.csv
+IMAGE_FIT_GRAPHS=$(DOCS_DIR)/image_fit_stats.svg
+
 DIRS=$(TEMP_DIR) $(DOCS_DIR)
 
 $(info $(shell mkdir -p $(DIRS)))
 
-all: fashion_mnist
-.PHONY: all clean fashion_mnist
+all: fashion_mnist image_fit
+.PHONY: all clean fashion_mnist image_fit
 
 clean:
 	$(RM) $(FASHION_MNIST_STATS) $(FASHION_MNIST_GRAPHS)
 
 fashion_mnist: $(FASHION_MNIST_GRAPHS)
 
+image_fit: $(IMAGE_FIT_GRAPHS)
+
 $(DOCS_DIR)/fashion_mnist_%.svg : $(TEMP_DIR)/fashion_mnist_%.csv $(FASHION_MNIST_PLOT)
-	$(GNUPLOT) -c $(FASHION_MNIST_PLOT) "$<" "$@"
+	$(GNUPLOT) -c $(FASHION_MNIST_PLOT) "$@" "$<"
 
 $(TEMP_DIR)/fashion_mnist_stats_%.csv:
 	$(FASHION_MNIST_APP) --quiet -t 4 --csv-file-name "$@" $*
 
+$(TEMP_DIR)/image_fit_stats_%.csv:
+	$(IMAGE_FIT_APP) --quiet --csv-file-name "$@" --image-prefix "$(TEMP_DIR)/image_fit_output_$*" $*
+
+$(DOCS_DIR)/image_fit_stats.svg: $(IMAGE_FIT_STATS) $(IMAGE_FIT_PLOT)
+	$(GNUPLOT) -c $(IMAGE_FIT_PLOT) "$@" $^
