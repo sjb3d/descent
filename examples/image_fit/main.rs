@@ -72,7 +72,7 @@ impl Module for Relu {
     fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
         let mut x = input;
         if self.freq_count != 0 {
-            x = position_encoding(input, self.freq_count);
+            x = positional_encoding(input, self.freq_count);
         }
         for layer in self.hidden_layers.iter() {
             x = x.apply(layer, ctx).leaky_relu(0.01);
@@ -116,7 +116,7 @@ impl Module for Siren {
     }
 }
 
-fn position_encoding<'s>(x: DualArray<'s>, freq_count: usize) -> DualArray<'s> {
+fn positional_encoding<'s>(x: DualArray<'s>, freq_count: usize) -> DualArray<'s> {
     let scope = x.scope();
 
     let freq = scope.literal(2.0).pow(scope.coord(freq_count)) * PI;
@@ -185,7 +185,6 @@ fn main() {
 
         (scope.build_graph(), parameters, optimizer)
     };
-    train_graph.write_dot_file(KernelDotOutput::Cluster, "train.dot");
     println!(
         "trainable parameters: {}",
         parameters
@@ -206,7 +205,6 @@ fn main() {
         let x = module.test(x);
         scope.write_parameter_value(&image_param, x.value());
     });
-    test_graph.write_dot_file(KernelDotOutput::Cluster, "test.dot");
 
     let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
     for param in parameters.iter() {

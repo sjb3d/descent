@@ -5,5 +5,5 @@ set output ARG1
 set terminal svg enhanced background rgb 'white'
 set logscale y
 plot ARG2 with lines title "ReLU",\
-     ARG3 with lines title "ReLU with Position Encoding",\
+     ARG3 with lines title "ReLU with Positional Encoding",\
      ARG4 with lines title "SIREN"

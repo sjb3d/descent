@@ -1,6 +1,6 @@
 # fashion_mnist example
 
-This example trains a few a different network types on the [Fashion-MNIST dataset](https://github.com/zalandoresearch/fashion-mnist).
+This example trains a few different network types on the [Fashion-MNIST dataset](https://github.com/zalandoresearch/fashion-mnist).
 The example also implements an anti-aliased variant of max pooling as described in [Making Convolutional Networks Shift-Invariant Again by Richard Zhang](https://richzhang.github.io/antialiased-cnns/) for improved accuracy.
 
 ## Overview

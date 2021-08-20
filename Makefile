@@ -41,7 +41,7 @@ $(TEMP_DIR)/fashion_mnist_stats_%.csv:
 	$(FASHION_MNIST_APP) --quiet -t 4 --csv-file-name "$@" $*
 
 $(TEMP_DIR)/image_fit_stats_%.csv:
-	$(IMAGE_FIT_APP) --quiet --csv-file-name "$@" --image-prefix "$(TEMP_DIR)/image_fit_output_$*" $*
+	$(IMAGE_FIT_APP) --quiet --csv-file-name "$@" --image-prefix "$(DOCS_DIR)/image_fit_output_$*" $*
 
 $(DOCS_DIR)/image_fit_stats.svg: $(IMAGE_FIT_STATS) $(IMAGE_FIT_PLOT)
 	$(GNUPLOT) -c $(IMAGE_FIT_PLOT) "$@" $^

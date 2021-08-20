@@ -4,17 +4,19 @@ Toy library for machine learning in Rust using Vulkan compute shaders.
 
 ## Features
 
-- Manage Vulkan device memory as multi-dimensional arrays
-- Use Rust syntax to build a computation graph, run as Vulkan compute shaders
+- Multi-dimensional arrays backed by Vulkan device memory
+- Use Rust syntax to build a computation graph, run as to Vulkan compute shaders
   - Supports vector arithmetic and functions such as sin/cos/exp/log/etc
   - 1D reduction, 2D matrix multiply, 2D convolutions and 2D max pool supported
+  - Softmax cross entropy loss
   - Implements broadcasts/padding/windowing/reshapes as views (zero copy) where possible
 - Supports one level of automatic derivatives for back-propagation
-- Softmax cross entropy loss, L2 weight decay
 - Some example optimisers:
   - Stochastic gradient descent (with momentum)
   - Adam
 - Optional higher-level API of neural network building blocks
+  - Can generate different code for train vs test (e.g. dropout only affects training)
+- Deterministic results
 
 ## Example Network
 
@@ -81,7 +83,7 @@ Trains a few different network types on the Fashion-MNIST dataset.  Demonstrates
 
 ### [image_fit](examples/image_fit)
 
-Overfits a few different network types to a single RGB image.  Compares ReLU with position encoding to a SIREN network.
+Overfits a few different network types to a single RGB image.  Compares ReLU with positional encoding to a SIREN network.
 
 ## Dependencies
 
