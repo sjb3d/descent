@@ -18,7 +18,7 @@ fn main() {
         let z = 2.0 * m.matmul(x) + y * y + 1.0;
         scope.write_parameter_value(&z_param, z);
     });
-    graph.write_dot_file(KernelDotOutput::Cluster, "array_values.dot");
+    graph.write_dot_file(KernelDotOutput::Cluster, "array_api_values.dot");
 
     env.run(&graph, random_seed);
     assert_eq!(&env.read_parameter_to_vec(&z_param), &[10.0, 15.0, 22.0]);
@@ -31,5 +31,5 @@ fn main() {
         let _loss = (y.square() + y * 3.0).set_loss();
         scope.write_parameter_value(&x_param, x.value() - 0.1 * x.loss_grad());
     });
-    graph.write_dot_file(KernelDotOutput::Cluster, "array_grad.dot");
+    graph.write_dot_file(KernelDotOutput::Cluster, "array_api_grad.dot");
 }

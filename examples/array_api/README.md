@@ -1,4 +1,4 @@
-# array example
+# array_api example
 
 This example creates some small graphs directly using the array API.
 
@@ -45,7 +45,7 @@ env.run(&graph, random_seed);
 
 The graph is run as a set compute shaders that run on the Vulkan device.  To avoid needlessly wasting bandwidth, operations are fused into a single kernel where possible.  A visualisation of the graph for the example above is as follows:
 
-![array graph](../../docs/array_values.svg)
+![array graph](../../docs/array_api_values.svg)
 
 The grey boxes above are individual compute shaders: one matrix multiply and one fused per-element shader.  (In future this may become a single fused shader.)
 
@@ -73,7 +73,7 @@ let graph = env.build_graph(|scope| {
 
 Since x is a `DualArray` we did not have to explicitly write code for back-propagation.  The graph for this example is as follows:
 
-![](../../docs/array_grad.svg)
+![](../../docs/array_api_grad.svg)
 
 Inspecting this graph, x is updated proportional to `(2*sin(x) + 3)*cos(x)`, which matches what we expect for a loss function of `sin^2(x) + 3*sin(x)`.
 

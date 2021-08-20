@@ -1,6 +1,6 @@
 # descent
 
-Experimental library for machine learning in Rust using Vulkan compute shaders.
+Toy library for machine learning in Rust using Vulkan compute shaders.
 
 ## Features
 
@@ -71,9 +71,9 @@ See the [fashion_mnist example](examples/fashion_mnist) for more networks using 
 
 Please the follow the link in the title of each example for a more detailed README of each one.
 
-### [array](examples/array)
+### [array_api](examples/array_api)
 
-Demonstrates the low-level `Array` API for building computation graphs.  See the README for more details of the `Array` API.
+Demonstrates the low-level `Array` API for building computation graphs.  See the README for more details of the `Array` API and how it can be used to build computation graphs.
 
 ### [fashion_mnist](examples/fashion_mnist)
 
