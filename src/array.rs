@@ -67,7 +67,7 @@ impl<'s> Array<'s> {
         self.scope
     }
 
-    pub fn with_grad(self) -> (Self, Self) {
+    pub fn with_empty_grad(self) -> (Self, Self) {
         let grad = self.scope.with_state(|state| {
             let shape = state.ops[self.node_id].shape;
             Array {
@@ -627,7 +627,7 @@ impl<'s> DualArray<'s> {
     pub fn sin(self) -> Self {
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.sin().with_grad();
+        let (b, db) = a.sin().with_empty_grad();
         da.accumulate(db * a.cos());
 
         (b, db).into()
@@ -636,7 +636,7 @@ impl<'s> DualArray<'s> {
     pub fn leaky_relu(self, leakiness: f32) -> Self {
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.select_gt(0.0, a, a * leakiness).with_grad();
+        let (b, db) = a.select_gt(0.0, a, a * leakiness).with_empty_grad();
         da.accumulate(a.select_gt(0.0, db, db * leakiness));
 
         (b, db).into()
@@ -646,7 +646,7 @@ impl<'s> DualArray<'s> {
         let (a, da) = self.into_inner();
         let (b, db) = rhs.into_inner();
 
-        let (c, dc) = a.batched_matmul(b, output_mode).with_grad();
+        let (c, dc) = a.batched_matmul(b, output_mode).with_empty_grad();
         da.accumulate(dc.batched_matmul(b.transpose(), MatMulOutputMode::Batches));
         db.accumulate(a.transpose().batched_matmul(dc, MatMulOutputMode::Batches));
 
@@ -664,7 +664,7 @@ impl<'s> DualArray<'s> {
     pub fn transpose(self) -> Self {
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.transpose().with_grad();
+        let (b, db) = a.transpose().with_empty_grad();
         da.accumulate(db.transpose());
 
         (b, db).into()
@@ -675,7 +675,7 @@ impl<'s> DualArray<'s> {
         let (b, db) = rhs.into_dual_array(self.scope).into_inner();
 
         // c = a ^ b
-        let (c, dc) = a.pow(b).with_grad();
+        let (c, dc) = a.pow(b).with_empty_grad();
         da.accumulate((dc * b * a.pow(b - 1.0)).unbroadcast(a.shape()));
         db.accumulate((dc * a.log() * c).unbroadcast(b.shape()));
 
@@ -693,7 +693,7 @@ impl<'s> DualArray<'s> {
         let (pass, dpass) = pass.into_dual_array(self.scope).into_inner();
         let (fail, dfail) = fail.into_dual_array(self.scope).into_inner();
 
-        let (c, dc) = a.select_eq(b, pass, fail).with_grad();
+        let (c, dc) = a.select_eq(b, pass, fail).with_empty_grad();
         // TODO: da and db derivative?
         dpass.accumulate(a.select_eq(b, dc, 0.0).unbroadcast(pass.shape()));
         dfail.accumulate(a.select_eq(b, 0.0, dc).unbroadcast(fail.shape()));
@@ -707,7 +707,7 @@ impl<'s> DualArray<'s> {
 
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.reshape(new_shape).with_grad();
+        let (b, db) = a.reshape(new_shape).with_empty_grad();
         da.accumulate(db.reshape(old_shape));
 
         (b, db).into()
@@ -716,7 +716,7 @@ impl<'s> DualArray<'s> {
     pub(crate) fn pad_image(self, pad: usize) -> Self {
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.pad_image(pad).with_grad();
+        let (b, db) = a.pad_image(pad).with_empty_grad();
         da.accumulate(db.unpad_image(pad));
 
         (b, db).into()
@@ -730,7 +730,7 @@ impl<'s> DualArray<'s> {
     ) -> Self {
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.image_to_windows(filter, stride, groups).with_grad();
+        let (b, db) = a.image_to_windows(filter, stride, groups).with_empty_grad();
         da.accumulate(db.windows_to_image(stride));
 
         (b, db).into()
@@ -811,7 +811,7 @@ impl<'s> DualArray<'s> {
     fn reduce_op(self, reduce_op: ReduceOp, axis: Axis) -> Self {
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.reduce_op(reduce_op, axis).with_grad();
+        let (b, db) = a.reduce_op(reduce_op, axis).with_empty_grad();
         match reduce_op {
             ReduceOp::Max => da.accumulate(a.select_eq(b, db, 0.0)),
             ReduceOp::Sum => da.accumulate(db.broadcast(da.shape())),
@@ -823,7 +823,7 @@ impl<'s> DualArray<'s> {
     fn insert_axis(self, axis: Axis) -> Self {
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.insert_axis(axis).with_grad();
+        let (b, db) = a.insert_axis(axis).with_empty_grad();
         da.accumulate(db.remove_axis(axis));
 
         (b, db).into()
@@ -832,7 +832,7 @@ impl<'s> DualArray<'s> {
     fn remove_axis(self, axis: Axis) -> Self {
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.remove_axis(axis).with_grad();
+        let (b, db) = a.remove_axis(axis).with_empty_grad();
         da.accumulate(db.insert_axis(axis));
 
         (b, db).into()
@@ -884,7 +884,7 @@ impl<'s> DualArray<'s> {
 
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.permute_axes(perm).with_grad();
+        let (b, db) = a.permute_axes(perm).with_empty_grad();
         da.accumulate(db.permute_axes(&inv_perm));
 
         (b, db).into()
@@ -902,7 +902,7 @@ where
         let (a, da) = self.into_inner();
         let (b, db) = rhs.into_inner();
 
-        let (c, dc) = (a + b).with_grad();
+        let (c, dc) = (a + b).with_empty_grad();
         da.accumulate(dc.unbroadcast(a.shape()));
         db.accumulate(dc.unbroadcast(b.shape()));
 
@@ -921,7 +921,7 @@ where
         let (a, da) = self.into_inner();
         let (b, db) = rhs.into_inner();
 
-        let (c, dc) = (a - b).with_grad();
+        let (c, dc) = (a - b).with_empty_grad();
         da.accumulate(dc.unbroadcast(a.shape()));
         db.accumulate(-dc.unbroadcast(b.shape()));
 
@@ -940,7 +940,7 @@ where
         let (a, da) = self.into_inner();
         let (b, db) = rhs.into_inner();
 
-        let (c, dc) = (a * b).with_grad();
+        let (c, dc) = (a * b).with_empty_grad();
         da.accumulate((b * dc).unbroadcast(a.shape()));
         db.accumulate((a * dc).unbroadcast(b.shape()));
 
@@ -999,7 +999,7 @@ impl Scope {
             ),
             scope: self,
         })
-        .with_grad()
+        .with_empty_grad()
         .into()
     }
 
@@ -1016,7 +1016,7 @@ impl Scope {
                 scope: self,
             }
         })
-        .with_grad()
+        .with_empty_grad()
         .into()
     }
 
@@ -1035,7 +1035,7 @@ impl Scope {
                 scope: self,
             }
         })
-        .with_grad()
+        .with_empty_grad()
         .into()
     }
 

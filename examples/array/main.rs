@@ -1,6 +1,8 @@
 use descent::prelude::*;
 
 fn main() {
+    let random_seed = 0x5EED5EED;
+
     let mut env = Environment::new();
 
     let m_param =
@@ -17,7 +19,9 @@ fn main() {
         scope.write_parameter_value(&z_param, z);
     });
     graph.write_dot_file(KernelDotOutput::Cluster, "array_values.dot");
-    env.run(&graph, 0x5EED5EED);
+
+    env.run(&graph, random_seed);
+    assert_eq!(&env.read_parameter_to_vec(&z_param), &[10.0, 15.0, 22.0]);
 
     let x_param = env.trainable_parameter([1], "x", Initializer::Zero);
 
@@ -28,6 +32,4 @@ fn main() {
         scope.write_parameter_value(&x_param, x.value() - 0.1 * x.loss_grad());
     });
     graph.write_dot_file(KernelDotOutput::Cluster, "array_grad.dot");
-
-    assert_eq!(&env.read_parameter_to_vec(&z_param), &[10.0, 15.0, 22.0]);
 }
