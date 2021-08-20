@@ -45,7 +45,9 @@ impl StochasticGradientDescent {
             }
         }
 
-        Self { state }
+        let tmp = Self { state };
+        tmp.reset_state(env);
+        tmp
     }
 }
 
