@@ -9,8 +9,7 @@ publish = false
 arrayvec = "0.7"
 rand = "0.8"
 petgraph = "0.6"
-#spark = { git = "https://github.com/sjb3d/spark/" }
-spark = { path = "../spark/spark" }
+spark = { git = "https://github.com/sjb3d/spark/" }
 shaderc = "0.7"
 slotmap = "1.0"
 trait-set = "0.2"

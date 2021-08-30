@@ -530,6 +530,7 @@ dependencies = [
 [[package]]
 name = "spark"
 version = "0.1.0"
+source = "git+https://github.com/sjb3d/spark/#fd203f45bba750d1e624c61c8b5025ba9d38f993"
 dependencies = [
  "lazy_static",
  "shared_library",
