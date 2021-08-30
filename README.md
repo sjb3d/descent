@@ -75,7 +75,7 @@ Please follow the link in the name of each example to show a more detailed descr
 
 Name | Description
 --- | ---
-[array_api](examples/array_api) | Demonstrates the low-level `Array` API for building computation graphs.  See the README for more details of the `Array` API and how it can be used to build computation graphs.
+[array_api](examples/array_api) | Demonstrates the low-level `Array` API for building computation graphs.  See the README for more details.
 [fashion_mnist](examples/fashion_mnist) | Trains a few different network types on the Fashion-MNIST dataset.  Demonstrates the use of anti-aliasing during max pooling for improved accuracy.  See the README for a comparison of network performance.
 [image_fit](examples/image_fit) | Overfits a few different network types to a single RGB image.  Compares ReLU with positional encoding to a SIREN network.
 
