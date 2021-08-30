@@ -5,9 +5,11 @@ The example also implements an anti-aliased variant of max pooling as described 
 
 ## Overview
 
-The dataset consists of 60000 training images and 10000 test images.  Each image is 28 by 28 greyscale, and has a corresponding label between 0 and 9 (signifying which of the 10 categories the image belongs to).
+The [Fashion-MNIST dataset](https://github.com/zalandoresearch/fashion-mnist) consists of 60000 training images and 10000 test images.
+Each image is 28 by 28 with a single greyscale channel, and has a corresponding label between 0 and 9 (signifying which of the 10 categories the image belongs to).
+It is considered to be a more challenging dataset than the original [MNIST data](http://yann.lecun.com/exdb/mnist/) of handwritten digits.
 
-The example trains a network for multiple epochs (each epoch covers the entire training set in some shuffled order), testing accuracy against the full test set after each one.
+The example trains a network with the full training set for multiple epochs, testing accuracy against the full test set after each one.  The training set is shuffled into a random order for each epoch.
 
 ## Running The Example
 
@@ -25,7 +27,7 @@ cargo run --release --example fashion_mnist -- --help
 
 ## Networks
 
-The [Fashion-MNIST dataset](https://github.com/zalandoresearch/fashion-mnist) contains 28x28 greyscale images that are labelled with 1 of 10 categories.  It is considered to be a more challenging dataset than the original [MNIST data](http://yann.lecun.com/exdb/mnist/) of handwritten digits.
+The example evaluates 4 different networks using this dataset.  Here is a short description of each network and how it performs.
 
 ### Linear Classifier
 
@@ -35,7 +37,7 @@ This network can be trained by passing `linear` as the network type:
 cargo run --release --example fashion_mnist -- linear
 ```
 
-This network has no hidden layers or activation functions, just a single dense layer from 784 pixels to 10 categories.  Softmax is then used to convert the final values into a probability for each category.
+This network has no hidden layers or activation functions, just a single dense layer from 784 (28x28) pixels to 10 categories.  Softmax is then used to convert the final values into a probability for each category.
 
 ![](../../docs/fashion_mnist_network_linear.svg)
 
@@ -81,7 +83,7 @@ Training this for 40 epochs produces the following results:
 
 ![](../../docs/fashion_mnist_stats_conv-net.svg)
 
-Test accuracy is now up to 92%, which seems to be fairly respectable for a small network.  However, the network is still not generalising very well to the test set since test performance levels out while the training performance is still rising.
+Test accuracy is now up to 92%, which seems to be fairly respectable for a small network on this dataset.  However, the network is still not generalising very well to the test set since test performance levels out while the training performance is still rising.
 
 ### Convolutional Neural Network With Anti-Aliasing
 
