@@ -16,12 +16,14 @@ For all networks there is then a final linear layer to an RGB triple.
 
 The SIREN network is implemented as described in [Implicit Neural Representations with Periodic Activation Functions](https://vsitzmann.github.io/siren/), using the initialisation scheme from the paper (including the extra scaling on the first layer).
 
-Here are the results when training these networks on this image for 200 epochs (each epoch is after training with the same number of pixels as the input image, in batches of 16K randomly sampled pixels):
+Here is a graph of how the training loss evolves over 200 epochs of training:
 
 ![](../../docs/image_fit_stats.svg)
 
-ReLU with positional encoding and SIREN are extremely close in terms of loss function, which is just L2 distance in this test.
-However, due to the positional encoding increasing the input units from 2 to 32, this network has many more trainable parameters:
+The loss function is squared difference between the RGB values of the result and the training image.
+Although the SIREN network evolves similarly to the ReLU with Position Encoding network, the SIREN network seems to do better at capturing sharp features, and does so with fewer parameters (due to the lack of initial encoding layer).
+
+The number of trainable parameters for each network is as follows:
 
 Network Type | Trainable Parameters
 --- | ---
@@ -29,9 +31,23 @@ ReLU | 44099
 ReLU with positional encoding | 51779
 SIREN | 44099
 
-## Fitted Images
+## Running The Example
 
-Running the network to generate an image of the same resolution produces the following output after 200 epochs of training:
+The example can be run using:
+
+```
+cargo run --release --example image_fit
+```
+
+This will fit using a SIREN network by default.  Other networks can be trained by passing different command-line arguments, run the following to show commandline help:
+
+```
+cargo run --release --example image_fit -- --help
+```
+
+## Fitted Image Results
+
+Here are the results for each network type after 200 epochs of training.  Each epoch trains using the same number of pixels as the input image, in mini-batches of 16K randomly sampled pixels.
 
 ### ReLU
 
