@@ -215,14 +215,14 @@ impl Environment {
     }
 
     pub fn read_parameter_to_vec(&mut self, parameter: &Parameter) -> Vec<f32> {
-        let mut r = self.reader(&parameter);
+        let mut r = self.reader(parameter);
         let mut bytes = Vec::new();
         r.read_to_end(&mut bytes).unwrap();
         bytemuck::cast_slice(&bytes).to_vec() // TODO: avoid deep copy
     }
 
     pub fn read_parameter_scalar(&mut self, parameter: &Parameter) -> f32 {
-        let mut r = self.reader(&parameter);
+        let mut r = self.reader(parameter);
         let mut bytes = Vec::new();
         r.read_to_end(&mut bytes).unwrap();
         *bytemuck::from_bytes(&bytes)

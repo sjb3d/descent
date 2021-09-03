@@ -190,30 +190,27 @@ impl Graph {
     fn simplify_arithmetic(&mut self) {
         let mut mov_added = false;
         for node_id in self.ops_sorted.iter().copied() {
-            match &self.ops[node_id].op {
-                Op::Binary(BinaryOp::Mul) => {
-                    let arg_edge_ids = get_arg_edge_ids(&self.ops, node_id);
-                    assert_eq!(arg_edge_ids.len(), 2);
-                    let literal_one_edge_id = arg_edge_ids.iter().copied().find(|&edge_id| {
-                        let src_node_id = self.ops.edge_endpoints(edge_id).unwrap().0;
-                        match &self.ops[src_node_id].op {
-                            Op::Literal(value) => *value == unsafe { NotNan::new_unchecked(1.0) },
-                            _ => false,
-                        }
-                    });
-                    if let Some(literal_one_edge_id) = literal_one_edge_id {
-                        for edge_id in arg_edge_ids.iter().copied() {
-                            if edge_id == literal_one_edge_id {
-                                self.ops.remove_edge(edge_id);
-                            } else {
-                                self.ops[node_id].op = Op::Unary(UnaryOp::Mov);
-                                self.ops[edge_id].arg = 0;
-                            }
-                        }
-                        mov_added = true;
+            if matches!(&self.ops[node_id].op, Op::Binary(BinaryOp::Mul)) {
+                let arg_edge_ids = get_arg_edge_ids(&self.ops, node_id);
+                assert_eq!(arg_edge_ids.len(), 2);
+                let literal_one_edge_id = arg_edge_ids.iter().copied().find(|&edge_id| {
+                    let src_node_id = self.ops.edge_endpoints(edge_id).unwrap().0;
+                    match &self.ops[src_node_id].op {
+                        Op::Literal(value) => *value == unsafe { NotNan::new_unchecked(1.0) },
+                        _ => false,
                     }
+                });
+                if let Some(literal_one_edge_id) = literal_one_edge_id {
+                    for edge_id in arg_edge_ids.iter().copied() {
+                        if edge_id == literal_one_edge_id {
+                            self.ops.remove_edge(edge_id);
+                        } else {
+                            self.ops[node_id].op = Op::Unary(UnaryOp::Mov);
+                            self.ops[edge_id].arg = 0;
+                        }
+                    }
+                    mov_added = true;
                 }
-                _ => {}
             }
         }
         if mov_added {
