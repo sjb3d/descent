@@ -285,6 +285,14 @@ impl<'s> Array<'s> {
     pub fn cos(self) -> Self {
         self.unary_op(UnaryOp::Cos)
     }
+    pub fn sigmoid(self) -> Self {
+        self.exp() / (self.exp() + 1.0)
+    }
+    pub fn tanh(self) -> Self {
+        let a = self.exp();
+        let b = (-self).exp();
+        (a - b)/(a + b)
+    }
 
     pub fn pow(self, rhs: impl IntoArray<'s>) -> Self {
         self.binary_op(rhs, BinaryOp::Pow)
@@ -624,6 +632,7 @@ impl<'s> DualArray<'s> {
     pub fn square(self) -> Self {
         self * self
     }
+
     pub fn sin(self) -> Self {
         let (a, da) = self.into_inner();
 
