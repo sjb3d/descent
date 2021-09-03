@@ -25,12 +25,17 @@ DIRS=$(TEMP_DIR) $(DOCS_DIR)
 $(info $(shell mkdir -p $(DIRS)))
 
 all: fashion_mnist image_fit
-.PHONY: all clean fashion_mnist image_fit
+.PHONY: all clean clean_fashion_mnist fashion_mnist clean_image_fit image_fit
 
-clean:
+clean: clean_fashion_mnist clean_image_fit
+
+clean_fashion_mnist:
 	$(RM) $(FASHION_MNIST_STATS) $(FASHION_MNIST_GRAPHS)
 
 fashion_mnist: $(FASHION_MNIST_GRAPHS)
+
+clean_image_fit:
+	$(RM) $(IMAGE_FIT_STATS) $(IMAGE_FIT_GRAPHS)
 
 image_fit: $(IMAGE_FIT_GRAPHS)
 
