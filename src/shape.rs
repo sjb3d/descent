@@ -361,6 +361,14 @@ impl View {
         tmp
     }
 
+    pub(crate) fn subset(shape: Shape, axis: Axis, coord: usize) -> Self {
+        let mut tmp = View::new(shape);
+        tmp.input_offsets[axis.index()] = coord as isize;
+        tmp.output_mapping[axis.index()] = AxisMapping::Broadcast;
+        tmp.output_shape[axis] = 1;
+        tmp
+    }
+
     pub(crate) fn is_contiguous(&self) -> bool {
         let input_strides = self.input_shape.strides();
         let output_strides = self.output_shape.strides();

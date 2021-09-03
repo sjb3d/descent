@@ -62,6 +62,20 @@ impl<'s> From<(Array<'s>, Array<'s>)> for DualArray<'s> {
     }
 }
 
+pub trait IntoAxis {
+    fn into_axis(self, shape: Shape) -> Axis;
+}
+impl IntoAxis for Axis {
+    fn into_axis(self, _shape: Shape) -> Axis {
+        self
+    }
+}
+impl IntoAxis for isize {
+    fn into_axis(self, shape: Shape) -> Axis {
+        shape.axis(self)
+    }
+}
+
 impl<'s> Array<'s> {
     pub fn scope(&self) -> &'s Scope {
         self.scope
@@ -194,8 +208,9 @@ impl<'s> Array<'s> {
         })
     }
 
-    fn reduce_op(self, reduce_op: ReduceOp, axis: Axis) -> Self {
+    fn reduce_op(self, reduce_op: ReduceOp, axis: impl IntoAxis) -> Self {
         let shape = self.shape();
+        let axis = axis.into_axis(shape);
         if shape[axis] == 1 {
             self
         } else {
@@ -214,10 +229,11 @@ impl<'s> Array<'s> {
         }
     }
 
-    fn keep_axis(self, axis: Axis, keep_axis: bool) -> Self {
+    fn keep_axis(self, axis: impl IntoAxis, keep_axis: bool) -> Self {
         if keep_axis {
             self
         } else {
+            let axis = axis.into_axis(self.shape());
             self.remove_axis(axis)
         }
     }
@@ -226,26 +242,27 @@ impl<'s> Array<'s> {
         self.scope.coord(count).value().select_eq(self, 1.0, 0.0)
     }
 
-    pub fn reduce_max(self, axis: isize, keep_axis: bool) -> Self {
-        let axis = self.shape().axis(axis);
+    pub fn reduce_max(self, axis: impl IntoAxis, keep_axis: bool) -> Self {
+        let axis = axis.into_axis(self.shape());
         self.reduce_op(ReduceOp::Max, axis)
             .keep_axis(axis, keep_axis)
     }
-    pub fn reduce_sum(self, axis: isize, keep_axis: bool) -> Self {
-        let axis = self.shape().axis(axis);
+    pub fn reduce_sum(self, axis: impl IntoAxis, keep_axis: bool) -> Self {
+        let axis = axis.into_axis(self.shape());
         self.reduce_op(ReduceOp::Sum, axis)
             .keep_axis(axis, keep_axis)
     }
 
-    pub fn argmax(self, axis: isize, keep_axis: bool) -> Self {
+    pub fn argmax(self, axis: impl IntoAxis, keep_axis: bool) -> Self {
         // implement with reduce_max for now
+        let axis = axis.into_axis(self.shape());
         let coord_or_zero = self.select_eq(self.reduce_max(axis, true), self.coord(axis), 0.0);
         coord_or_zero.reduce_max(axis, keep_axis)
     }
 
-    pub fn coord(self, axis: isize) -> Self {
+    pub fn coord(self, axis: impl IntoAxis) -> Self {
         let shape = self.shape();
-        let axis = shape.axis(axis);
+        let axis = axis.into_axis(shape);
         let len = shape[axis];
         self.scope
             .coord(len)
@@ -270,6 +287,9 @@ impl<'s> Array<'s> {
         self.compare_and_select(CompareMode::Gt, rhs, pass, fail)
     }
 
+    pub fn square(self) -> Self {
+        self * self
+    }
     pub fn sqrt(self) -> Self {
         self.unary_op(UnaryOp::Sqrt)
     }
@@ -291,7 +311,7 @@ impl<'s> Array<'s> {
     pub fn tanh(self) -> Self {
         let a = self.exp();
         let b = (-self).exp();
-        (a - b)/(a + b)
+        (a - b) / (a + b)
     }
 
     pub fn pow(self, rhs: impl IntoArray<'s>) -> Self {
@@ -344,21 +364,26 @@ impl<'s> Array<'s> {
         self.view(self.shape().identity_view().permute_axes(perm))
     }
 
-    pub(crate) fn pad(self, axis: isize, pad: usize) -> Self {
+    fn subset(self, axis: Axis, coord: usize) -> Self {
+        self.view(View::subset(self.shape(), axis, coord))
+    }
+
+    pub(crate) fn pad(self, axis: impl IntoAxis, pad: usize) -> Self {
         if pad == 0 {
             return self;
         }
         let shape = self.shape();
-        self.view(shape.padded_view(shape.axis(axis), pad))
+        let axis = axis.into_axis(shape);
+        self.view(shape.padded_view(axis, pad))
     }
 
-    pub(crate) fn unpad(self, axis: isize, pad: usize) -> Self {
+    pub(crate) fn unpad(self, axis: impl IntoAxis, pad: usize) -> Self {
         if pad == 0 {
             return self;
         }
         self.scope.with_state(|state| {
             let shape = state.ops[self.node_id].shape;
-            let axis = shape.axis(axis);
+            let axis = axis.into_axis(shape);
             let shape = shape.unpad(axis, pad);
             Array {
                 node_id: state.ops.new_node(
@@ -641,6 +666,24 @@ impl<'s> DualArray<'s> {
 
         (b, db).into()
     }
+    pub fn tanh(self) -> Self {
+        let (a, da) = self.into_inner();
+
+        // d/dx tanh(x) = 1 / cosh^2 (x) = 4 / (e^2x + 2 + e^(-2x))
+        let (b, db) = a.tanh().with_empty_grad();
+        da.accumulate(db * 4.0 / ((2.0 * a).exp() + 2.0 + (-2.0 * a).exp()));
+
+        (b, db).into()
+    }
+    pub fn sigmoid(self) -> Self {
+        let (a, da) = self.into_inner();
+
+        // d/dx e^x / (1 + e^x) = e^x / (1 + e^x)^2
+        let (b, db) = a.sigmoid().with_empty_grad();
+        da.accumulate(db * a.exp() / (a.exp() + 1.0).square());
+
+        (b, db).into()
+    }
 
     pub fn leaky_relu(self, leakiness: f32) -> Self {
         let (a, da) = self.into_inner();
@@ -708,6 +751,20 @@ impl<'s> DualArray<'s> {
         dfail.accumulate(a.select_eq(b, 0.0, dc).unbroadcast(fail.shape()));
 
         (c, dc).into()
+    }
+
+    fn subset_op(self, axis: Axis, coord: usize) -> Self {
+        let (a, da) = self.into_inner();
+
+        let (b, db) = a.subset(axis, coord).with_empty_grad();
+        da.accumulate(db.coord(axis).select_eq(coord as f32, db, 0.0));
+
+        (b, db).into()
+    }
+
+    pub fn subset(self, axis: impl IntoAxis, coord: usize, keep_axis: bool) -> Self {
+        let axis = axis.into_axis(self.shape());
+        self.subset_op(axis, coord).keep_axis(axis, keep_axis)
     }
 
     pub fn reshape(self, shape: impl Into<Shape>) -> Self {
@@ -855,13 +912,13 @@ impl<'s> DualArray<'s> {
         }
     }
 
-    pub fn reduce_sum(self, axis: isize, keep_axis: bool) -> Self {
-        let axis = self.shape().axis(axis);
+    pub fn reduce_sum(self, axis: impl IntoAxis, keep_axis: bool) -> Self {
+        let axis = axis.into_axis(self.shape());
         self.reduce_op(ReduceOp::Sum, axis)
             .keep_axis(axis, keep_axis)
     }
-    pub fn reduce_max(self, axis: isize, keep_axis: bool) -> Self {
-        let axis = self.shape().axis(axis);
+    pub fn reduce_max(self, axis: impl IntoAxis, keep_axis: bool) -> Self {
+        let axis = axis.into_axis(self.shape());
         self.reduce_op(ReduceOp::Max, axis)
             .keep_axis(axis, keep_axis)
     }
