@@ -264,10 +264,7 @@ impl<'s> Array<'s> {
         let shape = self.shape();
         let axis = axis.into_axis(shape);
         let len = shape[axis];
-        self.scope
-            .coord(len)
-            .value()
-            .reshape(Shape::from_axis(axis, len))
+        self.scope.coord(len).value().reshape(shape.coord(axis))
     }
 
     pub fn select_eq(
@@ -757,7 +754,7 @@ impl<'s> DualArray<'s> {
         let (a, da) = self.into_inner();
 
         let (b, db) = a.subset(axis, coord).with_empty_grad();
-        da.accumulate(db.coord(axis).select_eq(coord as f32, db, 0.0));
+        da.accumulate(a.coord(axis).select_eq(coord as f32, db, 0.0));
 
         (b, db).into()
     }

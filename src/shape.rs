@@ -178,13 +178,10 @@ impl Shape {
         tmp
     }
 
-    pub fn from_axis(axis: Axis, len: usize) -> Self {
-        let mut v = ShapeVec::new();
-        while v.len() < axis.index() {
-            v.push(1);
-        }
-        v.push(len);
-        Self::new(v)
+    pub fn coord(&self, axis: Axis) -> Self {
+        self.iter_axes()
+            .map(|a| if a == axis { self[a] } else { 1 })
+            .collect()
     }
 
     pub(crate) fn strides(&self) -> TinyVec<[usize; MAX_DIM]> {
