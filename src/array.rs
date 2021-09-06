@@ -561,6 +561,16 @@ impl<'s> ops::Add<Array<'s>> for f32 {
     }
 }
 
+impl<'s, T> ops::AddAssign<T> for Array<'s>
+where
+    T: IntoArray<'s>,
+{
+    fn add_assign(&mut self, rhs: T) {
+        use ops::Add;
+        *self = self.add(rhs);
+    }
+}
+
 impl<'s, T> ops::Sub<T> for Array<'s>
 where
     T: IntoArray<'s>,
@@ -970,6 +980,16 @@ where
         db.accumulate(dc.unbroadcast(b.shape()));
 
         (c, dc).into()
+    }
+}
+
+impl<'s, T> ops::AddAssign<T> for DualArray<'s>
+where
+    T: IntoDualArray<'s>,
+{
+    fn add_assign(&mut self, rhs: T) {
+        use ops::Add;
+        *self = self.add(rhs);
     }
 }
 
