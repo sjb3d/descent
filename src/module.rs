@@ -277,3 +277,87 @@ impl Module for Dropout {
         (b, db).into()
     }
 }
+
+struct LSTMWeight {
+    input: Parameter,
+    hidden: Parameter,
+    bias: Parameter,
+}
+
+impl LSTMWeight {
+    fn new(env: &mut Environment, prefix: &str, input: usize, output: usize) -> Self {
+        let input = env.trainable_parameter(
+            [input, output],
+            &format!("{}_wi", prefix),
+            Initializer::RandNormal(0.01),
+        );
+        let hidden = env.trainable_parameter(
+            [output, output],
+            &format!("{}_wh", prefix),
+            Initializer::RandNormal(0.01),
+        );
+        let bias = env.trainable_parameter([output], &format!("{}_b", prefix), Initializer::Zero);
+        Self {
+            input,
+            hidden,
+            bias,
+        }
+    }
+
+    fn eval<'s>(&self, input: DualArray<'s>, hidden: Option<DualArray<'s>>) -> DualArray<'s> {
+        let mut x = input.matmul(&self.input);
+        if let Some(hidden) = hidden {
+            x += hidden.matmul(&self.hidden);
+        }
+        x + &self.bias
+    }
+}
+
+pub struct LSTMCell {
+    forget_gate: LSTMWeight,
+    input_gate: LSTMWeight,
+    output_gate: LSTMWeight,
+    cell_input: LSTMWeight,
+}
+
+impl LSTMCell {
+    pub fn new(env: &mut Environment, input: usize, output: usize) -> Self {
+        Self {
+            forget_gate: LSTMWeight::new(env, "forget", input, output),
+            input_gate: LSTMWeight::new(env, "input", input, output),
+            output_gate: LSTMWeight::new(env, "output", input, output),
+            cell_input: LSTMWeight::new(env, "cell", input, output),
+        }
+    }
+}
+
+impl Module for LSTMCell {
+    fn eval<'s>(&self, input: DualArray<'s>, _ctx: &EvalContext) -> DualArray<'s> {
+        let time_axis = -2;
+        let timestep_count = input.shape()[SignedIndex(time_axis)];
+        let mut prev_cell = None;
+        let mut prev_hidden = None;
+        for i in 0..timestep_count {
+            let input = input.next_colour().subset(time_axis, i, false);
+
+            let input_gate = self.input_gate.eval(input, prev_hidden).sigmoid();
+            let output_gate = self.output_gate.eval(input, prev_hidden).sigmoid();
+            let cell_input = self.cell_input.eval(input, prev_hidden).tanh();
+
+            let mut cell = input_gate * cell_input;
+            if let Some(prev_cell) = prev_cell {
+                // TODO: fix dead code elimination for gradients
+                // (disconnect accumulates that are not from the chosen loss)
+                // then we can move the forget gate code out of this "if let"
+                let forget_gate = self.forget_gate.eval(input, prev_hidden).sigmoid();
+                cell += forget_gate * prev_cell;
+            }
+
+            let hidden = output_gate * cell.tanh();
+
+            prev_cell = Some(cell);
+            prev_hidden = Some(hidden);
+        }
+        prev_hidden.unwrap()
+    }
+}
