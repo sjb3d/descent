@@ -9,6 +9,7 @@ Toy library for neural networks in Rust using Vulkan compute shaders.
   - Supports vector arithmetic and per-element sin/cos/exp/log/etc
   - 1D reduction, 2D matrix multiply, 2D convolutions and 2D max pool supported
   - Softmax cross entropy loss
+  - Ops are fused into larger compute shaders where possible (to reduce bandwidth cost)
   - Implements broadcasts/padding/windowing/reshapes as views (zero copy) where possible
 - Supports one level of automatic derivatives for back-propagation
 - Some example optimisers:
