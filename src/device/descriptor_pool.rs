@@ -10,7 +10,7 @@ pub(crate) struct DescriptorPools {
 impl DescriptorPools {
     const COUNT: usize = 2;
 
-    const MAX_SETS: u32 = 512;
+    const MAX_SETS: u32 = 2048; // TODO: pass in sizes (derive from graphs)
     const MAX_BUFFERS: u32 = 8 * Self::MAX_SETS;
 
     pub(crate) fn new(context: &SharedContext, fences: &FenceSet) -> Self {
