@@ -557,8 +557,28 @@ impl Graph {
                             outputs: vec![node_id],
                         }));
                     }
+                    Op::Gather { axis } => {
+                        let arg_sources = get_arg_sources(&self.ops, node_id);
+                        assert_eq!(arg_sources.len(), 2);
+                        let kernel_inputs = arg_sources
+                            .iter()
+                            .map(|src| src.view)
+                            .collect::<ArrayVec<_, 2>>()
+                            .into_inner()
+                            .unwrap();
+                        self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
+                            kernel: GenericKernel::Gather(GatherKernel {
+                                shape: node.shape,
+                                inputs: kernel_inputs,
+                                axis,
+                            }),
+                            inputs: arg_sources.iter().map(|src| src.node_id).collect(),
+                            members: vec![node_id],
+                            outputs: vec![node_id],
+                        }));
+                    }
                     Op::Input { .. } | Op::Output { .. } | Op::Literal(_) | Op::BuiltIn(_) => {}
-                    _ => panic!("unexpected op without a kernel"),
+                    Op::Unary(..) | Op::Binary(..) | Op::CompareAndSelect(..) => unreachable!(),
                 }
             }
         }

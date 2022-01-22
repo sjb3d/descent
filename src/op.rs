@@ -80,6 +80,7 @@ pub(crate) enum Op {
     Reduce { reduce_op: ReduceOp, axis: Axis }, // TODO: 2D version?
     Unpad { axis: Axis, pad: usize },           // TODO: 2D version?
     WindowsToImage { stride: (usize, usize) },
+    Gather { axis: Axis },
 }
 
 impl Op {
@@ -105,7 +106,7 @@ impl Op {
     }
 
     pub(crate) fn can_reshape(&self) -> bool {
-        !matches!(self, Self::BuiltIn(_))
+        !matches!(self, Self::BuiltIn(_) | Self::Gather { .. })
     }
 
     pub(crate) fn can_merge(&self) -> bool {
@@ -132,6 +133,7 @@ impl fmt::Display for Op {
             }
             Self::Unpad { axis, pad } => write!(f, "Unpad{}({})", pad, axis.index()),
             Self::WindowsToImage { .. } => write!(f, "WindowsToImage"),
+            Self::Gather { axis } => write!(f, "Gather({})", axis.index()),
         }
     }
 }

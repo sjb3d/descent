@@ -145,4 +145,27 @@ mod tests {
 
         assert_eq!(env.read_parameter_to_vec(&b_param), b_data);
     }
+
+    #[test]
+    fn gather() {
+        let mut env = Environment::new();
+
+        let a_data: Vec<_> = (0..200).map(|i| (i * i) as f32).collect();
+        let b_data: Vec<_> = (0..100).map(|i| (99 - i) as f32).collect();
+        let c_data: Vec<_> = (0..100).map(|i| ((99 - i) * (99 - i)) as f32).collect();
+
+        let a_param = env.static_parameter_with_data([1, 200, 1], "a", &a_data);
+        let b_param = env.static_parameter_with_data([100], "b", &b_data);
+        let c_param = env.static_parameter([1, 100, 1], "c");
+
+        let g = env.build_graph(|scope| {
+            scope.write_parameter_value(
+                &c_param,
+                scope.parameter(&a_param).value().gather(1, &b_param),
+            );
+        });
+        env.run(&g, TEST_RAND_SEED);
+
+        assert_eq!(env.read_parameter_to_vec(&c_param), c_data);
+    }
 }

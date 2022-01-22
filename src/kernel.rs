@@ -695,6 +695,68 @@ impl Kernel for WindowsToImageKernel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct GatherKernel {
+    pub(crate) shape: Shape,
+    pub(crate) axis: Axis,
+    pub(crate) inputs: [View; 2],
+}
+
+impl Kernel for GatherKernel {
+    fn generate_source(&self) -> Result<String, fmt::Error> {
+        let mut src = String::new();
+        let w = &mut src;
+
+        generate_input_buffer(0, 0, w)?;
+        generate_input_buffer(1, 1, w)?;
+        generate_output_buffer(2, 0, w)?;
+
+        writeln!(w, "layout(local_size_x = 64) in;")?;
+        writeln!(w, "void main() {{")?;
+
+        writeln!(
+            w,
+            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
+            self.shape.element_count()
+        )?;
+        generate_coord("out_coord", self.shape, w)?;
+
+        writeln!(w, "int in_coord1[1];")?;
+        writeln!(w, "in_coord1[0] = out_coord[{}];", self.axis.index())?;
+        writeln!(w, "int gather_coord = int(input1[")?;
+        generate_load_index(&self.inputs[1], "in_coord1", w)?;
+        writeln!(w, "]);")?;
+
+        writeln!(w, "int in_coord0[{}];", self.inputs[0].output_shape.len())?;
+        for index in 0..self.inputs[0].output_shape.len() {
+            if index == self.axis.index() {
+                writeln!(w, "in_coord0[{}] = gather_coord;", index)?;
+            } else {
+                writeln!(w, "in_coord0[{0}] = out_coord[{0}];", index)?;
+            }
+        }
+        writeln!(w, "output0[gl_GlobalInvocationID.x] = input0[")?;
+        generate_load_index(&self.inputs[0], "in_coord0", w)?;
+        writeln!(w, "];")?;
+
+        writeln!(w, "}}")?;
+
+        Ok(src)
+    }
+
+    fn buffer_count(&self) -> usize {
+        3
+    }
+
+    fn group_count(&self) -> usize {
+        self.shape.element_count().div_round_up(64)
+    }
+
+    fn label_name(&self) -> String {
+        format!("Gather {}", self.shape)
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum GenericKernel {
@@ -703,6 +765,7 @@ pub(crate) enum GenericKernel {
     MatMul(MatMulKernel),
     Unpad(UnpadKernel),
     WindowsToImage(WindowsToImageKernel),
+    Gather(GatherKernel),
 }
 
 impl GenericKernel {
@@ -713,6 +776,7 @@ impl GenericKernel {
             GenericKernel::Reduce(kernel) => kernel,
             GenericKernel::Unpad(kernel) => kernel,
             GenericKernel::WindowsToImage(kernel) => kernel,
+            GenericKernel::Gather(kernel) => kernel,
         }
     }
 }

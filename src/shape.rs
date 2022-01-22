@@ -178,6 +178,12 @@ impl Shape {
         tmp
     }
 
+    pub(crate) fn gather(&self, axis: Axis, length: usize) -> Self {
+        let mut tmp = *self;
+        tmp[axis] = length;
+        tmp
+    }
+
     pub fn coord(&self, axis: Axis) -> Self {
         self.iter_axes()
             .map(|a| if a == axis { self[a] } else { 1 })
