@@ -1,4 +1,4 @@
-use spark::{vk, Builder, Device, Instance, InstanceExtensions, Loader};
+use spark::{vk, Builder, Device, DeviceExtensions, Instance, InstanceExtensions, Loader};
 use std::rc::Rc;
 use std::{ffi::CStr, slice};
 
@@ -25,6 +25,7 @@ pub(crate) struct Context {
     pub(crate) queue_family_properties: vk::QueueFamilyProperties,
     pub(crate) queue: vk::Queue,
     pub(crate) device: Device,
+    pub(crate) has_shader_atomic_float: bool,
 }
 
 pub(crate) type SharedContext = Rc<Context>;
@@ -44,6 +45,9 @@ impl Context {
             let mut extensions = InstanceExtensions::new(version);
             if available_extensions.supports_ext_debug_utils() {
                 extensions.enable_ext_debug_utils();
+            }
+            if available_extensions.supports_ext_shader_atomic_float() {
+                extensions.enable_ext_shader_atomic_float();
             }
             let extension_names = extensions.to_name_vec();
 
@@ -94,14 +98,36 @@ impl Context {
                 .unwrap()
         };
 
+        let mut has_shader_atomic_float = false;
         let device = {
             let queue_priorities = [1.0];
             let device_queue_create_info = vk::DeviceQueueCreateInfo::builder()
                 .queue_family_index(queue_family_index)
                 .p_queue_priorities(&queue_priorities);
 
+            let available_extensions = {
+                let extension_properties = unsafe {
+                    instance.enumerate_device_extension_properties_to_vec(physical_device, None)
+                }
+                .unwrap();
+                DeviceExtensions::from_properties(version, &extension_properties)
+            };
+
+            let mut extensions = DeviceExtensions::new(version);
+            let mut shader_atomic_float_features =
+                vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default();
+            if available_extensions.supports_ext_shader_atomic_float() {
+                extensions.enable_ext_shader_atomic_float();
+                shader_atomic_float_features.shader_buffer_float32_atomic_add = vk::TRUE;
+                has_shader_atomic_float = true;
+            }
+            let extension_names = extensions.to_name_vec();
+
+            let extension_name_ptrs: Vec<_> = extension_names.iter().map(|s| s.as_ptr()).collect();
             let device_create_info = vk::DeviceCreateInfo::builder()
-                .p_queue_create_infos(slice::from_ref(&device_queue_create_info));
+                .p_queue_create_infos(slice::from_ref(&device_queue_create_info))
+                .pp_enabled_extension_names(&extension_name_ptrs)
+                .insert_next(&mut shader_atomic_float_features);
 
             unsafe { instance.create_device(physical_device, &device_create_info, None, version) }
                 .unwrap()
@@ -118,6 +144,7 @@ impl Context {
             queue_family_properties,
             queue,
             device,
+            has_shader_atomic_float,
         })
     }
 

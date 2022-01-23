@@ -267,21 +267,47 @@ impl<'s> Array<'s> {
         self.scope.coord(len).value().reshape(shape.coord(axis))
     }
 
-    pub fn gather(self, axis: impl IntoAxis, index: impl IntoArray<'s>) -> Self {
-        let index = index.into_array(self.scope);
-        let [length]: [usize; 1] = index.shape().try_into().unwrap();
+    pub fn gather(self, axis: impl IntoAxis, indices: impl IntoArray<'s>) -> Self {
+        let indices = indices.into_array(self.scope);
+        let [index_count]: [usize; 1] = indices.shape().try_into().unwrap();
 
         let shape = self.shape();
         let axis = axis.into_axis(shape);
 
         self.scope.with_state(|state| {
-            let shape = shape.gather(axis, length);
+            let shape = shape.resize_axis(axis, index_count);
             Array {
                 node_id: state.ops.new_node(
                     state.next_colour,
                     shape,
                     Op::Gather { axis },
-                    &[self.node_id, index.node_id],
+                    &[self.node_id, indices.node_id],
+                ),
+                scope: self.scope,
+            }
+        })
+    }
+    pub fn scatter_add(
+        self,
+        axis: impl IntoAxis,
+        indices: impl IntoArray<'s>,
+        slot_count: usize,
+    ) -> Self {
+        let indices = indices.into_array(self.scope);
+        let [index_count]: [usize; 1] = indices.shape().try_into().unwrap();
+
+        let shape = self.shape();
+        let axis = axis.into_axis(shape);
+        assert_eq!(shape[axis], index_count);
+
+        self.scope.with_state(|state| {
+            let shape = shape.resize_axis(axis, slot_count);
+            Array {
+                node_id: state.ops.new_node(
+                    state.next_colour,
+                    shape,
+                    Op::ScatterAdd { axis },
+                    &[self.node_id, indices.node_id],
                 ),
                 scope: self.scope,
             }

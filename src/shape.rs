@@ -178,7 +178,7 @@ impl Shape {
         tmp
     }
 
-    pub(crate) fn gather(&self, axis: Axis, length: usize) -> Self {
+    pub(crate) fn resize_axis(&self, axis: Axis, length: usize) -> Self {
         let mut tmp = *self;
         tmp[axis] = length;
         tmp

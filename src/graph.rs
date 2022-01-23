@@ -49,12 +49,39 @@ pub(crate) fn get_arg_sources(
         .collect()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InitialState {
+    Undefined,
+    Zero,
+}
+
+#[derive(Debug)]
+pub(crate) struct ClusterOutput {
+    pub(crate) node_id: OpNodeId,
+    pub(crate) initial_state: InitialState,
+}
+
+impl ClusterOutput {
+    fn new(node_id: OpNodeId) -> Self {
+        Self {
+            node_id,
+            initial_state: InitialState::Undefined,
+        }
+    }
+
+    fn new_zero(node_id: OpNodeId) -> Self {
+        Self {
+            node_id,
+            initial_state: InitialState::Zero,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Cluster {
     pub(crate) kernel: GenericKernel,
     pub(crate) inputs: Vec<OpNodeId>,
-    pub(crate) members: Vec<OpNodeId>,
-    pub(crate) outputs: Vec<OpNodeId>,
+    pub(crate) outputs: Vec<ClusterOutput>,
 }
 
 slotmap::new_key_type! {
@@ -325,7 +352,6 @@ impl Graph {
                         ops: Vec::new(),
                     }),
                     inputs: Vec::new(),
-                    members: Vec::new(),
                     outputs: Vec::new(),
                 }));
                 self.ops[first_node_id].cluster_id = cluster_id;
@@ -400,20 +426,12 @@ impl Graph {
             }
         }
 
-        // build per-element cluster members in usage order
-        for node_id in self.ops_sorted.iter().copied() {
-            if let Some(cluster_id) = self.ops[node_id].cluster_id {
-                self.clusters[cluster_id].members.push(node_id);
-            }
-        }
-
         // finally build the per-element clusters and kernels
         for (cluster_id, cluster) in self.clusters.iter_mut() {
             let kernel = match &mut cluster.kernel {
                 GenericKernel::PerElement(kernel) => kernel,
                 _ => unreachable!(),
             };
-            let members = &cluster.members;
             let inputs = &mut cluster.inputs;
             let outputs = &mut cluster.outputs;
 
@@ -421,7 +439,12 @@ impl Graph {
             let mut member_op_index = HashMap::new();
 
             let ops = &self.ops;
-            for node_id in members.iter().copied() {
+            for node_id in self
+                .ops_sorted
+                .iter()
+                .copied()
+                .filter(|&node_id| Some(cluster_id) == ops[node_id].cluster_id)
+            {
                 // gather the arguments (loading as necessary)
                 let arg_sources = get_arg_sources(ops, node_id);
                 let args: TinyVec<[usize; MAX_OP_ARGS]> = arg_sources
@@ -480,7 +503,7 @@ impl Graph {
                     .any(|other_id| ops[other_id].cluster_id != Some(cluster_id))
                 {
                     kernel.outputs.push(op_index);
-                    outputs.push(node_id);
+                    outputs.push(ClusterOutput::new(node_id));
                 }
             }
         }
@@ -502,8 +525,7 @@ impl Graph {
                                 axis,
                             }),
                             inputs: vec![src0.node_id],
-                            members: vec![node_id],
-                            outputs: vec![node_id],
+                            outputs: vec![ClusterOutput::new(node_id)],
                         }));
                     }
                     Op::MatMul { output_mode } => {
@@ -522,8 +544,7 @@ impl Graph {
                                 inputs: kernel_inputs,
                             }),
                             inputs: arg_sources.iter().map(|src| src.node_id).collect(),
-                            members: vec![node_id],
-                            outputs: vec![node_id],
+                            outputs: vec![ClusterOutput::new(node_id)],
                         }));
                     }
                     Op::Unpad { axis, pad } => {
@@ -538,8 +559,7 @@ impl Graph {
                                 pad,
                             }),
                             inputs: vec![src0.node_id],
-                            members: vec![node_id],
-                            outputs: vec![node_id],
+                            outputs: vec![ClusterOutput::new(node_id)],
                         }));
                     }
                     Op::WindowsToImage { stride } => {
@@ -553,8 +573,7 @@ impl Graph {
                                 stride,
                             }),
                             inputs: vec![src0.node_id],
-                            members: vec![node_id],
-                            outputs: vec![node_id],
+                            outputs: vec![ClusterOutput::new(node_id)],
                         }));
                     }
                     Op::Gather { axis } => {
@@ -569,12 +588,30 @@ impl Graph {
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: GenericKernel::Gather(GatherKernel {
                                 shape: node.shape,
-                                inputs: kernel_inputs,
                                 axis,
+                                inputs: kernel_inputs,
                             }),
                             inputs: arg_sources.iter().map(|src| src.node_id).collect(),
-                            members: vec![node_id],
-                            outputs: vec![node_id],
+                            outputs: vec![ClusterOutput::new(node_id)],
+                        }));
+                    }
+                    Op::ScatterAdd { axis } => {
+                        let arg_sources = get_arg_sources(&self.ops, node_id);
+                        assert_eq!(arg_sources.len(), 2);
+                        let kernel_inputs = arg_sources
+                            .iter()
+                            .map(|src| src.view)
+                            .collect::<ArrayVec<_, 2>>()
+                            .into_inner()
+                            .unwrap();
+                        self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
+                            kernel: GenericKernel::ScatterAdd(ScatterAddKernel {
+                                shape: node.shape,
+                                axis,
+                                inputs: kernel_inputs,
+                            }),
+                            inputs: arg_sources.iter().map(|src| src.node_id).collect(),
+                            outputs: vec![ClusterOutput::new_zero(node_id)],
                         }));
                     }
                     Op::Input { .. } | Op::Output { .. } | Op::Literal(_) | Op::BuiltIn(_) => {}

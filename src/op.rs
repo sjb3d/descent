@@ -81,6 +81,7 @@ pub(crate) enum Op {
     Unpad { axis: Axis, pad: usize },           // TODO: 2D version?
     WindowsToImage { stride: (usize, usize) },
     Gather { axis: Axis },
+    ScatterAdd { axis: Axis },
 }
 
 impl Op {
@@ -134,6 +135,7 @@ impl fmt::Display for Op {
             Self::Unpad { axis, pad } => write!(f, "Unpad{}({})", pad, axis.index()),
             Self::WindowsToImage { .. } => write!(f, "WindowsToImage"),
             Self::Gather { axis } => write!(f, "Gather({})", axis.index()),
+            Self::ScatterAdd { axis } => write!(f, "ScatterAdd({})", axis.index()),
         }
     }
 }

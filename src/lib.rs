@@ -127,7 +127,7 @@ mod tests {
     fn max_pool2d() {
         let mut env = Environment::new();
 
-        let a_data: Vec<_> = (0..100).map(|i| i as f32).collect();
+        let a_data: Vec<f32> = (0..100).map(|i| i as f32).collect();
         let b_data: Vec<f32> = (0..25)
             .map(|i| (11 + 2 * (i % 5) + 20 * (i / 5)) as f32)
             .collect();
@@ -150,9 +150,9 @@ mod tests {
     fn gather() {
         let mut env = Environment::new();
 
-        let a_data: Vec<_> = (0..200).map(|i| (i * i) as f32).collect();
-        let b_data: Vec<_> = (0..100).map(|i| (99 - i) as f32).collect();
-        let c_data: Vec<_> = (0..100).map(|i| ((99 - i) * (99 - i)) as f32).collect();
+        let a_data: Vec<f32> = (0..200).map(|i| (i * i) as f32).collect();
+        let b_data: Vec<f32> = (0..100).map(|i| (99 - i) as f32).collect();
+        let c_data: Vec<f32> = (0..100).map(|i| ((99 - i) * (99 - i)) as f32).collect();
 
         let a_param = env.static_parameter_with_data([1, 200, 1], "a", &a_data);
         let b_param = env.static_parameter_with_data([100], "b", &b_data);
@@ -162,6 +162,34 @@ mod tests {
             scope.write_parameter_value(
                 &c_param,
                 scope.parameter(&a_param).value().gather(1, &b_param),
+            );
+        });
+        env.run(&g, TEST_RAND_SEED);
+
+        assert_eq!(env.read_parameter_to_vec(&c_param), c_data);
+    }
+
+    #[test]
+    fn scatter_add() {
+        let mut env = Environment::new();
+
+        let range = 10;
+
+        let a_data: Vec<f32> = iter::repeat(1.0).take(100).collect();
+        let b_data: Vec<f32> = (0..range).map(|i| i as f32).cycle().take(100).collect();
+        let c_data: Vec<f32> = iter::repeat(10.0).take(10).collect();
+
+        let a_param = env.static_parameter_with_data([1, 100, 1], "a", &a_data);
+        let b_param = env.static_parameter_with_data([100], "b", &b_data);
+        let c_param = env.static_parameter([1, range, 1], "c");
+
+        let g = env.build_graph(|scope| {
+            scope.write_parameter_value(
+                &c_param,
+                scope
+                    .parameter(&a_param)
+                    .value()
+                    .scatter_add(1, &b_param, range),
             );
         });
         env.run(&g, TEST_RAND_SEED);

@@ -2,7 +2,7 @@ use crate::{common::*, device::common::*};
 use petgraph::visit::{IntoNodeReferences, NodeIndexable, NodeRef};
 use rand::{distributions::Open01, Rng};
 use slotmap::SlotMap;
-use spark::{vk, Builder};
+use spark::{vk, Builder, Device};
 use std::{
     cell::RefCell,
     collections::HashSet,
@@ -238,6 +238,93 @@ impl Environment {
         scope.build_graph()
     }
 
+    fn run_kernel(
+        kernel: &GenericKernel,
+        buffer_node_ids: &[OpNodeId],
+        device: &Device,
+        kernel_cache: &mut KernelCache,
+        buffer_heap: &mut BufferHeap,
+        node_storage: &mut [OpNodeStorage],
+        cmd: vk::CommandBuffer,
+        descriptor_pool: vk::DescriptorPool,
+        rand_seed: u32,
+    ) {
+        let module = kernel_cache.module(kernel);
+
+        let descriptor_set = {
+            let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+                .descriptor_pool(descriptor_pool)
+                .p_set_layouts(slice::from_ref(&module.descriptor_set_layout));
+            unsafe { device.allocate_descriptor_sets_single(&descriptor_set_allocate_info) }
+                .unwrap()
+        };
+
+        {
+            let mut buffer_info = Vec::new();
+            for node_id in buffer_node_ids.iter().copied() {
+                let node_state = &node_storage[node_id.index()];
+                let info = buffer_heap.info(node_state.buffer_id.unwrap());
+                buffer_info.push(vk::DescriptorBufferInfo {
+                    buffer: Some(info.buffer),
+                    offset: info.range.begin as vk::DeviceSize,
+                    range: info.range.size() as vk::DeviceSize,
+                });
+            }
+            let mut writes = Vec::new();
+            for (i, info) in buffer_info.iter().enumerate() {
+                writes.push(vk::WriteDescriptorSet {
+                    dst_set: Some(descriptor_set),
+                    dst_binding: i as u32,
+                    descriptor_count: 1,
+                    descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+                    p_buffer_info: info,
+                    ..Default::default()
+                });
+            }
+            unsafe { device.update_descriptor_sets(&writes, &[]) };
+        }
+
+        unsafe {
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, module.pipeline);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                module.pipeline_layout,
+                0,
+                slice::from_ref(&descriptor_set),
+                &[],
+            );
+            device.cmd_push_constants(
+                cmd,
+                module.pipeline_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                slice::from_ref(&rand_seed),
+            );
+            device.cmd_dispatch(cmd, module.group_count as u32, 1, 1);
+        }
+
+        {
+            // ensure that compute results are visible for next kernel
+            let memory_barrier = vk::MemoryBarrier {
+                src_access_mask: vk::AccessFlags::SHADER_WRITE,
+                dst_access_mask: vk::AccessFlags::SHADER_READ,
+                ..Default::default()
+            };
+            unsafe {
+                device.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::DependencyFlags::empty(),
+                    slice::from_ref(&memory_barrier),
+                    &[],
+                    &[],
+                );
+            }
+        }
+    }
+
     pub fn run(&mut self, graph: &Graph, rand_seed: u32) {
         let mut parameters = self.parameters.borrow_mut();
 
@@ -316,112 +403,73 @@ impl Environment {
         let mut timestamps = self.timestamps.acquire(cmd.get(), &self.fences);
         for cluster_id in graph.clusters_sorted.iter().copied() {
             let cluster = &graph.clusters[cluster_id];
-            for node_id in cluster.outputs.iter().copied() {
-                let node_state = &mut node_storage[node_id.index()];
+            for output in cluster.outputs.iter() {
+                let node_state = &mut node_storage[output.node_id.index()];
                 assert!(node_state.buffer_id.is_none());
-                node_state.buffer_id = Some(
-                    self.buffer_heap
-                        .alloc(graph.ops[node_id].shape.buffer_size())
-                        .unwrap(),
-                );
-            }
-
-            let module = self.kernel_cache.module(&cluster.kernel);
-
-            let descriptor_set = {
-                let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
-                    .descriptor_pool(descriptor_pool.get())
-                    .p_set_layouts(slice::from_ref(&module.descriptor_set_layout));
-                unsafe { device.allocate_descriptor_sets_single(&descriptor_set_allocate_info) }
-                    .unwrap()
-            };
-
-            {
-                let mut buffer_info = Vec::new();
-                for node_id in cluster
-                    .inputs
-                    .iter()
-                    .copied()
-                    .chain(cluster.outputs.iter().copied())
-                {
-                    let node_state = &node_storage[node_id.index()];
-                    let info = self.buffer_heap.info(node_state.buffer_id.unwrap());
-                    buffer_info.push(vk::DescriptorBufferInfo {
-                        buffer: Some(info.buffer),
-                        offset: info.range.begin as vk::DeviceSize,
-                        range: info.range.size() as vk::DeviceSize,
-                    });
-                }
-                let mut writes = Vec::new();
-                for (i, info) in buffer_info.iter().enumerate() {
-                    writes.push(vk::WriteDescriptorSet {
-                        dst_set: Some(descriptor_set),
-                        dst_binding: i as u32,
-                        descriptor_count: 1,
-                        descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
-                        p_buffer_info: info,
-                        ..Default::default()
-                    });
-                }
-                unsafe { self.context.device.update_descriptor_sets(&writes, &[]) };
-            }
-
-            unsafe {
-                let label_name = cluster.kernel.label_name();
-                timestamps.write_timestamp(cmd.get(), &label_name);
-                if instance.extensions.ext_debug_utils {
-                    let label_name = CString::new(label_name).unwrap();
-                    let label = vk::DebugUtilsLabelEXT {
-                        p_label_name: label_name.as_bytes_with_nul().as_ptr() as *const i8,
-                        ..Default::default()
-                    };
-                    instance.cmd_begin_debug_utils_label_ext(cmd.get(), &label);
-                }
-                device.cmd_bind_pipeline(
-                    cmd.get(),
-                    vk::PipelineBindPoint::COMPUTE,
-                    module.pipeline,
-                );
-                device.cmd_bind_descriptor_sets(
-                    cmd.get(),
-                    vk::PipelineBindPoint::COMPUTE,
-                    module.pipeline_layout,
-                    0,
-                    slice::from_ref(&descriptor_set),
-                    &[],
-                );
-                device.cmd_push_constants(
-                    cmd.get(),
-                    module.pipeline_layout,
-                    vk::ShaderStageFlags::COMPUTE,
-                    0,
-                    slice::from_ref(&rand_seed),
-                );
-                device.cmd_dispatch(cmd.get(), module.group_count as u32, 1, 1);
-            }
-
-            {
-                // ensure that compute results are visible for next kernel
-                let memory_barrier = vk::MemoryBarrier {
-                    src_access_mask: vk::AccessFlags::SHADER_WRITE,
-                    dst_access_mask: vk::AccessFlags::SHADER_READ,
-                    ..Default::default()
-                };
-                unsafe {
-                    device.cmd_pipeline_barrier(
-                        cmd.get(),
-                        vk::PipelineStageFlags::COMPUTE_SHADER,
-                        vk::PipelineStageFlags::COMPUTE_SHADER,
-                        vk::DependencyFlags::empty(),
-                        slice::from_ref(&memory_barrier),
-                        &[],
-                        &[],
-                    );
-                    if instance.extensions.ext_debug_utils {
-                        instance.cmd_end_debug_utils_label_ext(cmd.get());
+                let shape = graph.ops[output.node_id].shape;
+                node_state.buffer_id = Some(self.buffer_heap.alloc(shape.buffer_size()).unwrap());
+                match output.initial_state {
+                    InitialState::Undefined => {}
+                    InitialState::Zero => {
+                        let kernel = GenericKernel::Zero(ZeroKernel {
+                            element_count: shape.element_count(),
+                        });
+                        Self::run_kernel(
+                            &kernel,
+                            &[output.node_id],
+                            device,
+                            &mut self.kernel_cache,
+                            &mut self.buffer_heap,
+                            &mut node_storage,
+                            cmd.get(),
+                            descriptor_pool.get(),
+                            rand_seed,
+                        );
                     }
                 }
             }
+
+            let label_name = cluster.kernel.label_name();
+            timestamps.write_timestamp(cmd.get(), &label_name);
+            if instance.extensions.ext_debug_utils {
+                let label_name = CString::new(label_name).unwrap();
+                let label = vk::DebugUtilsLabelEXT {
+                    p_label_name: label_name.as_bytes_with_nul().as_ptr() as *const i8,
+                    ..Default::default()
+                };
+                unsafe {
+                    self.context
+                        .instance
+                        .cmd_begin_debug_utils_label_ext(cmd.get(), &label);
+                }
+            }
+
+            let buffer_node_ids: Vec<_> = cluster
+                .inputs
+                .iter()
+                .copied()
+                .chain(cluster.outputs.iter().map(|output| output.node_id))
+                .collect();
+            Self::run_kernel(
+                &cluster.kernel,
+                &buffer_node_ids,
+                device,
+                &mut self.kernel_cache,
+                &mut self.buffer_heap,
+                &mut node_storage,
+                cmd.get(),
+                descriptor_pool.get(),
+                rand_seed,
+            );
+
+            if instance.extensions.ext_debug_utils {
+                unsafe {
+                    self.context
+                        .instance
+                        .cmd_end_debug_utils_label_ext(cmd.get());
+                }
+            }
+
             for node_id in cluster.inputs.iter().copied() {
                 let node_state = &mut node_storage[node_id.index()];
                 node_state.usage_count -= 1;

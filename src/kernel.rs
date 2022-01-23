@@ -43,6 +43,20 @@ fn generate_input_buffer(
     Ok(())
 }
 
+fn generate_atomic_buffer(
+    binding_index: usize,
+    output_index: usize,
+    w: &mut impl Write,
+) -> fmt::Result {
+    writeln!(w, "layout(std430, set = 0, binding = {})", binding_index)?;
+    writeln!(
+        w,
+        "restrict buffer output_layout{0} {{ float output{0}[]; }};",
+        output_index
+    )?;
+    Ok(())
+}
+
 fn generate_output_buffer(
     binding_index: usize,
     output_index: usize,
@@ -118,6 +132,49 @@ pub(crate) trait Kernel {
     fn buffer_count(&self) -> usize;
     fn group_count(&self) -> usize;
     fn label_name(&self) -> String;
+    fn requires_atomic_float(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ZeroKernel {
+    pub(crate) element_count: usize,
+}
+
+impl Kernel for ZeroKernel {
+    fn generate_source(&self) -> Result<String, fmt::Error> {
+        let mut src = String::new();
+        let w = &mut src;
+
+        generate_output_buffer(0, 0, w)?;
+
+        writeln!(w, "layout(local_size_x = 64) in;")?;
+        writeln!(w, "void main() {{")?;
+
+        writeln!(
+            w,
+            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
+            self.element_count
+        )?;
+        writeln!(w, "output0[gl_GlobalInvocationID.x] = 0.0f;")?;
+
+        writeln!(w, "}}")?;
+
+        Ok(src)
+    }
+
+    fn buffer_count(&self) -> usize {
+        1
+    }
+
+    fn group_count(&self) -> usize {
+        self.element_count.div_round_up(64)
+    }
+
+    fn label_name(&self) -> String {
+        format!("Zero {}", self.element_count)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -719,24 +776,17 @@ impl Kernel for GatherKernel {
             "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
             self.shape.element_count()
         )?;
-        generate_coord("out_coord", self.shape, w)?;
+        generate_coord("tmp_coord", self.shape, w)?;
 
         writeln!(w, "int in_coord1[1];")?;
-        writeln!(w, "in_coord1[0] = out_coord[{}];", self.axis.index())?;
-        writeln!(w, "int gather_coord = int(input1[")?;
+        writeln!(w, "in_coord1[0] = tmp_coord[{}];", self.axis.index())?;
+        writeln!(w, "int gather_index = int(input1[")?;
         generate_load_index(&self.inputs[1], "in_coord1", w)?;
         writeln!(w, "]);")?;
+        writeln!(w, "tmp_coord[{}] = gather_index;", self.axis.index())?;
 
-        writeln!(w, "int in_coord0[{}];", self.inputs[0].output_shape.len())?;
-        for index in 0..self.inputs[0].output_shape.len() {
-            if index == self.axis.index() {
-                writeln!(w, "in_coord0[{}] = gather_coord;", index)?;
-            } else {
-                writeln!(w, "in_coord0[{0}] = out_coord[{0}];", index)?;
-            }
-        }
         writeln!(w, "output0[gl_GlobalInvocationID.x] = input0[")?;
-        generate_load_index(&self.inputs[0], "in_coord0", w)?;
+        generate_load_index(&self.inputs[0], "tmp_coord", w)?;
         writeln!(w, "];")?;
 
         writeln!(w, "}}")?;
@@ -757,26 +807,102 @@ impl Kernel for GatherKernel {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ScatterAddKernel {
+    pub(crate) shape: Shape,
+    pub(crate) axis: Axis,
+    pub(crate) inputs: [View; 2],
+}
+
+impl ScatterAddKernel {
+    fn kernel_shape(&self) -> Shape {
+        let [index_count]: [usize; 1] = self.inputs[1].output_shape.try_into().unwrap();
+        self.shape.resize_axis(self.axis, index_count)
+    }
+}
+
+impl Kernel for ScatterAddKernel {
+    fn generate_source(&self) -> Result<String, fmt::Error> {
+        let mut src = String::new();
+        let w = &mut src;
+
+        let kernel_shape = self.kernel_shape();
+
+        generate_input_buffer(0, 0, w)?;
+        generate_input_buffer(1, 1, w)?;
+        generate_atomic_buffer(2, 0, w)?;
+
+        writeln!(w, "layout(local_size_x = 64) in;")?;
+        writeln!(w, "void main() {{")?;
+
+        writeln!(
+            w,
+            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
+            kernel_shape.element_count()
+        )?;
+
+        generate_coord("tmp_coord", kernel_shape, w)?;
+        writeln!(w, "float value = input0[")?;
+        generate_load_index(&self.inputs[0], "tmp_coord", w)?;
+        writeln!(w, "];")?;
+
+        writeln!(w, "int in_coord1[1];")?;
+        writeln!(w, "in_coord1[0] = tmp_coord[{}];", self.axis.index())?;
+        writeln!(w, "int scatter_index = int(input1[")?;
+        generate_load_index(&self.inputs[1], "in_coord1", w)?;
+        writeln!(w, "]);")?;
+        writeln!(w, "tmp_coord[{}] = scatter_index;", self.axis.index())?;
+
+        writeln!(w, "atomicAdd(output0[")?;
+        generate_load_index(&self.shape.identity_view(), "tmp_coord", w)?;
+        writeln!(w, "], value);")?;
+
+        writeln!(w, "}}")?;
+
+        Ok(src)
+    }
+
+    fn buffer_count(&self) -> usize {
+        3
+    }
+
+    fn group_count(&self) -> usize {
+        self.kernel_shape().element_count().div_round_up(64)
+    }
+
+    fn label_name(&self) -> String {
+        format!("ScatterAdd {}", self.kernel_shape())
+    }
+
+    fn requires_atomic_float(&self) -> bool {
+        true
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum GenericKernel {
+    Zero(ZeroKernel),
     PerElement(PerElementKernel),
     Reduce(ReduceKernel),
     MatMul(MatMulKernel),
     Unpad(UnpadKernel),
     WindowsToImage(WindowsToImageKernel),
     Gather(GatherKernel),
+    ScatterAdd(ScatterAddKernel),
 }
 
 impl GenericKernel {
     fn as_kernel(&self) -> &dyn Kernel {
         match self {
+            GenericKernel::Zero(kernel) => kernel,
             GenericKernel::PerElement(kernel) => kernel,
             GenericKernel::MatMul(kernel) => kernel,
             GenericKernel::Reduce(kernel) => kernel,
             GenericKernel::Unpad(kernel) => kernel,
             GenericKernel::WindowsToImage(kernel) => kernel,
             GenericKernel::Gather(kernel) => kernel,
+            GenericKernel::ScatterAdd(kernel) => kernel,
         }
     }
 }
@@ -796,6 +922,10 @@ impl Kernel for GenericKernel {
 
     fn label_name(&self) -> String {
         self.as_kernel().label_name()
+    }
+
+    fn requires_atomic_float(&self) -> bool {
+        self.as_kernel().requires_atomic_float()
     }
 }
 
@@ -828,6 +958,11 @@ impl KernelCacheWorker {
         //println!("{}", source);
 
         source.insert_str(0, include_str!("kernel_common.glsl"));
+        if kernel.requires_atomic_float() {
+            assert!(self.context.has_shader_atomic_float);
+            source.insert_str(0, "#extension GL_EXT_shader_atomic_float : require\n");
+        }
+        source.insert_str(0, "#version 460 core\n");
 
         let shader_module = match self.compiler.compile_into_spirv(
             &source,

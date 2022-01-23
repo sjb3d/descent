@@ -1,5 +1,3 @@
-#version 460 core
-
 void compute_grid_coord(
     uint remain,
     out int coord[1],
