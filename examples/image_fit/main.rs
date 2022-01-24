@@ -18,6 +18,7 @@ enum NetworkType {
     Relu,
     ReluPE,
     Siren,
+    HashGrid,
 }
 
 #[derive(Debug, StructOpt)]
@@ -116,6 +117,75 @@ impl Module for Siren {
     }
 }
 
+struct HashGrid {
+    t: Parameter,
+}
+
+impl HashGrid {
+    const GRID_SIZE: usize = 64;
+    const ENTRY_COUNT: usize = 1024;
+
+    fn new(env: &mut Environment) -> Self {
+        let t = env.trainable_parameter(
+            [Self::ENTRY_COUNT, 3],
+            "t",
+            Initializer::RandUniform(1.0E-4),
+        );
+        Self { t }
+    }
+}
+
+impl Module for HashGrid {
+    fn eval<'s>(&self, input: DualArray<'s>, _ctx: &EvalContext) -> DualArray<'s> {
+        let scope = input.scope();
+        let (x, _dx) = input.into_inner();
+
+        const N: u32 = HashGrid::ENTRY_COUNT as u32;
+        const P: u32 = 1526263;
+
+        let cf = (x * 0.5 + 0.5) * (HashGrid::GRID_SIZE as f32);
+        let c = cf.into_u32();
+        let f = cf - c.into_f32();
+
+        let c0 = c.subset(-1, 0, false);
+        let c1 = c.subset(-1, 1, false);
+        let f0 = f.subset(-1, 0, true);
+        let f1 = f.subset(-1, 1, true);
+
+        let ia = ((c0 + 0) ^ (c1 * P + 0)) % N;
+        let ib = ((c0 + 1) ^ (c1 * P + 0)) % N;
+        let ic = ((c0 + 0) ^ (c1 * P + P)) % N;
+        let id = ((c0 + 1) ^ (c1 * P + P)) % N;
+
+        let (t, dt) = scope.parameter(&self.t).into_inner();
+        let ta = t.gather(-2, ia);
+        let tb = t.gather(-2, ib);
+        let tc = t.gather(-2, ic);
+        let td = t.gather(-2, id);
+        let g0 = 1.0 - f0;
+        let g1 = 1.0 - f1;
+        let wa = g0 * g1;
+        let wb = f0 * g1;
+        let wc = g0 * f1;
+        let wd = f0 * f1;
+
+        let (y, dy) = (ta * wa + tb * wb + tc * wc + td * wd).with_empty_grad();
+
+        dt.accumulate(
+            scope
+                .literal(0.0)
+                .value()
+                .broadcast(dt.shape())
+                .scatter_add(dy * wa, -2, ia)
+                .scatter_add(dy * wb, -2, ib)
+                .scatter_add(dy * wc, -2, ic)
+                .scatter_add(dy * wd, -2, id),
+        );
+
+        (y, dy).into()
+    }
+}
+
 fn positional_encoding<'s>(x: DualArray<'s>, freq_count: usize) -> DualArray<'s> {
     let scope = x.scope();
 
@@ -154,6 +224,7 @@ fn main() {
             NetworkType::Relu => Box::new(Relu::new(env, 0, hidden_units)),
             NetworkType::ReluPE => Box::new(Relu::new(env, pe_freq_count, hidden_units)),
             NetworkType::Siren => Box::new(Siren::new(env, hidden_units)),
+            NetworkType::HashGrid => Box::new(HashGrid::new(env)),
         }
     };
 

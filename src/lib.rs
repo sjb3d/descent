@@ -161,7 +161,9 @@ mod tests {
         let g = env.build_graph(|scope| {
             scope.write_parameter_value(
                 &c_param,
-                scope.parameter(&a_param).value().gather(1, &b_param),
+                scope
+                    .parameter_value(&a_param)
+                    .gather(1, scope.parameter_value(&b_param).into_u32()),
             );
         });
         env.run(&g, TEST_RAND_SEED);
@@ -187,11 +189,13 @@ mod tests {
             scope.write_parameter_value(
                 &c_param,
                 scope
-                    .parameter(&a_param)
+                    .literal(0.0)
                     .value()
-                    .scatter_add(1, &b_param, range),
+                    .broadcast([1, range, 1])
+                    .scatter_add(&a_param, -2, scope.parameter_value(&b_param).into_u32()),
             );
         });
+        g.write_dot_file(KernelDotOutput::Cluster, "scatter_add.dot");
         env.run(&g, TEST_RAND_SEED);
 
         assert_eq!(env.read_parameter_to_vec(&c_param), c_data);

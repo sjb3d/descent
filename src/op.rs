@@ -20,6 +20,12 @@ pub(crate) type OpNodeId = NodeIndex<usize>;
 pub(crate) type OpEdgeId = EdgeIndex<usize>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Literal {
+    F32(NotNan<f32>),
+    U32(u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ReduceOp {
     Max,
     Sum,
@@ -44,6 +50,10 @@ pub(crate) enum BinaryOp {
     Mul,
     Div,
     Pow,
+    UAdd,
+    UMul,
+    URem,
+    UBitXor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +65,8 @@ pub(crate) enum UnaryOp {
     Log,
     Sin,
     Cos,
+    FloatToUint,
+    UintToFloat,
 }
 
 pub(crate) const MAX_OP_ARGS: usize = 4;
@@ -71,7 +83,7 @@ pub(crate) enum MatMulOutputMode {
 pub(crate) enum Op {
     Input { parameter_id: ParameterId },
     Output { parameter_id: ParameterId },
-    Literal(NotNan<f32>),
+    Literal(Literal),
     BuiltIn(BuiltInOp),
     Unary(UnaryOp),
     Binary(BinaryOp),

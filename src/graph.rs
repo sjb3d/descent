@@ -1,5 +1,4 @@
 use crate::common::*;
-use arrayvec::ArrayVec;
 use ordered_float::NotNan;
 use petgraph::{
     prelude::*,
@@ -52,7 +51,7 @@ pub(crate) fn get_arg_sources(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InitialState {
     Undefined,
-    Zero,
+    CopyFrom(OpNodeId),
 }
 
 #[derive(Debug)]
@@ -69,10 +68,10 @@ impl ClusterOutput {
         }
     }
 
-    fn new_zero(node_id: OpNodeId) -> Self {
+    fn copy(dst_node_id: OpNodeId, src_node_id: OpNodeId) -> Self {
         Self {
-            node_id,
-            initial_state: InitialState::Zero,
+            node_id: dst_node_id,
+            initial_state: InitialState::CopyFrom(src_node_id),
         }
     }
 }
@@ -217,19 +216,22 @@ impl Graph {
     fn simplify_arithmetic(&mut self) {
         let mut mov_added = false;
         for node_id in self.ops_sorted.iter().copied() {
-            if matches!(&self.ops[node_id].op, Op::Binary(BinaryOp::Mul)) {
+            let skip_literal = match &self.ops[node_id].op {
+                Op::Binary(BinaryOp::Mul) => Some(Literal::F32(NotNan::new(1.0).unwrap())),
+                Op::Binary(BinaryOp::Add) => Some(Literal::F32(NotNan::new(0.0).unwrap())),
+                Op::Binary(BinaryOp::UMul) => Some(Literal::U32(1)),
+                Op::Binary(BinaryOp::UAdd) => Some(Literal::U32(0)),
+                _ => None,
+            };
+            if let Some(skip_literal) = skip_literal {
                 let arg_edge_ids = get_arg_edge_ids(&self.ops, node_id);
-                assert_eq!(arg_edge_ids.len(), 2);
-                let literal_one_edge_id = arg_edge_ids.iter().copied().find(|&edge_id| {
+                let skip_literal_edge_id = arg_edge_ids.iter().copied().find(|&edge_id| {
                     let src_node_id = self.ops.edge_endpoints(edge_id).unwrap().0;
-                    match &self.ops[src_node_id].op {
-                        Op::Literal(value) => *value == unsafe { NotNan::new_unchecked(1.0) },
-                        _ => false,
-                    }
+                    self.ops[src_node_id].op == Op::Literal(skip_literal)
                 });
-                if let Some(literal_one_edge_id) = literal_one_edge_id {
+                if let Some(skip_literal_edge_id) = skip_literal_edge_id {
                     for edge_id in arg_edge_ids.iter().copied() {
-                        if edge_id == literal_one_edge_id {
+                        if edge_id == skip_literal_edge_id {
                             self.ops.remove_edge(edge_id);
                         } else {
                             self.ops[node_id].op = Op::Unary(UnaryOp::Mov);
@@ -531,19 +533,16 @@ impl Graph {
                     Op::MatMul { output_mode } => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
                         assert_eq!(arg_sources.len(), 2);
-                        let kernel_inputs = arg_sources
-                            .iter()
-                            .map(|src| src.view)
-                            .collect::<ArrayVec<_, 2>>()
-                            .into_inner()
-                            .unwrap();
+                        let a = &arg_sources[0];
+                        let b = &arg_sources[1];
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: GenericKernel::MatMul(MatMulKernel {
                                 shape: node.shape,
                                 output_mode,
-                                inputs: kernel_inputs,
+                                a: a.view,
+                                b: b.view,
                             }),
-                            inputs: arg_sources.iter().map(|src| src.node_id).collect(),
+                            inputs: vec![a.node_id, b.node_id],
                             outputs: vec![ClusterOutput::new(node_id)],
                         }));
                     }
@@ -579,39 +578,38 @@ impl Graph {
                     Op::Gather { axis } => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
                         assert_eq!(arg_sources.len(), 2);
-                        let kernel_inputs = arg_sources
-                            .iter()
-                            .map(|src| src.view)
-                            .collect::<ArrayVec<_, 2>>()
-                            .into_inner()
-                            .unwrap();
+                        let values = &arg_sources[0];
+                        let indices = &arg_sources[1];
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: GenericKernel::Gather(GatherKernel {
                                 shape: node.shape,
+                                values: values.view,
                                 axis,
-                                inputs: kernel_inputs,
+                                indices: indices.view,
                             }),
-                            inputs: arg_sources.iter().map(|src| src.node_id).collect(),
+                            inputs: vec![values.node_id, indices.node_id],
                             outputs: vec![ClusterOutput::new(node_id)],
                         }));
                     }
                     Op::ScatterAdd { axis } => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
-                        assert_eq!(arg_sources.len(), 2);
-                        let kernel_inputs = arg_sources
-                            .iter()
-                            .map(|src| src.view)
-                            .collect::<ArrayVec<_, 2>>()
-                            .into_inner()
-                            .unwrap();
+                        assert_eq!(arg_sources.len(), 3);
+                        let acc = &arg_sources[0];
+                        let values = &arg_sources[1];
+                        let indices = &arg_sources[2];
+                        assert!(
+                            acc.view.is_contiguous()
+                                || matches!(self.ops[acc.node_id].op, Op::Literal(_))
+                        );
                         self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
                             kernel: GenericKernel::ScatterAdd(ScatterAddKernel {
                                 shape: node.shape,
+                                values: values.view,
                                 axis,
-                                inputs: kernel_inputs,
+                                indices: indices.view,
                             }),
-                            inputs: arg_sources.iter().map(|src| src.node_id).collect(),
-                            outputs: vec![ClusterOutput::new_zero(node_id)],
+                            inputs: vec![values.node_id, indices.node_id],
+                            outputs: vec![ClusterOutput::copy(node_id, acc.node_id)],
                         }));
                     }
                     Op::Input { .. } | Op::Output { .. } | Op::Literal(_) | Op::BuiltIn(_) => {}
@@ -666,12 +664,20 @@ impl Graph {
             {
                 let node = node_ref.weight();
                 if let Op::Literal(value) = &node.op {
-                    writeln!(
-                        w,
-                        "n{} [shape=none,label=\"{:E}\"];",
-                        node_ref.id().index(),
-                        value.into_inner()
-                    )?;
+                    match value {
+                        Literal::F32(value) => writeln!(
+                            w,
+                            "n{} [shape=none,label=\"{:E}\"];",
+                            node_ref.id().index(),
+                            value.into_inner()
+                        )?,
+                        Literal::U32(value) => writeln!(
+                            w,
+                            "n{} [shape=none,label=\"{}\"];",
+                            node_ref.id().index(),
+                            value
+                        )?,
+                    }
                 } else {
                     let hasher = if kernel_output == KernelDotOutput::Color {
                         cluster_id.map(|cluster_id| {

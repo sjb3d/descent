@@ -12,6 +12,12 @@ pub struct Array<'s> {
 }
 
 #[derive(Clone, Copy)]
+pub struct UArray<'s> {
+    node_id: OpNodeId,
+    scope: &'s Scope,
+}
+
+#[derive(Clone, Copy)]
 pub struct DualArray<'s> {
     value_node_id: OpNodeId,
     loss_grad_node_id: OpNodeId,
@@ -34,6 +40,20 @@ impl<'s> IntoArray<'s> for f32 {
 impl<'s> IntoArray<'s> for &Parameter {
     fn into_array(self, scope: &'s Scope) -> Array<'s> {
         scope.parameter_value(self)
+    }
+}
+
+pub trait IntoUArray<'s> {
+    fn into_array(self, scope: &'s Scope) -> UArray<'s>;
+}
+impl<'s> IntoUArray<'s> for UArray<'s> {
+    fn into_array(self, _scope: &'s Scope) -> UArray<'s> {
+        self
+    }
+}
+impl<'s> IntoUArray<'s> for u32 {
+    fn into_array(self, scope: &'s Scope) -> UArray<'s> {
+        scope.literal_u32(self)
     }
 }
 
@@ -76,11 +96,128 @@ impl IntoAxis for isize {
     }
 }
 
-impl<'s> Array<'s> {
-    pub fn scope(&self) -> &'s Scope {
-        self.scope
-    }
+macro_rules! implement_array_common {
+    ($array:ident, $intoarray:ident) => {
+        impl<'s> $array<'s> {
+            pub fn scope(&self) -> &'s Scope {
+                self.scope
+            }
 
+            fn view(self, view: View) -> Self {
+                self.scope.with_state(|state| {
+                    let node_id = state.ops.new_node(
+                        state.next_colour,
+                        view.output_shape,
+                        Op::Unary(UnaryOp::Mov),
+                        &[],
+                    );
+                    state
+                        .ops
+                        .add_edge(self.node_id, node_id, OpEdge { arg: 0, view });
+                    $array {
+                        node_id,
+                        scope: self.scope,
+                    }
+                })
+            }
+
+            pub fn broadcast(self, shape: impl Into<Shape>) -> Self {
+                self.view(View::broadcast(self.shape(), shape.into()))
+            }
+
+            fn unary_op(self, op: UnaryOp) -> Self {
+                self.scope.with_state(|state| {
+                    let shape = state.ops[self.node_id].shape;
+                    $array {
+                        node_id: state.ops.new_node(
+                            state.next_colour,
+                            shape,
+                            Op::Unary(op),
+                            &[self.node_id],
+                        ),
+                        scope: self.scope,
+                    }
+                })
+            }
+
+            fn binary_op(self, rhs: impl $intoarray<'s>, op: BinaryOp) -> Self {
+                let rhs = rhs.into_array(self.scope);
+                let op_shape = self.scope.with_state(|state| {
+                    state.ops[self.node_id]
+                        .shape
+                        .broadcast_with(state.ops[rhs.node_id].shape)
+                });
+
+                let lhs = self.broadcast(op_shape).node_id;
+                let rhs = rhs.broadcast(op_shape).node_id;
+
+                self.scope.with_state(|state| $array {
+                    node_id: state.ops.new_node(
+                        state.next_colour,
+                        op_shape,
+                        Op::Binary(op),
+                        &[lhs, rhs],
+                    ),
+                    scope: self.scope,
+                })
+            }
+
+            fn keep_axis(self, axis: impl IntoAxis, keep_axis: bool) -> Self {
+                if keep_axis {
+                    self
+                } else {
+                    let axis = axis.into_axis(self.shape());
+                    self.remove_axis(axis)
+                }
+            }
+
+            pub(crate) fn remove_axis(self, axis: Axis) -> Self {
+                let mut shape = self.shape();
+                shape.remove_axis(axis);
+                self.reshape(shape)
+            }
+
+            pub fn subset(self, axis: impl IntoAxis, coord: usize, keep_axis: bool) -> Self {
+                let shape = self.shape();
+                let axis = axis.into_axis(shape);
+                self.view(View::subset(shape, axis, coord))
+                    .keep_axis(axis, keep_axis)
+            }
+
+            pub fn reshape(self, shape: impl Into<Shape>) -> Self {
+                self.scope.with_state(|state| {
+                    let shape = shape.into();
+                    assert_eq!(
+                        state.ops[self.node_id].shape.element_count(),
+                        shape.element_count()
+                    );
+                    $array {
+                        node_id: state.ops.new_node(
+                            state.next_colour,
+                            shape,
+                            Op::Unary(UnaryOp::Mov),
+                            &[self.node_id],
+                        ),
+                        scope: self.scope,
+                    }
+                })
+            }
+
+            pub fn transpose(self) -> Self {
+                self.view(self.shape().identity_view().transposed())
+            }
+
+            pub fn shape(&self) -> Shape {
+                self.scope.with_state(|state| state.ops[self.node_id].shape)
+            }
+        }
+    };
+}
+
+implement_array_common!(Array, IntoArray);
+implement_array_common!(UArray, IntoUArray);
+
+impl<'s> Array<'s> {
     pub fn with_empty_grad(self) -> (Self, Self) {
         let grad = self.scope.with_state(|state| {
             let shape = state.ops[self.node_id].shape;
@@ -92,28 +229,6 @@ impl<'s> Array<'s> {
             }
         });
         (self, grad)
-    }
-
-    fn view(self, view: View) -> Self {
-        self.scope.with_state(|state| {
-            let node_id = state.ops.new_node(
-                state.next_colour,
-                view.output_shape,
-                Op::Unary(UnaryOp::Mov),
-                &[],
-            );
-            state
-                .ops
-                .add_edge(self.node_id, node_id, OpEdge { arg: 0, view });
-            Array {
-                node_id,
-                scope: self.scope,
-            }
-        })
-    }
-
-    fn broadcast(self, shape: Shape) -> Self {
-        self.view(View::broadcast(self.shape(), shape))
     }
 
     fn unbroadcast(self, shape: Shape) -> Self {
@@ -137,40 +252,6 @@ impl<'s> Array<'s> {
             }
         }
         output
-    }
-
-    fn unary_op(self, op: UnaryOp) -> Self {
-        self.scope.with_state(|state| {
-            let shape = state.ops[self.node_id].shape;
-            Array {
-                node_id: state.ops.new_node(
-                    state.next_colour,
-                    shape,
-                    Op::Unary(op),
-                    &[self.node_id],
-                ),
-                scope: self.scope,
-            }
-        })
-    }
-
-    fn binary_op(self, rhs: impl IntoArray<'s>, op: BinaryOp) -> Self {
-        let rhs = rhs.into_array(self.scope);
-        let op_shape = self.scope.with_state(|state| {
-            state.ops[self.node_id]
-                .shape
-                .broadcast_with(state.ops[rhs.node_id].shape)
-        });
-
-        let lhs = self.broadcast(op_shape).node_id;
-        let rhs = rhs.broadcast(op_shape).node_id;
-
-        self.scope.with_state(|state| Array {
-            node_id: state
-                .ops
-                .new_node(state.next_colour, op_shape, Op::Binary(op), &[lhs, rhs]),
-            scope: self.scope,
-        })
     }
 
     fn compare_and_select(
@@ -229,15 +310,6 @@ impl<'s> Array<'s> {
         }
     }
 
-    fn keep_axis(self, axis: impl IntoAxis, keep_axis: bool) -> Self {
-        if keep_axis {
-            self
-        } else {
-            let axis = axis.into_axis(self.shape());
-            self.remove_axis(axis)
-        }
-    }
-
     pub fn one_hot(self, count: usize) -> Self {
         self.scope.coord(count).value().select_eq(self, 1.0, 0.0)
     }
@@ -267,7 +339,7 @@ impl<'s> Array<'s> {
         self.scope.coord(len).value().reshape(shape.coord(axis))
     }
 
-    pub fn gather(self, axis: impl IntoAxis, indices: impl IntoArray<'s>) -> Self {
+    pub fn gather(self, axis: impl IntoAxis, indices: impl IntoUArray<'s>) -> Self {
         let indices = indices.into_array(self.scope);
         let [index_count]: [usize; 1] = indices.shape().try_into().unwrap();
 
@@ -289,28 +361,30 @@ impl<'s> Array<'s> {
     }
     pub fn scatter_add(
         self,
+        values: impl IntoArray<'s>,
         axis: impl IntoAxis,
-        indices: impl IntoArray<'s>,
-        slot_count: usize,
+        indices: impl IntoUArray<'s>,
     ) -> Self {
+        let shape = self.shape();
+
+        let values = values.into_array(self.scope);
+        let values_shape = values.shape();
+
+        let axis = axis.into_axis(shape);
+
         let indices = indices.into_array(self.scope);
         let [index_count]: [usize; 1] = indices.shape().try_into().unwrap();
 
-        let shape = self.shape();
-        let axis = axis.into_axis(shape);
-        assert_eq!(shape[axis], index_count);
+        assert_eq!(shape.resize_axis(axis, index_count), values_shape);
 
-        self.scope.with_state(|state| {
-            let shape = shape.resize_axis(axis, slot_count);
-            Array {
-                node_id: state.ops.new_node(
-                    state.next_colour,
-                    shape,
-                    Op::ScatterAdd { axis },
-                    &[self.node_id, indices.node_id],
-                ),
-                scope: self.scope,
-            }
+        self.scope.with_state(|state| Array {
+            node_id: state.ops.new_node(
+                state.next_colour,
+                shape,
+                Op::ScatterAdd { axis },
+                &[self.node_id, values.node_id, indices.node_id],
+            ),
+            scope: self.scope,
         })
     }
 
@@ -349,6 +423,15 @@ impl<'s> Array<'s> {
     pub fn cos(self) -> Self {
         self.unary_op(UnaryOp::Cos)
     }
+    pub fn to_u32_bits(self) -> UArray<'s> {
+        UArray {
+            node_id: self.node_id,
+            scope: self.scope,
+        }
+    }
+    pub fn into_u32(self) -> UArray<'s> {
+        self.unary_op(UnaryOp::FloatToUint).to_u32_bits()
+    }
     pub fn sigmoid(self) -> Self {
         self.exp() / (self.exp() + 1.0)
     }
@@ -360,6 +443,16 @@ impl<'s> Array<'s> {
 
     pub fn pow(self, rhs: impl IntoArray<'s>) -> Self {
         self.binary_op(rhs, BinaryOp::Pow)
+    }
+
+    pub(crate) fn insert_axis(self, axis: Axis) -> Self {
+        let mut shape = self.shape();
+        shape.insert_axis(axis, 1);
+        self.reshape(shape)
+    }
+
+    pub(crate) fn permute_axes(self, perm: &[usize]) -> Self {
+        self.view(self.shape().identity_view().permute_axes(perm))
     }
 
     pub fn matmul(self, rhs: impl IntoArray<'s>) -> Self {
@@ -390,26 +483,6 @@ impl<'s> Array<'s> {
             MatMulOutputMode::Batches => output,
             MatMulOutputMode::Rows => output.permute_axes(&[1, 0, 2]),
         }
-    }
-
-    pub(crate) fn insert_axis(self, axis: Axis) -> Self {
-        let mut shape = self.shape();
-        shape.insert_axis(axis, 1);
-        self.reshape(shape)
-    }
-
-    pub(crate) fn remove_axis(self, axis: Axis) -> Self {
-        let mut shape = self.shape();
-        shape.remove_axis(axis);
-        self.reshape(shape)
-    }
-
-    pub(crate) fn permute_axes(self, perm: &[usize]) -> Self {
-        self.view(self.shape().identity_view().permute_axes(perm))
-    }
-
-    fn subset(self, axis: Axis, coord: usize) -> Self {
-        self.view(View::subset(self.shape(), axis, coord))
     }
 
     pub(crate) fn pad(self, axis: impl IntoAxis, pad: usize) -> Self {
@@ -507,33 +580,6 @@ impl<'s> Array<'s> {
         })
     }
 
-    pub fn reshape(self, shape: impl Into<Shape>) -> Self {
-        self.scope.with_state(|state| {
-            let shape = shape.into();
-            assert_eq!(
-                state.ops[self.node_id].shape.element_count(),
-                shape.element_count()
-            );
-            Array {
-                node_id: state.ops.new_node(
-                    state.next_colour,
-                    shape,
-                    Op::Unary(UnaryOp::Mov),
-                    &[self.node_id],
-                ),
-                scope: self.scope,
-            }
-        })
-    }
-
-    pub fn transpose(self) -> Self {
-        self.view(self.shape().identity_view().transposed())
-    }
-
-    pub fn shape(&self) -> Shape {
-        self.scope.with_state(|state| state.ops[self.node_id].shape)
-    }
-
     pub fn accumulate(&self, src: impl IntoArray<'s>) {
         let src = src.into_array(self.scope);
         self.scope.with_state(|state| {
@@ -592,31 +638,66 @@ impl<'s> Array<'s> {
     }
 }
 
-impl<'s, T> ops::Add<T> for Array<'s>
-where
-    T: IntoArray<'s>,
-{
-    type Output = Array<'s>;
-    fn add(self, rhs: T) -> Self::Output {
-        self.binary_op(rhs, BinaryOp::Add)
+impl<'s> UArray<'s> {
+    pub fn to_f32_bits(self) -> Array<'s> {
+        Array {
+            node_id: self.node_id,
+            scope: self.scope,
+        }
     }
-}
-impl<'s> ops::Add<Array<'s>> for f32 {
-    type Output = Array<'s>;
-    fn add(self, rhs: Array<'s>) -> Self::Output {
-        self.into_array(rhs.scope).binary_op(rhs, BinaryOp::Add)
+    pub fn into_f32(self) -> Array<'s> {
+        self.unary_op(UnaryOp::UintToFloat).to_f32_bits()
     }
 }
 
-impl<'s, T> ops::AddAssign<T> for Array<'s>
-where
-    T: IntoArray<'s>,
-{
-    fn add_assign(&mut self, rhs: T) {
-        use ops::Add;
-        *self = self.add(rhs);
-    }
+macro_rules! implement_arithmetic {
+    ($scalar:ident, $array:ident, $into_array:ident, $add:ident, $mul:ident) => {
+        impl<'s, T> ops::Add<T> for $array<'s>
+        where
+            T: $into_array<'s>,
+        {
+            type Output = $array<'s>;
+            fn add(self, rhs: T) -> Self::Output {
+                self.binary_op(rhs, BinaryOp::$add)
+            }
+        }
+        impl<'s> ops::Add<$array<'s>> for $scalar {
+            type Output = $array<'s>;
+            fn add(self, rhs: $array<'s>) -> Self::Output {
+                self.into_array(rhs.scope).binary_op(rhs, BinaryOp::$add)
+            }
+        }
+
+        impl<'s, T> ops::AddAssign<T> for $array<'s>
+        where
+            T: $into_array<'s>,
+        {
+            fn add_assign(&mut self, rhs: T) {
+                use ops::Add;
+                *self = self.add(rhs);
+            }
+        }
+
+        impl<'s, T> ops::Mul<T> for $array<'s>
+        where
+            T: $into_array<'s>,
+        {
+            type Output = $array<'s>;
+            fn mul(self, rhs: T) -> Self::Output {
+                self.binary_op(rhs, BinaryOp::$mul)
+            }
+        }
+        impl<'s> ops::Mul<$array<'s>> for $scalar {
+            type Output = $array<'s>;
+            fn mul(self, rhs: $array<'s>) -> Self::Output {
+                self.into_array(rhs.scope).binary_op(rhs, BinaryOp::$mul)
+            }
+        }
+    };
 }
+
+implement_arithmetic!(f32, Array, IntoArray, Add, Mul);
+implement_arithmetic!(u32, UArray, IntoUArray, UAdd, UMul);
 
 impl<'s, T> ops::Sub<T> for Array<'s>
 where
@@ -631,22 +712,6 @@ impl<'s> ops::Sub<Array<'s>> for f32 {
     type Output = Array<'s>;
     fn sub(self, rhs: Array<'s>) -> Self::Output {
         self.into_array(rhs.scope).binary_op(rhs, BinaryOp::Sub)
-    }
-}
-
-impl<'s, T> ops::Mul<T> for Array<'s>
-where
-    T: IntoArray<'s>,
-{
-    type Output = Array<'s>;
-    fn mul(self, rhs: T) -> Self::Output {
-        self.binary_op(rhs, BinaryOp::Mul)
-    }
-}
-impl<'s> ops::Mul<Array<'s>> for f32 {
-    type Output = Array<'s>;
-    fn mul(self, rhs: Array<'s>) -> Self::Output {
-        self.into_array(rhs.scope).binary_op(rhs, BinaryOp::Mul)
     }
 }
 
@@ -670,6 +735,25 @@ impl<'s> ops::Neg for Array<'s> {
     type Output = Array<'s>;
     fn neg(self) -> Self::Output {
         self.unary_op(UnaryOp::Neg)
+    }
+}
+
+impl<'s, T> ops::Rem<T> for UArray<'s>
+where
+    T: IntoUArray<'s>,
+{
+    type Output = UArray<'s>;
+    fn rem(self, rhs: T) -> Self::Output {
+        self.binary_op(rhs, BinaryOp::URem)
+    }
+}
+impl<'s, T> ops::BitXor<T> for UArray<'s>
+where
+    T: IntoUArray<'s>,
+{
+    type Output = UArray<'s>;
+    fn bitxor(self, rhs: T) -> Self::Output {
+        self.binary_op(rhs, BinaryOp::UBitXor)
     }
 }
 
@@ -810,7 +894,7 @@ impl<'s> DualArray<'s> {
     fn subset_op(self, axis: Axis, coord: usize) -> Self {
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.subset(axis, coord).with_empty_grad();
+        let (b, db) = a.subset(axis, coord, true).with_empty_grad();
         da.accumulate(a.coord(axis).select_eq(coord as f32, db, 0.0));
 
         (b, db).into()
@@ -1124,13 +1208,25 @@ impl Scope {
             node_id: state.ops.new_node(
                 state.next_colour,
                 [1],
-                Op::Literal(NotNan::new(value).unwrap()),
+                Op::Literal(Literal::F32(NotNan::new(value).unwrap())),
                 &[],
             ),
             scope: self,
         })
         .with_empty_grad()
         .into()
+    }
+
+    pub fn literal_u32(&self, value: u32) -> UArray {
+        self.with_state(|state| UArray {
+            node_id: state.ops.new_node(
+                state.next_colour,
+                [1],
+                Op::Literal(Literal::U32(value)),
+                &[],
+            ),
+            scope: self,
+        })
     }
 
     pub fn coord(&self, len: usize) -> DualArray {

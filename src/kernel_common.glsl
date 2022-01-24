@@ -214,3 +214,7 @@ float rand_from_index(uint uid, int index)
     uint hash = pcg(pcg(index) + rand_seed + uid);
     return float(hash)/float(0xffffffffu);
 }
+
+float U2F(uint x) { return uintBitsToFloat(x); }
+uint F2U(float x) { return floatBitsToUint(x); }
+int F2I(float x) { return floatBitsToInt(x); }

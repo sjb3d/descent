@@ -1,5 +1,4 @@
 use crate::{common::*, device::common::*};
-use ordered_float::NotNan;
 use shaderc::{Compiler, ShaderKind};
 use spark::{vk, Builder};
 use std::{collections::HashMap, convert::TryInto, ffi::CStr, fmt, fmt::Write, mem, slice};
@@ -10,7 +9,7 @@ pub(crate) enum PerElementKernelOp {
     Load {
         input_index: usize,
     },
-    Literal(NotNan<f32>),
+    Literal(Literal),
     BuiltIn {
         op: BuiltInOp,
         view: View,
@@ -138,11 +137,12 @@ pub(crate) trait Kernel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct ZeroKernel {
+pub(crate) struct FillKernel {
+    pub(crate) value: Literal,
     pub(crate) element_count: usize,
 }
 
-impl Kernel for ZeroKernel {
+impl Kernel for FillKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
@@ -157,7 +157,16 @@ impl Kernel for ZeroKernel {
             "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
             self.element_count
         )?;
-        writeln!(w, "output0[gl_GlobalInvocationID.x] = 0.0f;")?;
+        match self.value {
+            Literal::F32(value) => writeln!(
+                w,
+                "output0[gl_GlobalInvocationID.x] = {:#?};",
+                value.into_inner()
+            )?,
+            Literal::U32(value) => {
+                writeln!(w, "output0[gl_GlobalInvocationID.x] = U2F({});", value)?
+            }
+        };
 
         writeln!(w, "}}")?;
 
@@ -173,7 +182,7 @@ impl Kernel for ZeroKernel {
     }
 
     fn label_name(&self) -> String {
-        format!("Zero {}", self.element_count)
+        format!("Fill({:?}) {}", self.value, self.element_count)
     }
 }
 
@@ -238,9 +247,12 @@ impl Kernel for PerElementKernel {
                     }
                     writeln!(w, "];")?;
                 }
-                PerElementKernelOp::Literal(value) => {
-                    writeln!(w, "float tmp{} = {:#?};", op_index, value.into_inner())?
-                }
+                PerElementKernelOp::Literal(value) => match value {
+                    Literal::F32(value) => {
+                        writeln!(w, "float tmp{} = {:#?};", op_index, value.into_inner())?
+                    }
+                    Literal::U32(value) => writeln!(w, "float tmp{} = U2F({});", op_index, value)?,
+                },
                 PerElementKernelOp::BuiltIn { op, view } => {
                     let coord_shape = view.output_shape;
                     let coord_name = get_coord_set_name(&mut coord_set_names, coord_shape, w);
@@ -271,6 +283,8 @@ impl Kernel for PerElementKernel {
                         UnaryOp::Log => write!(w, "log(tmp{})", args)?,
                         UnaryOp::Sin => write!(w, "sin(tmp{})", args)?,
                         UnaryOp::Cos => write!(w, "cos(tmp{})", args)?,
+                        UnaryOp::UintToFloat => write!(w, "float(F2U(tmp{}))", args)?,
+                        UnaryOp::FloatToUint => write!(w, "U2F(uint(tmp{}))", args)?,
                     }
                     writeln!(w, ";")?;
                 }
@@ -282,6 +296,18 @@ impl Kernel for PerElementKernel {
                         BinaryOp::Mul => write!(w, "tmp{} * tmp{}", args[0], args[1])?,
                         BinaryOp::Div => write!(w, "tmp{} / tmp{}", args[0], args[1])?,
                         BinaryOp::Pow => write!(w, "pow(tmp{}, tmp{})", args[0], args[1])?,
+                        BinaryOp::UAdd => {
+                            write!(w, "U2F(F2U(tmp{}) + F2U(tmp{}))", args[0], args[1])?
+                        }
+                        BinaryOp::UMul => {
+                            write!(w, "U2F(F2U(tmp{}) * F2U(tmp{}))", args[0], args[1])?
+                        }
+                        BinaryOp::URem => {
+                            write!(w, "U2F(F2U(tmp{}) % F2U(tmp{}))", args[0], args[1])?
+                        }
+                        BinaryOp::UBitXor => {
+                            write!(w, "U2F(F2U(tmp{}) ^ F2U(tmp{}))", args[0], args[1])?
+                        }
                     }
                     writeln!(w, ";")?;
                 }
@@ -338,7 +364,8 @@ impl Kernel for PerElementKernel {
 pub(crate) struct MatMulKernel {
     pub(crate) shape: Shape,
     pub(crate) output_mode: MatMulOutputMode,
-    pub(crate) inputs: [View; 2],
+    pub(crate) a: View,
+    pub(crate) b: View,
 }
 
 impl MatMulKernel {
@@ -348,13 +375,13 @@ impl MatMulKernel {
     const GROUP_SIZE: usize = 64;
 
     fn m(&self) -> usize {
-        self.inputs[0].output_shape[SignedIndex(-2)]
+        self.a.output_shape[SignedIndex(-2)]
     }
     fn n(&self) -> usize {
-        self.inputs[1].output_shape[SignedIndex(-1)]
+        self.b.output_shape[SignedIndex(-1)]
     }
     fn k(&self) -> usize {
-        self.inputs[0].output_shape[SignedIndex(-1)]
+        self.a.output_shape[SignedIndex(-1)]
     }
 
     fn k_chunk_count(&self) -> usize {
@@ -377,8 +404,8 @@ impl Kernel for MatMulKernel {
         generate_input_buffer(1, 1, w)?;
         generate_output_buffer(2, 0, w)?;
 
-        assert_eq!(self.inputs[0].output_shape.len(), 3);
-        assert_eq!(self.inputs[1].output_shape.len(), 3);
+        assert_eq!(self.a.output_shape.len(), 3);
+        assert_eq!(self.b.output_shape.len(), 3);
 
         let m = self.m();
         let n = self.n();
@@ -397,7 +424,15 @@ impl Kernel for MatMulKernel {
                 icoord[2] = int(coord.x);"
             )?;
             write!(w, "return ")?;
-            generate_load_index(&self.inputs[i], "icoord", w)?;
+            generate_load_index(
+                match i {
+                    0 => &self.a,
+                    1 => &self.b,
+                    _ => unreachable!(),
+                },
+                "icoord",
+                w,
+            )?;
             writeln!(w, "; }}")?;
         }
 
@@ -463,8 +498,8 @@ impl Kernel for MatMulKernel {
         writeln!(w, "const uint K_CHUNK_COUNT = {};", k_chunk_count)?;
         writeln!(w, "const uint BATCH_COUNT = {};", batch_count)?;
 
-        let load_a_in_columns = self.inputs[0].load_in_columns_hint();
-        let load_b_in_columns = self.inputs[1].load_in_columns_hint();
+        let load_a_in_columns = self.a.load_in_columns_hint();
+        let load_b_in_columns = self.b.load_in_columns_hint();
         let bool_value = |b| if b { "true" } else { "false" };
         writeln!(
             w,
@@ -545,7 +580,7 @@ impl Kernel for ReduceKernel {
             w,
             "float result = {};",
             match self.reduce_op {
-                ReduceOp::Max => "uintBitsToFloat(0xff800000)",
+                ReduceOp::Max => "U2F(0xff800000)",
                 ReduceOp::Sum => "0.f",
             }
         )?;
@@ -755,8 +790,9 @@ impl Kernel for WindowsToImageKernel {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct GatherKernel {
     pub(crate) shape: Shape,
+    pub(crate) values: View,
     pub(crate) axis: Axis,
-    pub(crate) inputs: [View; 2],
+    pub(crate) indices: View,
 }
 
 impl Kernel for GatherKernel {
@@ -778,15 +814,15 @@ impl Kernel for GatherKernel {
         )?;
         generate_coord("tmp_coord", self.shape, w)?;
 
-        writeln!(w, "int in_coord1[1];")?;
-        writeln!(w, "in_coord1[0] = tmp_coord[{}];", self.axis.index())?;
-        writeln!(w, "int gather_index = int(input1[")?;
-        generate_load_index(&self.inputs[1], "in_coord1", w)?;
+        writeln!(w, "int indices_coord[1];")?;
+        writeln!(w, "indices_coord[0] = tmp_coord[{}];", self.axis.index())?;
+        writeln!(w, "int gather_index = F2I(input1[")?;
+        generate_load_index(&self.indices, "indices_coord", w)?;
         writeln!(w, "]);")?;
         writeln!(w, "tmp_coord[{}] = gather_index;", self.axis.index())?;
 
         writeln!(w, "output0[gl_GlobalInvocationID.x] = input0[")?;
-        generate_load_index(&self.inputs[0], "tmp_coord", w)?;
+        generate_load_index(&self.values, "tmp_coord", w)?;
         writeln!(w, "];")?;
 
         writeln!(w, "}}")?;
@@ -810,23 +846,15 @@ impl Kernel for GatherKernel {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ScatterAddKernel {
     pub(crate) shape: Shape,
+    pub(crate) values: View,
     pub(crate) axis: Axis,
-    pub(crate) inputs: [View; 2],
-}
-
-impl ScatterAddKernel {
-    fn kernel_shape(&self) -> Shape {
-        let [index_count]: [usize; 1] = self.inputs[1].output_shape.try_into().unwrap();
-        self.shape.resize_axis(self.axis, index_count)
-    }
+    pub(crate) indices: View,
 }
 
 impl Kernel for ScatterAddKernel {
     fn generate_source(&self) -> Result<String, fmt::Error> {
         let mut src = String::new();
         let w = &mut src;
-
-        let kernel_shape = self.kernel_shape();
 
         generate_input_buffer(0, 0, w)?;
         generate_input_buffer(1, 1, w)?;
@@ -838,18 +866,18 @@ impl Kernel for ScatterAddKernel {
         writeln!(
             w,
             "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
-            kernel_shape.element_count()
+            self.values.output_shape.element_count()
         )?;
 
-        generate_coord("tmp_coord", kernel_shape, w)?;
+        generate_coord("tmp_coord", self.values.output_shape, w)?;
         writeln!(w, "float value = input0[")?;
-        generate_load_index(&self.inputs[0], "tmp_coord", w)?;
+        generate_load_index(&self.values, "tmp_coord", w)?;
         writeln!(w, "];")?;
 
         writeln!(w, "int in_coord1[1];")?;
         writeln!(w, "in_coord1[0] = tmp_coord[{}];", self.axis.index())?;
-        writeln!(w, "int scatter_index = int(input1[")?;
-        generate_load_index(&self.inputs[1], "in_coord1", w)?;
+        writeln!(w, "int scatter_index = F2I(input1[")?;
+        generate_load_index(&self.indices, "in_coord1", w)?;
         writeln!(w, "]);")?;
         writeln!(w, "tmp_coord[{}] = scatter_index;", self.axis.index())?;
 
@@ -867,11 +895,11 @@ impl Kernel for ScatterAddKernel {
     }
 
     fn group_count(&self) -> usize {
-        self.kernel_shape().element_count().div_round_up(64)
+        self.values.output_shape.element_count().div_round_up(64)
     }
 
     fn label_name(&self) -> String {
-        format!("ScatterAdd {}", self.kernel_shape())
+        format!("ScatterAdd {}", self.values.output_shape)
     }
 
     fn requires_atomic_float(&self) -> bool {
@@ -882,7 +910,7 @@ impl Kernel for ScatterAddKernel {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum GenericKernel {
-    Zero(ZeroKernel),
+    Fill(FillKernel),
     PerElement(PerElementKernel),
     Reduce(ReduceKernel),
     MatMul(MatMulKernel),
@@ -895,7 +923,7 @@ pub(crate) enum GenericKernel {
 impl GenericKernel {
     fn as_kernel(&self) -> &dyn Kernel {
         match self {
-            GenericKernel::Zero(kernel) => kernel,
+            GenericKernel::Fill(kernel) => kernel,
             GenericKernel::PerElement(kernel) => kernel,
             GenericKernel::MatMul(kernel) => kernel,
             GenericKernel::Reduce(kernel) => kernel,

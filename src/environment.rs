@@ -240,11 +240,10 @@ impl Environment {
 
     fn run_kernel(
         kernel: &GenericKernel,
-        buffer_node_ids: &[OpNodeId],
+        buffer_ids: &[BufferId],
         device: &Device,
         kernel_cache: &mut KernelCache,
         buffer_heap: &mut BufferHeap,
-        node_storage: &mut [OpNodeStorage],
         cmd: vk::CommandBuffer,
         descriptor_pool: vk::DescriptorPool,
         rand_seed: u32,
@@ -261,9 +260,8 @@ impl Environment {
 
         {
             let mut buffer_info = Vec::new();
-            for node_id in buffer_node_ids.iter().copied() {
-                let node_state = &node_storage[node_id.index()];
-                let info = buffer_heap.info(node_state.buffer_id.unwrap());
+            for buffer_id in buffer_ids.iter().copied() {
+                let info = buffer_heap.info(buffer_id);
                 buffer_info.push(vk::DescriptorBufferInfo {
                     buffer: Some(info.buffer),
                     offset: info.range.begin as vk::DeviceSize,
@@ -403,30 +401,50 @@ impl Environment {
         let mut timestamps = self.timestamps.acquire(cmd.get(), &self.fences);
         for cluster_id in graph.clusters_sorted.iter().copied() {
             let cluster = &graph.clusters[cluster_id];
+
+            for node_id in cluster.inputs.iter().copied() {
+                node_storage[node_id.index()].usage_count -= 1;
+            }
             for output in cluster.outputs.iter() {
+                let shape = graph.ops[output.node_id].shape;
+                let buffer_id = match output.initial_state {
+                    InitialState::Undefined => self.buffer_heap.alloc(shape.buffer_size()).unwrap(),
+                    InitialState::CopyFrom(src_node_id) => {
+                        let src_node_storage = &mut node_storage[src_node_id.index()];
+                        if src_node_storage.usage_count == 0 {
+                            if let Some(buffer_id) =
+                                node_storage[src_node_id.index()].buffer_id.take()
+                            {
+                                buffer_id
+                            } else if let Op::Literal(value) = graph.ops[src_node_id].op {
+                                let buffer_id =
+                                    self.buffer_heap.alloc(shape.buffer_size()).unwrap();
+                                let kernel = GenericKernel::Fill(FillKernel {
+                                    value,
+                                    element_count: shape.element_count(),
+                                });
+                                Self::run_kernel(
+                                    &kernel,
+                                    &[buffer_id],
+                                    device,
+                                    &mut self.kernel_cache,
+                                    &mut self.buffer_heap,
+                                    cmd.get(),
+                                    descriptor_pool.get(),
+                                    rand_seed,
+                                );
+                                buffer_id
+                            } else {
+                                panic!("cannot copy-on-write node")
+                            }
+                        } else {
+                            unimplemented!("TODO deep copy buffer")
+                        }
+                    }
+                };
                 let node_state = &mut node_storage[output.node_id.index()];
                 assert!(node_state.buffer_id.is_none());
-                let shape = graph.ops[output.node_id].shape;
-                node_state.buffer_id = Some(self.buffer_heap.alloc(shape.buffer_size()).unwrap());
-                match output.initial_state {
-                    InitialState::Undefined => {}
-                    InitialState::Zero => {
-                        let kernel = GenericKernel::Zero(ZeroKernel {
-                            element_count: shape.element_count(),
-                        });
-                        Self::run_kernel(
-                            &kernel,
-                            &[output.node_id],
-                            device,
-                            &mut self.kernel_cache,
-                            &mut self.buffer_heap,
-                            &mut node_storage,
-                            cmd.get(),
-                            descriptor_pool.get(),
-                            rand_seed,
-                        );
-                    }
-                }
+                node_state.buffer_id = Some(buffer_id);
             }
 
             let label_name = cluster.kernel.label_name();
@@ -444,19 +462,19 @@ impl Environment {
                 }
             }
 
-            let buffer_node_ids: Vec<_> = cluster
+            let buffer_ids: Vec<_> = cluster
                 .inputs
                 .iter()
                 .copied()
                 .chain(cluster.outputs.iter().map(|output| output.node_id))
+                .map(|node_id| node_storage[node_id.index()].buffer_id.unwrap())
                 .collect();
             Self::run_kernel(
                 &cluster.kernel,
-                &buffer_node_ids,
+                &buffer_ids,
                 device,
                 &mut self.kernel_cache,
                 &mut self.buffer_heap,
-                &mut node_storage,
                 cmd.get(),
                 descriptor_pool.get(),
                 rand_seed,
@@ -472,9 +490,10 @@ impl Environment {
 
             for node_id in cluster.inputs.iter().copied() {
                 let node_state = &mut node_storage[node_id.index()];
-                node_state.usage_count -= 1;
                 if node_state.usage_count == 0 {
-                    self.buffer_heap.free(node_state.buffer_id.take().unwrap());
+                    if let Some(buffer_id) = node_state.buffer_id.take() {
+                        self.buffer_heap.free(buffer_id);
+                    }
                 }
             }
         }
