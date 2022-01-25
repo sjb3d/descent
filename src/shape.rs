@@ -445,7 +445,7 @@ impl View {
                 if self.input_axis_mapping_count(input_axis) == 1 {
                     let base = self.input_offsets[input_axis.index()];
                     let offset = ((self.output_shape[output_axis] - 1) as isize) * step;
-                    let span_min = base - offset.min(0);
+                    let span_min = base + offset.min(0);
                     let span_max = base + offset.max(0);
                     let input_min = 0;
                     let input_max = (self.input_shape[input_axis] - 1) as isize;
@@ -484,7 +484,7 @@ impl View {
                 AxisMapping::Source { axis, step } => {
                     if axis == input_axis {
                         let offset = ((len - 1) as isize) * step;
-                        offset_min -= offset.min(0);
+                        offset_min += offset.min(0);
                         offset_max += offset.max(0);
                     }
                 }
