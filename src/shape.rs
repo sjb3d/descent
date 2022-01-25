@@ -436,12 +436,13 @@ impl View {
             .count()
     }
 
-    fn output_spans_input(&self, output_axis: Axis) -> bool {
+    fn can_pad_output(&self, output_axis: Axis) -> bool {
         match self.output_mapping[output_axis.index()] {
             AxisMapping::Source {
                 axis: input_axis,
                 step,
             } => {
+                // can only pad if this output fully covers a single input axis
                 if self.input_axis_mapping_count(input_axis) == 1 {
                     let base = self.input_offsets[input_axis.index()];
                     let offset = ((self.output_shape[output_axis] - 1) as isize) * step;
@@ -454,7 +455,7 @@ impl View {
                     false
                 }
             }
-            AxisMapping::Broadcast => true,
+            AxisMapping::Broadcast => true, // padding a broadcast is still broadcast
         }
     }
 
@@ -463,7 +464,7 @@ impl View {
             && self
                 .output_shape
                 .iter_axes()
-                .all(|axis| self.output_spans_input(axis) || !view.input_needs_clamp(axis))
+                .all(|axis| self.can_pad_output(axis) || !view.input_needs_clamp(axis))
     }
 
     fn can_reshape_to(&self, view: &View) -> bool {
