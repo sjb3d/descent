@@ -78,7 +78,7 @@ Name | Description
 --- | ---
 [array_api](examples/array_api) | Demonstrates the low-level `Array` API for building computation graphs.  See the README for more details.
 [fashion_mnist](examples/fashion_mnist) | Trains a few different network types on the Fashion-MNIST dataset.  Demonstrates the use of anti-aliasing during max pooling for improved accuracy.  See the README for a comparison of network performance.
-[image_fit](examples/image_fit) | Overfits a few different network types to a single RGB image.  Compares ReLU with positional encoding to a SIREN network.
+[image_fit](examples/image_fit) | Overfits a few different network types to a single RGB image.  Compares ReLU with positional encoding to a SIREN network. _Update: now also compares to a multi-level hash encoding._
 
 ## Dependencies
 
@@ -93,3 +93,4 @@ The following crates have been very useful to develop this project:
 - [ ] Lookahead optimiser?
 - [ ] Recurrent network
 - [ ] SDF fitting
+- [x] Multi-level hash encoding
