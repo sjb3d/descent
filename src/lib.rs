@@ -195,7 +195,35 @@ mod tests {
                     .scatter_add(&a_param, -2, scope.parameter_value(&b_param).into_u32()),
             );
         });
-        g.write_dot_file(KernelDotOutput::Cluster, "scatter_add.dot");
+        env.run(&g, TEST_RAND_SEED);
+
+        assert_eq!(env.read_parameter_to_vec(&c_param), c_data);
+    }
+
+    #[test]
+    fn concat() {
+        let mut env = Environment::new();
+
+        let a_data: Vec<f32> = (0..200)
+            .filter(|i| ((i / 10) & 1) == 0)
+            .map(|i| i as f32)
+            .collect();
+        let b_data: Vec<f32> = (0..200)
+            .filter(|i| ((i / 10) & 1) == 1)
+            .map(|i| i as f32)
+            .collect();
+        let c_data: Vec<f32> = (0..200).map(|i| i as f32).collect();
+
+        let a_param = env.static_parameter_with_data([10, 10], "a", &a_data);
+        let b_param = env.static_parameter_with_data([10, 10], "b", &b_data);
+        let c_param = env.static_parameter([10, 20], "c");
+
+        let g = env.build_graph(|scope| {
+            scope.write_parameter_value(
+                &c_param,
+                scope.parameter_value(&a_param).concat(&b_param, -1),
+            );
+        });
         env.run(&g, TEST_RAND_SEED);
 
         assert_eq!(env.read_parameter_to_vec(&c_param), c_data);

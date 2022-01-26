@@ -338,7 +338,7 @@ impl Module for LSTMCell {
         let mut prev_cell = None;
         let mut prev_hidden = None;
         for i in 0..timestep_count {
-            let input = input.next_colour().subset(time_axis, i, false);
+            let input = input.next_colour().lock_axis(time_axis, i, false);
 
             let input_gate = self.input_gate.eval(input, prev_hidden).sigmoid();
             let output_gate = self.output_gate.eval(input, prev_hidden).sigmoid();

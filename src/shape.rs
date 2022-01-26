@@ -59,6 +59,7 @@ impl Shape {
         self.0.split_at(self.0.len() - rmid)
     }
 
+    #[must_use]
     pub(crate) fn prefix_ones_to_len(&self, len: usize) -> Self {
         let mut v = ShapeVec::new();
         while v.len() + self.len() < len {
@@ -68,6 +69,7 @@ impl Shape {
         Shape::new(v)
     }
 
+    #[must_use]
     pub(crate) fn broadcast_with(&self, rhs: Shape) -> Self {
         // broadcast axes from 1 => n where necessary
         let len = self.0.len().max(rhs.0.len());
@@ -101,15 +103,17 @@ impl Shape {
         }
     }
 
+    #[must_use]
     pub(crate) fn unpad(&self, axis: Axis, pad: usize) -> Self {
         let mut tmp = *self;
         tmp[axis] -= 2 * pad;
         tmp
     }
 
-    pub(crate) fn pad(&self, axis: Axis, pad: usize) -> Self {
+    #[must_use]
+    pub(crate) fn pad(&self, axis: Axis, before: usize, after: usize) -> Self {
         let mut tmp = *self;
-        tmp[axis] += 2 * pad;
+        tmp[axis] += before + after;
         tmp
     }
 
@@ -155,8 +159,8 @@ impl Shape {
         View::new(*self)
     }
 
-    pub(crate) fn padded_view(&self, axis: Axis, pad: usize) -> View {
-        View::with_pad(*self, axis, pad)
+    pub(crate) fn padded_view(&self, axis: Axis, before: usize, after: usize) -> View {
+        View::new_padded(*self, axis, before, after)
     }
 
     pub(crate) fn identity_mapping(&self, axis: Axis) -> AxisMapping {
@@ -172,12 +176,14 @@ impl Shape {
         Axis::from_index((index as usize).wrapping_add(if index < 0 { self.0.len() } else { 0 }))
     }
 
+    #[must_use]
     pub(crate) fn reduce(&self, axis: Axis) -> Self {
         let mut tmp = *self;
         tmp[axis] = 1;
         tmp
     }
 
+    #[must_use]
     pub(crate) fn resize_axis(&self, axis: Axis, length: usize) -> Self {
         let mut tmp = *self;
         tmp[axis] = length;
@@ -214,12 +220,18 @@ impl Shape {
         self.element_count() * mem::size_of::<f32>()
     }
 
-    pub(crate) fn insert_axis(&mut self, axis: Axis, len: usize) {
-        self.0.insert(axis.index(), len);
+    #[must_use]
+    pub(crate) fn insert_axis(&self, axis: Axis, len: usize) -> Self {
+        let mut tmp = *self;
+        tmp.0.insert(axis.index(), len);
+        tmp
     }
 
-    pub(crate) fn remove_axis(&mut self, axis: Axis) {
-        self.0.remove(axis.index());
+    #[must_use]
+    pub(crate) fn remove_axis(&self, axis: Axis) -> Self {
+        let mut tmp = *self;
+        tmp.0.remove(axis.index());
+        tmp
     }
 }
 
@@ -319,6 +331,7 @@ impl Default for AxisMapping {
 
 impl AxisMapping {
     fn new(axis: Axis, length: usize) -> Self {
+        assert!(length > 0);
         if length > 1 {
             Self::Source { axis, step: 1 }
         } else {
@@ -357,17 +370,31 @@ impl View {
         }
     }
 
-    fn with_pad(shape: Shape, axis: Axis, pad: usize) -> Self {
+    fn new_padded(shape: Shape, axis: Axis, before: usize, after: usize) -> Self {
         let mut tmp = View::new(shape);
-        tmp.input_offsets[axis.index()] = -(pad as isize);
-        tmp.output_shape = tmp.output_shape.pad(axis, pad);
+        tmp.input_offsets[axis.index()] = -(before as isize);
+        tmp.output_shape = tmp.output_shape.pad(axis, before, after);
         tmp
     }
 
-    pub(crate) fn subset(shape: Shape, axis: Axis, coord: usize) -> Self {
+    pub(crate) fn new_limited(
+        shape: Shape,
+        axis: Axis,
+        range: impl ops::RangeBounds<usize>,
+    ) -> Self {
+        let start = match range.start_bound() {
+            ops::Bound::Included(value) => *value,
+            ops::Bound::Excluded(value) => *value + 1,
+            ops::Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            ops::Bound::Included(value) => *value + 1,
+            ops::Bound::Excluded(value) => *value,
+            ops::Bound::Unbounded => shape[axis],
+        };
         let mut tmp = View::new(shape);
-        tmp.input_offsets[axis.index()] = coord as isize;
-        tmp.output_mapping[axis.index()] = AxisMapping::Broadcast;
+        tmp.input_offsets[axis.index()] = start as isize;
+        tmp.output_mapping[axis.index()] = AxisMapping::new(axis, end - start);
         tmp.output_shape[axis] = 1;
         tmp
     }

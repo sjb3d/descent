@@ -147,10 +147,10 @@ impl Module for HashGrid {
         let c = cf.into_u32();
         let f = cf - c.into_f32();
 
-        let c0 = c.subset(-1, 0, false);
-        let c1 = c.subset(-1, 1, false);
-        let f0 = f.subset(-1, 0, true);
-        let f1 = f.subset(-1, 1, true);
+        let c0 = c.lock_axis(-1, 0, false);
+        let c1 = c.lock_axis(-1, 1, false);
+        let f0 = f.lock_axis(-1, 0, true);
+        let f1 = f.lock_axis(-1, 1, true);
 
         let ia = ((c0 + 0) ^ (c1 * P + 0)) % N;
         let ib = ((c0 + 1) ^ (c1 * P + 0)) % N;

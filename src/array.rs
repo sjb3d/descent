@@ -97,7 +97,7 @@ impl IntoAxis for isize {
 }
 
 macro_rules! implement_array_common {
-    ($array:ident, $intoarray:ident) => {
+    ($array:ident, $into_array:ident) => {
         impl<'s> $array<'s> {
             pub fn scope(&self) -> &'s Scope {
                 self.scope
@@ -140,7 +140,7 @@ macro_rules! implement_array_common {
                 })
             }
 
-            fn binary_op(self, rhs: impl $intoarray<'s>, op: BinaryOp) -> Self {
+            fn binary_op(self, rhs: impl $into_array<'s>, op: BinaryOp) -> Self {
                 let rhs = rhs.into_array(self.scope);
                 let op_shape = self.scope.with_state(|state| {
                     state.ops[self.node_id]
@@ -172,15 +172,22 @@ macro_rules! implement_array_common {
             }
 
             pub(crate) fn remove_axis(self, axis: Axis) -> Self {
-                let mut shape = self.shape();
-                shape.remove_axis(axis);
-                self.reshape(shape)
+                self.reshape(self.shape().remove_axis(axis))
             }
 
-            pub fn subset(self, axis: impl IntoAxis, coord: usize, keep_axis: bool) -> Self {
+            pub fn limit_axis(
+                self,
+                axis: impl IntoAxis,
+                range: impl ops::RangeBounds<usize>,
+            ) -> Self {
                 let shape = self.shape();
                 let axis = axis.into_axis(shape);
-                self.view(View::subset(shape, axis, coord))
+                self.view(View::new_limited(shape, axis, range))
+            }
+
+            pub fn lock_axis(self, axis: impl IntoAxis, coord: usize, keep_axis: bool) -> Self {
+                let axis = axis.into_axis(self.shape());
+                self.limit_axis(axis, coord..=coord)
                     .keep_axis(axis, keep_axis)
             }
 
@@ -287,6 +294,33 @@ impl<'s> Array<'s> {
             ),
             scope: self.scope,
         })
+    }
+
+    pub fn concat(self, other: impl IntoArray<'s>, axis: impl IntoAxis) -> Self {
+        let other = other.into_array(self.scope);
+        let other_shape = other.shape();
+
+        let shape = self.shape();
+        let axis = axis.into_axis(shape);
+
+        let length = shape[axis];
+        let other_length = other_shape[axis];
+        let total_length = length + other_length;
+
+        let output_shape = shape.resize_axis(axis, total_length);
+        assert_eq!(output_shape, other_shape.resize_axis(axis, total_length));
+        let output_coord = self
+            .scope
+            .coord(total_length)
+            .value()
+            .reshape(output_shape.coord(axis));
+
+        output_coord.compare_and_select(
+            CompareMode::Gt,
+            (length - 1) as f32,
+            other.pad(axis, length, 0),
+            self.pad(axis, 0, other_length),
+        )
     }
 
     fn reduce_op(self, reduce_op: ReduceOp, axis: impl IntoAxis) -> Self {
@@ -446,9 +480,7 @@ impl<'s> Array<'s> {
     }
 
     pub(crate) fn insert_axis(self, axis: Axis) -> Self {
-        let mut shape = self.shape();
-        shape.insert_axis(axis, 1);
-        self.reshape(shape)
+        self.reshape(self.shape().insert_axis(axis, 1))
     }
 
     pub(crate) fn permute_axes(self, perm: &[usize]) -> Self {
@@ -485,13 +517,13 @@ impl<'s> Array<'s> {
         }
     }
 
-    pub(crate) fn pad(self, axis: impl IntoAxis, pad: usize) -> Self {
-        if pad == 0 {
+    pub(crate) fn pad(self, axis: impl IntoAxis, before: usize, after: usize) -> Self {
+        if before + after == 0 {
             return self;
         }
         let shape = self.shape();
         let axis = axis.into_axis(shape);
-        self.view(shape.padded_view(axis, pad))
+        self.view(shape.padded_view(axis, before, after))
     }
 
     pub(crate) fn unpad(self, axis: impl IntoAxis, pad: usize) -> Self {
@@ -515,7 +547,7 @@ impl<'s> Array<'s> {
     }
 
     pub(crate) fn pad_image(self, pad: usize) -> Self {
-        self.pad(-3, pad).pad(-2, pad)
+        self.pad(-3, pad, pad).pad(-2, pad, pad)
     }
 
     pub(crate) fn unpad_image(self, pad: usize) -> Self {
@@ -891,18 +923,18 @@ impl<'s> DualArray<'s> {
         (c, dc).into()
     }
 
-    fn subset_op(self, axis: Axis, coord: usize) -> Self {
+    fn lock_axis_impl(self, axis: Axis, coord: usize) -> Self {
         let (a, da) = self.into_inner();
 
-        let (b, db) = a.subset(axis, coord, true).with_empty_grad();
+        let (b, db) = a.lock_axis(axis, coord, true).with_empty_grad();
         da.accumulate(a.coord(axis).select_eq(coord as f32, db, 0.0));
 
         (b, db).into()
     }
 
-    pub fn subset(self, axis: impl IntoAxis, coord: usize, keep_axis: bool) -> Self {
+    pub fn lock_axis(self, axis: impl IntoAxis, coord: usize, keep_axis: bool) -> Self {
         let axis = axis.into_axis(self.shape());
-        self.subset_op(axis, coord).keep_axis(axis, keep_axis)
+        self.lock_axis_impl(axis, coord).keep_axis(axis, keep_axis)
     }
 
     pub fn reshape(self, shape: impl Into<Shape>) -> Self {
@@ -1092,6 +1124,23 @@ impl<'s> DualArray<'s> {
         da.accumulate(db.permute_axes(&inv_perm));
 
         (b, db).into()
+    }
+
+    pub fn concat(self, other: impl IntoDualArray<'s>, axis: impl IntoAxis) -> Self {
+        let other = other.into_dual_array(self.scope);
+
+        let shape = self.shape();
+        let axis = axis.into_axis(shape);
+        let length = shape[axis];
+
+        let (a, da) = self.into_inner();
+        let (b, db) = other.into_inner();
+
+        let (c, dc) = a.concat(b, axis).with_empty_grad();
+        da.accumulate(dc.limit_axis(axis, ..length));
+        db.accumulate(dc.limit_axis(axis, length..));
+
+        (c, dc).into()
     }
 }
 
