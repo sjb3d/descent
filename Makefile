@@ -17,7 +17,8 @@ IMAGE_FIT_PLOT=$(DOCS_DIR)/image_fit.gnuplot
 IMAGE_FIT_STATS=\
 	$(TEMP_DIR)/image_fit_stats_relu.csv \
 	$(TEMP_DIR)/image_fit_stats_relu-pe.csv \
-	$(TEMP_DIR)/image_fit_stats_siren.csv
+	$(TEMP_DIR)/image_fit_stats_siren.csv \
+	$(TEMP_DIR)/image_fit_stats_multi-hash.csv
 IMAGE_FIT_GRAPHS=$(DOCS_DIR)/image_fit_stats.svg
 
 DIRS=$(TEMP_DIR) $(DOCS_DIR)
