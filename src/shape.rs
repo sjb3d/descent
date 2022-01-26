@@ -395,7 +395,7 @@ impl View {
         let mut tmp = View::new(shape);
         tmp.input_offsets[axis.index()] = start as isize;
         tmp.output_mapping[axis.index()] = AxisMapping::new(axis, end - start);
-        tmp.output_shape[axis] = 1;
+        tmp.output_shape[axis] = end - start;
         tmp
     }
 
