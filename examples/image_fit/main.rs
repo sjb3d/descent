@@ -18,7 +18,7 @@ enum NetworkType {
     Relu,
     ReluPE,
     Siren,
-    HashGrid,
+    MultiHash,
 }
 
 #[derive(Debug, StructOpt)]
@@ -118,20 +118,36 @@ impl Module for Siren {
 }
 
 struct HashGrid {
+    grid_size: usize,
+    stride: usize,
     t: Parameter,
 }
 
 impl HashGrid {
-    const GRID_SIZE: usize = 64;
-    const ENTRY_COUNT: usize = 1024;
-
-    fn new(env: &mut Environment) -> Self {
+    fn new(
+        env: &mut Environment,
+        grid_size: usize,
+        entry_count: usize,
+        values_per_entry: usize,
+    ) -> Self {
+        let grid_point_count = grid_size + 1;
+        let max_entry_count = grid_point_count * grid_point_count;
+        let entry_count = entry_count.min(max_entry_count);
+        let stride = if entry_count == max_entry_count {
+            grid_point_count
+        } else {
+            1526263 // large prime
+        };
         let t = env.trainable_parameter(
-            [Self::ENTRY_COUNT, 3],
+            [entry_count, values_per_entry],
             "t",
             Initializer::RandUniform(1.0E-4),
         );
-        Self { t }
+        Self {
+            grid_size,
+            stride,
+            t,
+        }
     }
 }
 
@@ -140,10 +156,11 @@ impl Module for HashGrid {
         let scope = input.scope();
         let (x, _dx) = input.into_inner();
 
-        const N: u32 = HashGrid::ENTRY_COUNT as u32;
-        const P: u32 = 1526263;
+        let (t, dt) = scope.parameter(&self.t).into_inner();
+        let entry_count = t.shape()[0];
+        let stride = self.stride as u32;
 
-        let cf = (x * 0.5 + 0.5) * (HashGrid::GRID_SIZE as f32);
+        let cf = (x * 0.5 + 0.5) * (self.grid_size as f32);
         let c = cf.into_u32();
         let f = cf - c.into_f32();
 
@@ -152,12 +169,11 @@ impl Module for HashGrid {
         let f0 = f.lock_axis(-1, 0, true);
         let f1 = f.lock_axis(-1, 1, true);
 
-        let ia = ((c0 + 0) ^ (c1 * P + 0)) % N;
-        let ib = ((c0 + 1) ^ (c1 * P + 0)) % N;
-        let ic = ((c0 + 0) ^ (c1 * P + P)) % N;
-        let id = ((c0 + 1) ^ (c1 * P + P)) % N;
+        let ia = ((c0 + 0) ^ (c1 * stride + 0)) % (entry_count as u32);
+        let ib = ((c0 + 1) ^ (c1 * stride + 0)) % (entry_count as u32);
+        let ic = ((c0 + 0) ^ (c1 * stride + stride)) % (entry_count as u32);
+        let id = ((c0 + 1) ^ (c1 * stride + stride)) % (entry_count as u32);
 
-        let (t, dt) = scope.parameter(&self.t).into_inner();
         let ta = t.gather(-2, ia);
         let tb = t.gather(-2, ib);
         let tc = t.gather(-2, ic);
@@ -183,6 +199,60 @@ impl Module for HashGrid {
         );
 
         (y, dy).into()
+    }
+}
+
+struct MultiHashGrid {
+    grids: Vec<HashGrid>,
+    hidden_layers: Vec<Dense>,
+    final_layer: Dense,
+}
+
+impl MultiHashGrid {
+    fn new(
+        env: &mut Environment,
+        min_grid_size: usize,
+        max_grid_size: usize,
+        level_count: usize,
+        entry_count: usize,
+        hidden_units: &[usize],
+    ) -> Self {
+        let values_per_entry = 2;
+        let mut grids = Vec::new();
+        let b = (((max_grid_size as f32).ln() - (min_grid_size as f32).ln())
+            / ((level_count - 1) as f32))
+            .exp();
+        println!("b = {}", b);
+        for level_index in 0..level_count {
+            let grid_size = ((min_grid_size as f32) * b.powi(level_index as i32)) as usize;
+            grids.push(HashGrid::new(env, grid_size, entry_count, values_per_entry));
+        }
+        let mut hidden_layers = Vec::new();
+        let mut prev_units = grids.len() * values_per_entry;
+        for hidden_units in hidden_units.iter().copied() {
+            hidden_layers.push(Dense::builder(prev_units, hidden_units).build(env));
+            prev_units = hidden_units;
+        }
+        Self {
+            grids,
+            hidden_layers,
+            final_layer: Dense::builder(prev_units, 3).build(env),
+        }
+    }
+}
+
+impl Module for MultiHashGrid {
+    fn eval<'s>(&self, input: DualArray<'s>, ctx: &EvalContext) -> DualArray<'s> {
+        let mut x = self
+            .grids
+            .iter()
+            .map(|grid| grid.eval(input, ctx))
+            .reduce(|a, b| a.concat(b, -1))
+            .unwrap();
+        for layer in self.hidden_layers.iter() {
+            x = layer.eval(x, ctx).leaky_relu(0.01);
+        }
+        self.final_layer.eval(x, ctx)
     }
 }
 
@@ -224,7 +294,9 @@ fn main() {
             NetworkType::Relu => Box::new(Relu::new(env, 0, hidden_units)),
             NetworkType::ReluPE => Box::new(Relu::new(env, pe_freq_count, hidden_units)),
             NetworkType::Siren => Box::new(Siren::new(env, hidden_units)),
-            NetworkType::HashGrid => Box::new(HashGrid::new(env)),
+            NetworkType::MultiHash => {
+                Box::new(MultiHashGrid::new(env, 2, 512, 10, 4096, &[64, 64]))
+            }
         }
     };
 
