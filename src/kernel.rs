@@ -987,7 +987,7 @@ impl KernelCacheWorker {
 
         source.insert_str(0, include_str!("kernel_common.glsl"));
         if kernel.requires_atomic_float() {
-            assert!(self.context.has_shader_atomic_float);
+            assert!(self.context.has_shader_atomic_float_add);
             source.insert_str(0, "#extension GL_EXT_shader_atomic_float : require\n");
         }
         source.insert_str(0, "#version 460 core\n");

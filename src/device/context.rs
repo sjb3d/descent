@@ -25,7 +25,7 @@ pub(crate) struct Context {
     pub(crate) queue_family_properties: vk::QueueFamilyProperties,
     pub(crate) queue: vk::Queue,
     pub(crate) device: Device,
-    pub(crate) has_shader_atomic_float: bool,
+    pub(crate) has_shader_atomic_float_add: bool,
 }
 
 pub(crate) type SharedContext = Rc<Context>;
@@ -81,6 +81,19 @@ impl Context {
         let physical_device_memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
+        let mut available_atomic_float_features =
+            vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default();
+        if instance
+            .extensions
+            .supports_khr_get_physical_device_properties2()
+        {
+            let mut features = vk::PhysicalDeviceFeatures2KHR::builder()
+                .insert_next(&mut available_atomic_float_features);
+            unsafe {
+                instance.get_physical_device_features2_khr(physical_device, features.get_mut());
+            }
+        }
+
         let (queue_family_index, queue_family_properties) = {
             let queue_flags = vk::QueueFlags::COMPUTE;
 
@@ -98,7 +111,7 @@ impl Context {
                 .unwrap()
         };
 
-        let mut has_shader_atomic_float = false;
+        let mut has_shader_atomic_float_add = false;
         let device = {
             let queue_priorities = [1.0];
             let device_queue_create_info = vk::DeviceQueueCreateInfo::builder()
@@ -116,10 +129,12 @@ impl Context {
             let mut extensions = DeviceExtensions::new(version);
             let mut shader_atomic_float_features =
                 vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default();
-            if available_extensions.supports_ext_shader_atomic_float() {
+            if available_extensions.supports_ext_shader_atomic_float()
+                && available_atomic_float_features.shader_buffer_float32_atomic_add == vk::TRUE
+            {
                 extensions.enable_ext_shader_atomic_float();
                 shader_atomic_float_features.shader_buffer_float32_atomic_add = vk::TRUE;
-                has_shader_atomic_float = true;
+                has_shader_atomic_float_add = true;
             }
             let extension_names = extensions.to_name_vec();
 
@@ -144,7 +159,7 @@ impl Context {
             queue_family_properties,
             queue,
             device,
-            has_shader_atomic_float,
+            has_shader_atomic_float_add,
         })
     }
 
