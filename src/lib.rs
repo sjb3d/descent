@@ -167,7 +167,6 @@ mod tests {
                     + 1.0,
             );
         });
-        g.write_dot_file(KernelDotOutput::Cluster, "gather.dot");
         env.run(&g, TEST_RAND_SEED);
 
         assert_eq!(env.read_parameter_to_vec(&c_param), c_data);
