@@ -154,7 +154,7 @@ impl HashGrid {
 impl Module for HashGrid {
     fn eval<'s>(&self, input: DualArray<'s>, _ctx: &EvalContext) -> DualArray<'s> {
         let scope = input.scope();
-        let (x, _dx) = input.into_inner();
+        let (x, _dx) = input.next_colour().into_inner();
 
         let (t, dt) = scope.parameter(&self.t).into_inner();
         let entry_count = t.shape()[0];
