@@ -114,8 +114,15 @@ impl Op {
     pub(crate) fn is_per_element(&self) -> bool {
         matches!(
             self,
-            Self::Unary(_) | Self::Binary(_) | Self::CompareAndSelect(_)
+            Self::Unary(_) | Self::Binary(_) | Self::CompareAndSelect(_) | Self::Gather { .. }
         )
+    }
+
+    pub(crate) fn is_gather_arg(&self, arg: usize) -> bool {
+        match self {
+            Self::Gather { .. } => arg == 0,
+            _ => false,
+        }
     }
 
     pub(crate) fn can_reshape(&self) -> bool {
@@ -164,6 +171,12 @@ pub(crate) struct OpNode {
 pub(crate) struct OpEdge {
     pub(crate) arg: usize,
     pub(crate) view: View,
+}
+
+impl OpEdge {
+    pub(crate) fn is_per_element(&self, op: &Op) -> bool {
+        !op.is_gather_arg(self.arg) && self.view.is_contiguous()
+    }
 }
 
 pub(crate) trait OpGraphExt {

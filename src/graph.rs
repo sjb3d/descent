@@ -31,6 +31,7 @@ fn get_arg_edge_ids(ops: &OpGraph, node_id: OpNodeId) -> TinyVec<[OpEdgeId; MAX_
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ArgSource {
     pub(crate) node_id: OpNodeId,
+    pub(crate) is_gather: bool,
     pub(crate) view: View,
 }
 
@@ -41,9 +42,13 @@ pub(crate) fn get_arg_sources(
     get_arg_edge_ids(ops, node_id)
         .iter()
         .copied()
-        .map(|edge_id| ArgSource {
-            node_id: ops.edge_endpoints(edge_id).unwrap().0,
-            view: ops[edge_id].view,
+        .map(|edge_id| {
+            let (src_node_id, dst_node_id) = ops.edge_endpoints(edge_id).unwrap();
+            ArgSource {
+                node_id: src_node_id,
+                is_gather: ops[dst_node_id].op.is_gather_arg(ops[edge_id].arg),
+                view: ops[edge_id].view,
+            }
         })
         .collect()
 }
@@ -370,7 +375,7 @@ impl Graph {
                             continue 'inner;
                         }
 
-                        // skip this node if any edges with cluster nodes have non-identity views
+                        // skip this node if any edges with cluster nodes are not per-element
                         let mut has_kernel_neighbor = false;
                         for edge_ref in self
                             .ops
@@ -387,7 +392,10 @@ impl Graph {
                             ))
                         {
                             has_kernel_neighbor = true;
-                            if !edge_ref.weight().view.is_contiguous() {
+                            if !edge_ref
+                                .weight()
+                                .is_per_element(&self.ops[edge_ref.target()].op)
+                            {
                                 continue 'inner;
                             }
                         }
@@ -456,27 +464,36 @@ impl Graph {
                             *op_index
                         } else {
                             *arg_op_index.entry(*source).or_insert_with(|| {
-                                let source_node = &ops[source.node_id];
-                                assert_ne!(source_node.cluster_id, Some(cluster_id));
-                                let op_index = kernel.ops.len();
-                                match source_node.op {
-                                    Op::Literal(value) => {
-                                        kernel.ops.push(PerElementKernelOp::Literal(value));
+                                if source.is_gather {
+                                    let input_index = kernel.inputs.len();
+                                    kernel.inputs.push(source.view);
+                                    inputs.push(source.node_id);
+                                    input_index
+                                } else {
+                                    let source_node = &ops[source.node_id];
+                                    assert_ne!(source_node.cluster_id, Some(cluster_id));
+                                    let op_index = kernel.ops.len();
+                                    match source_node.op {
+                                        Op::Literal(value) => {
+                                            kernel.ops.push(PerElementKernelOp::Literal(value));
+                                        }
+                                        Op::BuiltIn(op) => {
+                                            kernel.ops.push(PerElementKernelOp::BuiltIn {
+                                                op,
+                                                view: source.view,
+                                            });
+                                        }
+                                        _ => {
+                                            let input_index = kernel.inputs.len();
+                                            kernel.inputs.push(source.view);
+                                            inputs.push(source.node_id);
+                                            kernel
+                                                .ops
+                                                .push(PerElementKernelOp::Load { input_index });
+                                        }
                                     }
-                                    Op::BuiltIn(op) => {
-                                        kernel.ops.push(PerElementKernelOp::BuiltIn {
-                                            op,
-                                            view: source.view,
-                                        });
-                                    }
-                                    _ => {
-                                        let input_index = kernel.inputs.len();
-                                        kernel.inputs.push(source.view);
-                                        inputs.push(source.node_id);
-                                        kernel.ops.push(PerElementKernelOp::Load { input_index });
-                                    }
+                                    op_index
                                 }
-                                op_index
                             })
                         }
                     })
@@ -492,6 +509,12 @@ impl Graph {
                     Op::CompareAndSelect(compare_mode) => PerElementKernelOp::CompareAndSelect {
                         compare_mode,
                         args: args[..4].try_into().unwrap(),
+                    },
+                    Op::Gather { axis } => PerElementKernelOp::Gather {
+                        shape: ops[node_id].shape,
+                        axis,
+                        input_index: args[0],
+                        arg: args[1],
                     },
                     _ => panic!("unexpected op type"),
                 };
@@ -575,22 +598,6 @@ impl Graph {
                             outputs: vec![ClusterOutput::new(node_id)],
                         }));
                     }
-                    Op::Gather { axis } => {
-                        let arg_sources = get_arg_sources(&self.ops, node_id);
-                        assert_eq!(arg_sources.len(), 2);
-                        let values = &arg_sources[0];
-                        let indices = &arg_sources[1];
-                        self.ops[node_id].cluster_id = Some(self.clusters.insert(Cluster {
-                            kernel: GenericKernel::Gather(GatherKernel {
-                                shape: node.shape,
-                                values: values.view,
-                                axis,
-                                indices: indices.view,
-                            }),
-                            inputs: vec![values.node_id, indices.node_id],
-                            outputs: vec![ClusterOutput::new(node_id)],
-                        }));
-                    }
                     Op::ScatterAdd { axis } => {
                         let arg_sources = get_arg_sources(&self.ops, node_id);
                         assert_eq!(arg_sources.len(), 3);
@@ -613,7 +620,10 @@ impl Graph {
                         }));
                     }
                     Op::Input { .. } | Op::Output { .. } | Op::Literal(_) | Op::BuiltIn(_) => {}
-                    Op::Unary(..) | Op::Binary(..) | Op::CompareAndSelect(..) => unreachable!(),
+                    Op::Unary(..)
+                    | Op::Binary(..)
+                    | Op::CompareAndSelect(..)
+                    | Op::Gather { .. } => unreachable!(),
                 }
             }
         }
@@ -734,8 +744,18 @@ impl Graph {
                 edge_ref.source().index(),
                 edge_ref.target().index()
             )?;
+            let mut label = String::new();
+            if self.ops[edge_ref.target()]
+                .op
+                .is_gather_arg(edge_ref.weight().arg)
+            {
+                label.push('G');
+            }
             if !edge_ref.weight().view.is_contiguous() {
-                write!(w, " [label=\"V\"]")?;
+                label.push('V')
+            }
+            if !label.is_empty() {
+                write!(w, " [label=\"{}\"]", label)?;
             }
             writeln!(w, ";")?;
         }

@@ -190,6 +190,7 @@ impl Shape {
         tmp
     }
 
+    #[must_use]
     pub fn coord(&self, axis: Axis) -> Self {
         self.iter_axes()
             .map(|a| if a == axis { self[a] } else { 1 })

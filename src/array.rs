@@ -377,17 +377,19 @@ impl<'s> Array<'s> {
         let indices = indices.into_array(self.scope);
         let [index_count]: [usize; 1] = indices.shape().try_into().unwrap();
 
-        let shape = self.shape();
-        let axis = axis.into_axis(shape);
+        let values_shape = self.shape();
+
+        let axis = axis.into_axis(values_shape);
+        let shape = values_shape.resize_axis(axis, index_count);
+        let index = indices.reshape(shape.coord(axis)).broadcast(shape);
 
         self.scope.with_state(|state| {
-            let shape = shape.resize_axis(axis, index_count);
             Array {
                 node_id: state.ops.new_node(
                     state.next_colour,
                     shape,
                     Op::Gather { axis },
-                    &[self.node_id, indices.node_id],
+                    &[self.node_id, index.node_id],
                 ),
                 scope: self.scope,
             }

@@ -26,6 +26,12 @@ pub(crate) enum PerElementKernelOp {
         compare_mode: CompareMode,
         args: [usize; 4],
     },
+    Gather {
+        shape: Shape,
+        axis: Axis,
+        input_index: usize,
+        arg: usize,
+    },
 }
 
 fn generate_input_buffer(
@@ -326,6 +332,22 @@ impl Kernel for PerElementKernel {
                         )?,
                     }
                     writeln!(w, ";")?;
+                }
+                PerElementKernelOp::Gather {
+                    shape,
+                    axis,
+                    input_index,
+                    arg,
+                } => {
+                    let view = &self.inputs[*input_index];
+                    let coord_name = get_coord_set_name(&mut coord_set_names, *shape, w);
+
+                    writeln!(w, "int save{} = {}[{}];", op_index, coord_name, axis.index())?;
+                    writeln!(w, "{}[{}] = F2I(tmp{});", coord_name, axis.index(), arg)?;
+                    write!(w, "float tmp{} = input{}[", op_index, input_index)?;
+                    generate_load_index(view, &coord_name, w)?;
+                    writeln!(w, "];")?;
+                    writeln!(w, "{}[{}] = save{};", coord_name, axis.index(), op_index)?;
                 }
             }
         }
@@ -788,62 +810,6 @@ impl Kernel for WindowsToImageKernel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct GatherKernel {
-    pub(crate) shape: Shape,
-    pub(crate) values: View,
-    pub(crate) axis: Axis,
-    pub(crate) indices: View,
-}
-
-impl Kernel for GatherKernel {
-    fn generate_source(&self) -> Result<String, fmt::Error> {
-        let mut src = String::new();
-        let w = &mut src;
-
-        generate_input_buffer(0, 0, w)?;
-        generate_input_buffer(1, 1, w)?;
-        generate_output_buffer(2, 0, w)?;
-
-        writeln!(w, "layout(local_size_x = 64) in;")?;
-        writeln!(w, "void main() {{")?;
-
-        writeln!(
-            w,
-            "if (gl_GlobalInvocationID.x >= {}) {{ return; }}",
-            self.shape.element_count()
-        )?;
-        generate_coord("tmp_coord", self.shape, w)?;
-
-        writeln!(w, "int indices_coord[1];")?;
-        writeln!(w, "indices_coord[0] = tmp_coord[{}];", self.axis.index())?;
-        writeln!(w, "int gather_index = F2I(input1[")?;
-        generate_load_index(&self.indices, "indices_coord", w)?;
-        writeln!(w, "]);")?;
-        writeln!(w, "tmp_coord[{}] = gather_index;", self.axis.index())?;
-
-        writeln!(w, "output0[gl_GlobalInvocationID.x] = input0[")?;
-        generate_load_index(&self.values, "tmp_coord", w)?;
-        writeln!(w, "];")?;
-
-        writeln!(w, "}}")?;
-
-        Ok(src)
-    }
-
-    fn buffer_count(&self) -> usize {
-        3
-    }
-
-    fn group_count(&self) -> usize {
-        self.shape.element_count().div_round_up(64)
-    }
-
-    fn label_name(&self) -> String {
-        format!("Gather {}", self.shape)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ScatterAddKernel {
     pub(crate) shape: Shape,
     pub(crate) values: View,
@@ -916,7 +882,6 @@ pub(crate) enum GenericKernel {
     MatMul(MatMulKernel),
     Unpad(UnpadKernel),
     WindowsToImage(WindowsToImageKernel),
-    Gather(GatherKernel),
     ScatterAdd(ScatterAddKernel),
 }
 
@@ -929,7 +894,6 @@ impl GenericKernel {
             GenericKernel::Reduce(kernel) => kernel,
             GenericKernel::Unpad(kernel) => kernel,
             GenericKernel::WindowsToImage(kernel) => kernel,
-            GenericKernel::Gather(kernel) => kernel,
             GenericKernel::ScatterAdd(kernel) => kernel,
         }
     }
