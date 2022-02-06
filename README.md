@@ -8,7 +8,7 @@ Toy library for neural networks in Rust using Vulkan compute shaders.
 - Use Rust syntax to build a computation graph, run as Vulkan compute shaders
   - Supports vector arithmetic and per-element sin/cos/exp/log/etc
   - 1D reduction, 2D matrix multiply, 2D convolutions and 2D max pool supported
-  - Gather loads and scatter adds
+  - Concatenation, gather loads and scatter adds
   - Softmax cross entropy loss
   - Ops are fused into larger compute shaders where possible (to reduce bandwidth cost)
   - Implements broadcasts/padding/windowing/reshapes as views (zero copy) where possible
@@ -95,3 +95,4 @@ The following crates have been very useful to develop this project:
 - [ ] Recurrent network
 - [ ] SDF fitting
 - [x] Multi-level hash encoding
+- [ ] Make concat zero-copy (writeable views)

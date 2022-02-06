@@ -12,7 +12,7 @@ The networks are:
 - **ReLU-PE**: 2D positional encoding (L=8 so 32 values) into the same MLP as above
 - **SIREN**: 2D coordinate into a 256-128-64-32 MLP with sine activation after each layer
   - This is implemented as described in [Implicit Neural Representations with Periodic Activation Functions](https://vsitzmann.github.io/siren/), using the initialisation scheme from the paper (including the extra scaling on the first layer).
-- **MULTI-HASH**: 2D coordinate into 10-level hash encoding (4096 entries per level, 2 values per entry) with concatenated outputs fed into a 64-64 MLP with ReLU activation after each layer
+- **MULTI-HASH**: 2D coordinate into 10-level hash encoding (up to 4096 entries per level, 2 values per entry) with concatenated outputs fed into a 64-64 MLP with ReLU activation after each layer
   - This is implemented as described in [Instant Neural Graphics Primitives with a Multiresolution Hash Encoding](https://github.com/NVlabs/instant-ngp), using smaller hash tables and number of layers, in order to train a similar number of parameters to the other networks.
 
 For all networks there is then a final linear layer to an RGB triple.  Here is a graph of how the training loss evolves over 200 epochs of training:
